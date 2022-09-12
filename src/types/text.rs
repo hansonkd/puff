@@ -1,11 +1,36 @@
-use crate::types::Bytes;
+//! Fast UTF8 data references.
+
+use crate::types::Puff;
+use axum::body::Bytes as AxumBytes;
 use axum::response::{IntoResponse, Response};
 use compact_str::{CompactString, ToCompactString};
-use derive_more::*;
-use hyper::Body;
-use std::ops::{Add, AddAssign, Deref};
+use serde::Serialize;
+use std::ops::{Add, Deref};
 
-#[derive(Hash, PartialEq, Eq, Debug, Clone)]
+/// Fast UTF8 data references.
+///
+/// Puff's Text type uses [compact_str::CompactString] under the hood. This inlines small strings
+/// for maximum performance and storage as well as prevents copying 'static strings. The trade off
+/// for better string memory management comes at the cost of mutability. `Text` types are immutable.
+///
+/// ```
+/// use puff::types::Text;
+///
+/// let text = Text::from("Hello");
+/// ```
+///
+/// Standard rust `Strings` are meant to be mutable. They are available as a `TextBuilder`:
+///
+/// ```
+/// use puff::types::{TextBuilder, Text};
+///
+/// let mut buff = TextBuilder::new();
+/// buff.push_str("hello");
+/// buff.push_str(" ");
+/// buff.push_str("world");
+/// let t: Text = buff.into_text();
+/// ```
+#[derive(Hash, PartialEq, Eq, Debug, Clone, Serialize)]
 pub struct Text(CompactString);
 
 impl Text {
@@ -101,7 +126,7 @@ impl From<Text> for String {
 
 impl IntoResponse for Text {
     fn into_response(self) -> Response {
-        Bytes::copy_from_slice(self.0.as_bytes()).into_response()
+        AxumBytes::copy_from_slice(self.0.as_bytes()).into_response()
     }
 }
 //
@@ -116,6 +141,8 @@ impl IntoResponse for Text {
 //         Text(x.to_compact_string())
 //     }
 // }
+
+impl Puff for Text {}
 
 impl Deref for Text {
     type Target = str;

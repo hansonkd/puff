@@ -1,13 +1,15 @@
+//! Convert a `Router` into a `RunnableCommand`
 use crate::errors::Result;
-use crate::program::{CommandError, Runnable, RunnableCommand};
-use crate::tasks::dispatcher::Dispatcher;
+use crate::program::{Runnable, RunnableCommand};
+use crate::runtime::dispatcher::RuntimeDispatcher;
 use crate::web::http::Router;
 use clap::{ArgMatches, Command};
-use futures_util::FutureExt;
-use std::net::SocketAddr;
-use std::pin::Pin;
-use std::sync::Arc;
 
+use std::net::SocketAddr;
+
+/// The ServerCommand.
+///
+/// Exposes options to the command line to set the port and host of the server.
 #[derive(Clone)]
 pub struct ServerCommand(Router);
 
@@ -24,8 +26,8 @@ impl RunnableCommand for ServerCommand {
 
     fn runnable_from_args(
         &self,
-        args: &ArgMatches,
-        dispatcher: Arc<Dispatcher>,
+        _args: &ArgMatches,
+        dispatcher: RuntimeDispatcher,
     ) -> Result<Runnable> {
         let this_self = self.clone();
         let addr = SocketAddr::from(([127, 0, 0, 1], 3000));

@@ -1,42 +1,99 @@
+//! Puff HTTP Server
+//!
+//! The Puff web server is powered by Axum. Build up a service using the `get`, `post`, etc methods.
+//! PuffHandlers are functions or closures that take Axum Extractors as arguments. Puff handlers are almost
+//! the same as Axum handlers, but they can be sync and do not have to return a future.
+//!
+//! Sync Puff Handlers are run in a Puff context on a coroutine thread. Async Puff Handlers are not run
+//! inside of puff and behave as normal Axum Handlers. In an Async Puff Handler you must
+//! manually use the dispatcher if you want to renter the puff context.
+//!
+//! All Puff handlers must return a type compatible with [axum::response::IntoResponse].
+//!
+//! If using an extractor, Puff handlers must also include as the final argument to their function,
+//! a FromRequestExtractor (use `_: Request` to fill in a null one).
+//!
+//! ## Basic Example
+//!
+//! This example shows how to make a simple Puff web service with a variety of Request extractors and Responses.
+//!
+//! ```no_run
+//! use puff::program::commands::http::ServerCommand;
+//! use puff::program::Program;
+//! use puff::types::text::{Text, ToText};
+//! use puff::web::http::{Request, Response, ResponseBuilder, Router, Json, body_text};
+//! use axum::extract::Path;
+//! use std::time::Duration;
+//! use serde_json::{Value, json};
+//!
+//!
+//! fn main() {
+//!     // build our application with a route
+//!     let app = Router::new()
+//!                 .get("/", root)
+//!                 .get("/user/", get_users)
+//!                 .get("/user/:id", get_user);
+//!
+//!     Program::new("my_first_app")
+//!         .about("This is my first app")
+//!         .command(ServerCommand::new(app)) // Expose the `server` command to the CLI
+//!         .run()
+//! }
+//!
+//! // basic handler that responds with a static string
+//! fn root() -> Text {
+//!     "ok".to_text()
+//! }
+//!
+//! // basic handler that uses an Axum extractor. We must use a FromRequest Extractor as the final argument.
+//! fn get_user(Path(user_id): Path<String>, _: Request) -> Json<Value> {
+//!     Json(json!({ "data": 42 }))
+//! }
+//!
+//! // basic handler that uses an Axum FromRequest Extractor
+//! fn get_users(request: Request) -> Response {
+//!     ResponseBuilder::builder().body(body_text("ok")).unwrap()
+//! }
+//! ```
+//!
 use std::convert::Infallible;
 
-use axum::body::{BoxBody, HttpBody};
+use axum::body::BoxBody;
 use axum::http::Request as AxumRequest;
 use axum::response::{IntoResponse, Response as AxumResponse};
-use axum::{self, http, Extension};
+use axum::{self, Extension};
 use std::net::SocketAddr;
-use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use crate::errors::Error;
 use axum::body::{Body, Bytes};
-use axum::handler::{Handler as AxumHandler, Handler};
+use axum::handler::Handler;
 use axum::routing::{any_service, on, IntoMakeService, MethodFilter, MethodRouter};
-use futures::future::BoxFuture;
-use futures::FutureExt;
+
 use hyper::server::conn::AddrIncoming;
 use tower_service::Service;
 use tracing::error;
 
 pub use axum::http::StatusCode;
-use axum::routing::future::IntoMakeServiceFuture;
 
-use axum::async_trait;
 use axum::extract::{FromRequest, FromRequestParts};
 
-use crate::tasks::dispatcher::Dispatcher;
-use crate::tasks::DISPATCHER;
+use crate::runtime::dispatcher::RuntimeDispatcher;
+
 use crate::types::text::Text;
 
+pub use axum::response::Json;
 pub type Request = AxumRequest<Body>;
 pub type Response = AxumResponse<Body>;
 pub type ResponseBuilder = AxumResponse<()>;
 
+/// Router for building a web application. Uses Axum router underneath and supports using handlers
+/// with axum's Extractors
+/// Run with [crate::program::commands::http::ServerCommand]
 #[derive(Clone)]
 pub struct Router<S = ()>(axum::Router<S>);
 
 async fn internal_handler<F>(
-    Extension(dispatcher): Extension<Arc<Dispatcher>>,
+    Extension(dispatcher): Extension<RuntimeDispatcher>,
     f: F,
 ) -> AxumResponse<BoxBody>
 where
@@ -238,7 +295,7 @@ where
         Res: IntoResponse,
         H: PuffHandler<T1, S, Res>,
     {
-        self.on(MethodFilter::TRACE, path, handler)
+        self.on(MethodFilter::DELETE, path, handler)
     }
 
     pub fn any<TextLike, H, T1, Res>(self, path: TextLike, handler: H) -> Self
@@ -260,12 +317,16 @@ where
         Self(self.0.route(&path.into(), any_service(f)))
     }
 
+    pub(crate) fn into_axum_router(self, dispatcher: RuntimeDispatcher) -> axum::Router<S> {
+        self.0.layer(Extension(dispatcher)).clone()
+    }
+
     pub fn into_hyper_server(
         self,
         addr: &SocketAddr,
-        dispatcher: Arc<Dispatcher>,
+        dispatcher: RuntimeDispatcher,
     ) -> axum::Server<AddrIncoming, IntoMakeService<axum::Router<S>>> {
-        let new_router = self.0.layer(Extension(dispatcher)).clone();
+        let new_router = self.into_axum_router(dispatcher);
         axum::Server::bind(addr).serve(new_router.into_make_service())
     }
 }
@@ -297,32 +358,29 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tasks::dispatcher::Dispatcher;
+    use crate::runtime::dispatcher::RuntimeDispatcher;
+    use crate::tasks::DISPATCHER;
+    use crate::types::text::ToText;
+    use crate::types::Puff;
     use tokio::runtime::Runtime;
 
     #[test]
     fn check_router() {
-        let mut router = Router::new().get(
-            "/",
-            FnHandler(Arc::new(|_| {
-                AxumResponse::builder()
-                    .status(StatusCode::OK)
-                    .body(body_bytes(vec![Ok("ok")]))
-                    .unwrap()
-            })),
-        );
+        let router: Router<()> = Router::new().get("/", || "ok".to_text());
 
-        let fut = router.0.call(
+        let rt = Runtime::new().unwrap();
+        let dispatcher = RuntimeDispatcher::default();
+
+        let fut = router.into_axum_router(dispatcher.puff()).call(
             AxumRequest::get("http://localhost/")
                 .body(Body::empty())
                 .unwrap(),
         );
 
-        let rt = Runtime::new().unwrap();
-        let dispatcher = Arc::new(Dispatcher::default());
         let result = rt.block_on(DISPATCHER.scope(dispatcher, fut));
         assert!(result.is_ok());
         let response = result.unwrap();
+        println!("{:?}", response.body());
         assert_eq!(response.status(), StatusCode::OK);
     }
 }

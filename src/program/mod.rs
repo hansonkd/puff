@@ -1,40 +1,110 @@
+//! Build a Puff program compatible with the CLI.
+//!
+//! Use builtin commands or specify your own.
+//!
+//! Commands use [clap::Command] as their specification and return a `Runnable` that wraps a Future to
+//! run on the Parent's multi-threaded runtime. To enter into a Puff context in a `RunnableCommand`, use
+//! the dispatcher to create a Future.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use clap::{ArgMatches, Command};
+//! use puff::program::{Program, Runnable, RunnableCommand};
+//! use puff::runtime::dispatcher::RuntimeDispatcher;
+//!
+//! struct MyCommand;
+//!
+//! impl RunnableCommand for MyCommand {
+//!     fn cli_parser(&self) -> Command {
+//!         Command::new("my_custom_command")
+//!     }
+//!
+//!     fn runnable_from_args(&self, args: &ArgMatches, dispatcher: RuntimeDispatcher) -> puff::errors::Result<Runnable> {
+//!         Ok(Runnable::new(dispatcher.dispatch(|| {
+//!             println!("Hello World from a Puff coroutine!");
+//!             Ok(())
+//!         })))
+//!     }
+//! }
+//!
+//! fn main() {
+//!     Program::new("my_first_program")
+//!         .author("Kyle Hanson")
+//!         .version("0.0.0")
+//!         .command(MyCommand)
+//!         .run()
+//! }
+//! ```
+//!
+//! Run with `cargo run my_custom_command` or use `cargo run help`
+
 use clap::{ArgMatches, Command};
-use futures_util::future::BoxFuture;
+
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
-use tracing::error;
 
-use crate::errors::{Error, Result};
-use crate::tasks::dispatcher::Dispatcher;
+use crate::errors::Result;
+use crate::runtime::dispatcher::RuntimeDispatcher;
+use crate::runtime::RuntimeConfig;
 use crate::tasks::DISPATCHER;
 use crate::types::text::Text;
+use crate::types::Puff;
 
 pub mod commands;
 
-pub type CommandError = Error;
-
+/// A wrapper for a boxed future that is able to be run by a Puff Program.
 pub struct Runnable(Pin<Box<dyn Future<Output = Result<()>> + 'static>>);
 
 impl Runnable {
-    fn new<F: Future<Output = Result<()>> + 'static>(inner: F) -> Self {
+    pub fn new<F: Future<Output = Result<()>> + 'static>(inner: F) -> Self {
         Self(Box::pin(inner))
     }
 }
 
+/// A Puff command that integrates with the CLI.
+///
+/// Specify new custom commands with puff by implementing this interface.
+///
+/// # Example:
+///
+/// ```no_run
+/// use clap::{ArgMatches, Command};
+/// use puff::program::{Runnable, RunnableCommand};
+/// use puff::runtime::dispatcher::RuntimeDispatcher;
+///
+/// struct MyCommand;
+///
+/// impl RunnableCommand for MyCommand {
+///     fn cli_parser(&self) -> Command {
+///         Command::new("my_custom_command")
+///     }
+///
+///     fn runnable_from_args(&self, _args: &ArgMatches, dispatcher: RuntimeDispatcher) -> puff::errors::Result<Runnable> {
+///         Ok(Runnable::new(dispatcher.dispatch(|| {
+///             // Do something in Puff
+///             Ok(())
+///         })))
+///     }
+/// }
+/// ```
 pub trait RunnableCommand: 'static {
+    /// The [clap::Command] that specifies the arguments and meta information.
     fn cli_parser(&self) -> Command;
+
+    /// Converts parsed matches from the command line into a Runnable future.
     fn runnable_from_args(
         &self,
         args: &ArgMatches,
-        dispatcher: Arc<Dispatcher>,
+        dispatcher: RuntimeDispatcher,
     ) -> Result<Runnable>;
 }
 
 #[derive(Clone)]
-pub struct PackedCommand(Arc<dyn RunnableCommand>);
+struct PackedCommand(Arc<dyn RunnableCommand>);
 
 impl PackedCommand {
     pub fn cli_parser(&self) -> Command {
@@ -44,12 +114,13 @@ impl PackedCommand {
     pub fn runnable_from_args(
         &self,
         args: &ArgMatches,
-        dispatcher: Arc<Dispatcher>,
+        dispatcher: RuntimeDispatcher,
     ) -> Result<Runnable> {
         self.0.runnable_from_args(args, dispatcher)
     }
 }
 
+/// A Puff Program that is responsible for parsing CLI arguments and starting the Runtime.
 #[derive(Clone)]
 pub struct Program {
     name: Text,
@@ -58,9 +129,11 @@ pub struct Program {
     about: Option<Text>,
     after_help: Option<Text>,
     commands: Vec<PackedCommand>,
+    runtime_config: RuntimeConfig,
 }
 
 impl Program {
+    /// Creates a `Program` with the specified name.
     pub fn new<T: Into<Text>>(name: T) -> Self {
         Self {
             name: name.into(),
@@ -69,36 +142,49 @@ impl Program {
             about: None,
             after_help: None,
             author: None,
+            runtime_config: RuntimeConfig::default(),
         }
     }
 
-    pub fn author<T: Into<Text>>(&self, author: T) -> Self {
-        let mut s = self.clone();
+    /// Override the current `RuntimeConfig` for this program.
+    pub fn runtime_config(self, runtime_config: RuntimeConfig) -> Self {
+        let mut s = self;
+        s.runtime_config = runtime_config;
+        s
+    }
+
+    /// Specify the author.
+    pub fn author<T: Into<Text>>(self, author: T) -> Self {
+        let mut s = self;
         s.author = Some(author.into());
         s
     }
 
-    pub fn version<T: Into<Text>>(&self, version: T) -> Self {
-        let mut s = self.clone();
+    /// Specify the version.
+    pub fn version<T: Into<Text>>(self, version: T) -> Self {
+        let mut s = self;
         s.version = Some(version.into());
         s
     }
 
-    pub fn about<T: Into<Text>>(&self, about: T) -> Self {
-        let mut s = self.clone();
+    /// Specify what your program does.
+    pub fn about<T: Into<Text>>(self, about: T) -> Self {
+        let mut s = self;
         s.about = Some(about.into());
         s
     }
 
-    pub fn after_help<T: Into<Text>>(&self, after_help: T) -> Self {
-        let mut s = self.clone();
+    /// Specify text after the help text of the CLI prompt.
+    pub fn after_help<T: Into<Text>>(self, after_help: T) -> Self {
+        let mut s = self;
         s.after_help = Some(after_help.into());
         s
     }
 
-    pub fn command<C: RunnableCommand>(&self, command: C) -> Self {
+    /// Adds a new command to be available to the `Program`.
+    pub fn command<C: RunnableCommand>(self, command: C) -> Self {
         let arc_command = Arc::new(command);
-        let mut new_self = self.clone();
+        let mut new_self = self;
 
         new_self.commands.push(PackedCommand(arc_command));
         new_self
@@ -125,10 +211,33 @@ impl Program {
         tl
     }
 
+    fn runtime(&self) -> Result<Runtime> {
+        let mut rt = if self.runtime_config.tokio_worker_threads() == 1 {
+            tokio::runtime::Builder::new_current_thread()
+        } else {
+            tokio::runtime::Builder::new_multi_thread()
+        };
+
+        Ok(rt
+            .enable_all()
+            .worker_threads(self.runtime_config.tokio_worker_threads())
+            .max_blocking_threads(self.runtime_config.max_blocking_threads())
+            .thread_keep_alive(self.runtime_config.blocking_task_keep_alive())
+            .thread_stack_size(self.runtime_config.stack_size())
+            .build()?)
+    }
+
+    /// Run the program and panics if it fails.
+    ///
+    /// See [Self::try_run] for more information.
     pub fn run(&self) -> () {
         self.try_run().unwrap()
     }
 
+    /// Tries to run the program and returns an Error if it fails.
+    ///
+    /// This will parse the command line arguments, start a new runtime, dispatcher and
+    /// coroutine worker threads and blocks until the command finishes.
     pub fn try_run(&self) -> Result<()> {
         let mut top_level = self.clap_command();
 
@@ -141,14 +250,13 @@ impl Program {
         }
 
         let arg_matches = top_level.get_matches();
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()?;
 
         if let Some((command, args)) = arg_matches.subcommand() {
             if let Some(runner) = hm.remove(&command.to_string().into()) {
-                let dispatcher = Arc::new(Dispatcher::default());
-                let runnable = runner.runnable_from_args(args, dispatcher.clone())?;
+                let rt = self.runtime()?;
+                let dispatcher =
+                    RuntimeDispatcher::new(self.runtime_config.clone(), rt.handle().clone());
+                let runnable = runner.runnable_from_args(args, dispatcher.puff())?;
 
                 rt.block_on(DISPATCHER.scope(dispatcher, runnable.0))?;
             }
