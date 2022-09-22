@@ -1,20 +1,22 @@
-use puff::program::commands::http::ServerCommand;
+use puff::program::commands::asgi::ASGIServerCommand;
 use puff::program::Program;
 use puff::types::text::{Text, ToText};
 use puff::errors::Result;
 use puff::web::server::Router;
 use puff::web::client::{Client, PuffClientResponse, PuffRequestBuilder};
 use std::time::Duration;
+use pyo3::{PyObject, Python};
+use puff::runtime::RuntimeConfig;
+
 
 fn main() {
-    // build our application with a route
     let app = Router::new().get("/", root);
-    // .post("/graphql/", make_graphql_python_service("my_module.Query"))
-    // .fallback(make_wsgi_service("my_module.app"));
+    let rc = RuntimeConfig::default().set_asyncio(true);
 
     Program::new("my_first_app")
         .about("This is my first app")
-        .command(ServerCommand::new(app))
+        .runtime_config(rc)
+        .command(ASGIServerCommand::new(app, "fastapi_example", "app"))
         .run()
 }
 

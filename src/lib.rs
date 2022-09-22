@@ -47,7 +47,8 @@
 //! use puff::program::commands::http::ServerCommand;
 //! use puff::program::Program;
 //! use puff::types::text::{Text, ToText};
-//! use puff::web::http::Router;
+//! use puff::web::server::Router;
+//! use puff::errors::Result;
 //! use std::time::Duration;
 //!
 //! fn main() {
@@ -61,17 +62,16 @@
 //! }
 //!
 //! // Basic handler that responds with a static string
-//! fn root() -> Text {
+//! fn root() -> Result<Text> {
 //!     // Puff functions don't block even though they are sync!
 //!     puff::tasks::sleep(Duration::from_secs(1));
-//!     "ok".to_text()
+//!     Ok("ok".to_text())
 //! }
 //! ```
 //!
 //! Run with `cargo run server` or use `cargo run help` to show all CLI options of your Puff program.
 //!
 //!
-
 extern crate core;
 
 pub mod channels;
@@ -82,4 +82,6 @@ pub mod runtime;
 pub mod tasks;
 pub mod types;
 pub mod web;
+pub mod python;
+
 pub use tracing;

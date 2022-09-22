@@ -1,1 +1,41 @@
+use std::sync::Mutex;
+use anyhow::anyhow;
+use clap::{ArgMatches, Command};
+use crate::types::Text;
+use crate::errors::Result;
+use crate::program::{Runnable, RunnableCommand};
+use crate::runtime::dispatcher::RuntimeDispatcher;
+
 pub mod http;
+pub mod asgi;
+pub mod wsgi;
+
+pub struct BasicCommand<F: FnOnce() -> Result<()> + Send + 'static> {
+    name: Text,
+    inner_func: Mutex<Option<F>>
+}
+
+impl<F: FnOnce() -> Result<()> + Send + 'static> BasicCommand<F> {
+    pub fn new<T: Into<Text>>(name: T, f: F) -> Self {
+        Self {
+            name: name.into(),
+            inner_func: Mutex::new(Some(f))
+        }
+    }
+}
+
+impl<F: FnOnce() -> Result<()> + Send + Sync + 'static> RunnableCommand for BasicCommand<F> {
+    fn cli_parser(&self) -> Command {
+        Command::new(self.name.to_string())
+    }
+
+    fn runnable_from_args(
+        &self,
+        _args: &ArgMatches,
+        dispatcher: RuntimeDispatcher,
+    ) -> Result<Runnable> {
+        let this_self_func = self.inner_func.lock().unwrap().take().ok_or(anyhow!("Already ran command."))?;
+        let fut = dispatcher.dispatch(this_self_func);
+        Ok(Runnable::new(fut))
+    }
+}

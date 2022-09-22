@@ -45,7 +45,11 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::runtime::Runtime;
+use futures_util::future::BoxFuture;
+use futures_util::TryFutureExt;
+use pyo3::{PyErr, PyObject, Python};
+use pyo3::exceptions::PyRuntimeError;
+use tokio::runtime::{Builder, Handle, Runtime};
 
 use crate::errors::Result;
 use crate::runtime::dispatcher::RuntimeDispatcher;
@@ -211,20 +215,22 @@ impl Program {
         tl
     }
 
-    fn runtime(&self) -> Result<Runtime> {
-        let mut rt = if self.runtime_config.tokio_worker_threads() == 1 {
+    fn runtime(&self) -> Result<Builder> {
+        let current_thread = self.runtime_config.tokio_worker_threads() == 1;
+
+        let mut rt = if current_thread {
             tokio::runtime::Builder::new_current_thread()
         } else {
             tokio::runtime::Builder::new_multi_thread()
         };
-
-        Ok(rt
+        rt
             .enable_all()
             .worker_threads(self.runtime_config.tokio_worker_threads())
             .max_blocking_threads(self.runtime_config.max_blocking_threads())
             .thread_keep_alive(self.runtime_config.blocking_task_keep_alive())
-            .thread_stack_size(self.runtime_config.stack_size())
-            .build()?)
+            .thread_stack_size(self.runtime_config.stack_size());
+
+        Ok(rt)
     }
 
     /// Run the program and panics if it fails.
@@ -239,6 +245,8 @@ impl Program {
     /// This will parse the command line arguments, start a new runtime, dispatcher and
     /// coroutine worker threads and blocks until the command finishes.
     pub fn try_run(&self) -> Result<()> {
+        tracing_subscriber::fmt::init();
+
         let mut top_level = self.clap_command();
 
         let mut hm: HashMap<Text, PackedCommand> = HashMap::with_capacity(self.commands.len());
@@ -251,14 +259,53 @@ impl Program {
 
         let arg_matches = top_level.get_matches();
 
+
         if let Some((command, args)) = arg_matches.subcommand() {
             if let Some(runner) = hm.remove(&command.to_string().into()) {
-                let rt = self.runtime()?;
-                let dispatcher =
-                    RuntimeDispatcher::new(self.runtime_config.clone(), rt.handle().clone());
-                let runnable = runner.runnable_from_args(args, dispatcher.puff())?;
+                let mut builder = self.runtime()?;
+                if self.runtime_config.python() {
+                    pyo3::prepare_freethreaded_python();
+                }
 
-                rt.block_on(DISPATCHER.scope(dispatcher, runnable.0))?;
+                if self.runtime_config.asyncio() {
+                    // let event_loop = Python::with_gil(|py| {
+                    //         let asyncio = py.import("asyncio")?;
+                    //         let obj = PyObject::from(asyncio.call_method0("new_event_loop")?);
+                    //         Result::Ok(obj)
+                    // })?;
+
+                    // builder.on_thread_start(|| {
+                    //     Python::with_gil(|py| {
+                    //         let asyncio = py.import("asyncio").unwrap();
+                    //         let event_loop = asyncio.call_method0("new_event_loop").unwrap();
+                    //         asyncio.call_method1("set_event_loop", (event_loop.clone(),)).unwrap();
+                    //     });
+                    // });
+                    pyo3_asyncio::tokio::init(builder);
+
+                    let rt = pyo3_asyncio::tokio::get_runtime();
+                    // let rt2 = builder.build()?;
+                    let dispatcher =
+                        RuntimeDispatcher::new(self.runtime_config.clone(), rt.handle().clone());
+                    let runnable = runner.runnable_from_args(args, dispatcher.puff())?;
+
+                    rt.block_on(DISPATCHER.scope(dispatcher, runnable.0))?;
+
+                    // rt.block_on(DISPATCHER.scope(dispatcher, runnable.0))?;
+                    //
+                    // let local = tokio::task::LocalSet::new();
+                    // let fut = runnable.0.map_err(|e| PyErr::new::<PyRuntimeError, _>(format!("error {:?}", e)));
+                    // // std::thread::spawn(move || rt2.block_on(local));
+                    // Python::with_gil(|py| pyo3_asyncio::tokio::run(py, fut))?;
+
+                } else {
+                    let rt = builder.build()?;
+                    let dispatcher =
+                        RuntimeDispatcher::new(self.runtime_config.clone(), rt.handle().clone());
+                    dispatcher.monitor();
+                    let runnable = runner.runnable_from_args(args, dispatcher.puff())?;
+                    rt.block_on(DISPATCHER.scope(dispatcher, runnable.0))?;
+                }
             }
         }
 

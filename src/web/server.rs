@@ -20,8 +20,9 @@
 //! ```no_run
 //! use puff::program::commands::http::ServerCommand;
 //! use puff::program::Program;
+//! use puff::errors::Result;
 //! use puff::types::text::{Text, ToText};
-//! use puff::web::http::{Request, Response, ResponseBuilder, Router, Json, body_text};
+//! use puff::web::server::{Request, Response, ResponseBuilder, Router, Json, body_text};
 //! use axum::extract::Path;
 //! use std::time::Duration;
 //! use serde_json::{Value, json};
@@ -41,18 +42,18 @@
 //! }
 //!
 //! // basic handler that responds with a static string
-//! fn root() -> Text {
-//!     "ok".to_text()
+//! fn root() -> Result<Text> {
+//!     Ok("ok".to_text())
 //! }
 //!
 //! // basic handler that uses an Axum extractor. We must use a FromRequest Extractor as the final argument.
-//! fn get_user(Path(user_id): Path<String>, _: Request) -> Json<Value> {
-//!     Json(json!({ "data": 42 }))
+//! fn get_user(Path(user_id): Path<String>, _: Request) -> Result<Json<Value>> {
+//!     Ok(Json(json!({ "data": 42 })))
 //! }
 //!
 //! // basic handler that uses an Axum FromRequest Extractor
-//! fn get_users(request: Request) -> Response {
-//!     ResponseBuilder::builder().body(body_text("ok")).unwrap()
+//! fn get_users(request: Request) -> Result<Response> {
+//!     Ok(ResponseBuilder::builder().body(body_text("ok"))?)
 //! }
 //! ```
 //!
@@ -64,7 +65,7 @@ use axum::response::{IntoResponse, Response as AxumResponse};
 use axum::{self, Extension};
 use std::net::SocketAddr;
 
-use crate::errors::Error;
+use crate::errors::{Result, Error};
 use axum::body::{Body, Bytes};
 use axum::handler::Handler;
 use axum::routing::{any_service, on, IntoMakeService, MethodFilter, MethodRouter};
@@ -97,21 +98,24 @@ async fn internal_handler<F>(
     f: F,
 ) -> AxumResponse<BoxBody>
 where
-    F: FnOnce() -> AxumResponse<BoxBody> + Send + Sync + 'static,
+    F: FnOnce() -> Result<AxumResponse<BoxBody>> + Send + Sync + 'static,
 {
     let res = dispatcher.dispatch(|| Ok(f())).await;
     match res {
-        Ok(r) => r,
-        Err(r) => {
-            error!("Error processing request: {:?}", r);
-            AxumResponse::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::empty())
-                .unwrap()
-                .into_response()
-        }
+        Ok(r) => r.unwrap_or_else(|e| handle_response_error(e)),
+        Err(r) => handle_response_error(r)
     }
 }
+
+fn handle_response_error(e: Error) -> AxumResponse<BoxBody> {
+        error!("Error processing request: {:?}", e);
+        AxumResponse::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(Body::empty())
+            .unwrap()
+            .into_response()
+}
+
 
 pub trait PuffHandler<Inp, S, Res> {
     fn into_handler(self, filter: MethodFilter) -> MethodRouter<S>;
@@ -135,11 +139,11 @@ impl<F, S, Res> PuffHandler<(), S, Res> for F
 where
     Res: IntoResponse,
     S: Send + Sync + 'static,
-    F: FnOnce() -> Res + Send + Sync + Clone + 'static,
+    F: FnOnce() -> Result<Res> + Send + Sync + Clone + 'static,
 {
     fn into_handler(self, filter: MethodFilter) -> MethodRouter<S> {
         on(filter, move |disp| {
-            internal_handler(disp, || self().into_response())
+            internal_handler(disp, || self().map(|v| v.into_response()))
         })
     }
 }
@@ -149,11 +153,11 @@ where
     Res: IntoResponse,
     S: Send + Sync + 'static,
     Req: FromRequest<S, Body> + Send + Sync + 'static,
-    F: FnOnce(Req) -> Res + Send + Sync + Clone + 'static,
+    F: FnOnce(Req) -> Result<Res> + Send + Sync + Clone + 'static,
 {
     fn into_handler(self, filter: MethodFilter) -> MethodRouter<S> {
         on(filter, move |disp, req| {
-            internal_handler(disp, || self(req).into_response())
+            internal_handler(disp, || self(req).map(|v| v.into_response()))
         })
     }
 }
@@ -164,11 +168,11 @@ where
     S: Send + Sync + 'static,
     Req: FromRequest<S, Body> + Send + Sync + 'static,
     T1: FromRequestParts<S> + Send + Sync + 'static,
-    F: FnOnce(T1, Req) -> Res + Send + Sync + Clone + 'static,
+    F: FnOnce(T1, Req) -> Result<Res> + Send + Sync + Clone + 'static,
 {
     fn into_handler(self, filter: MethodFilter) -> MethodRouter<S> {
         on(filter, move |disp, parts, req| {
-            internal_handler(disp, || self(parts, req).into_response())
+            internal_handler(disp, || self(parts, req).map(|v| v.into_response()))
         })
     }
 }
@@ -180,11 +184,11 @@ where
     Req: FromRequest<S, Body> + Send + Sync + 'static,
     T1: FromRequestParts<S> + Send + Sync + 'static,
     T2: FromRequestParts<S> + Send + Sync + 'static,
-    F: FnOnce(T1, T2, Req) -> Res + Send + Sync + Clone + 'static,
+    F: FnOnce(T1, T2, Req) -> Result<Res> + Send + Sync + Clone + 'static,
 {
     fn into_handler(self, filter: MethodFilter) -> MethodRouter<S> {
         on(filter, move |disp, parts, parts2, req| {
-            internal_handler(disp, || self(parts, parts2, req).into_response())
+            internal_handler(disp, || self(parts, parts2, req).map(|v| v.into_response()))
         })
     }
 }
@@ -197,11 +201,11 @@ where
     T1: FromRequestParts<S> + Send + Sync + 'static,
     T2: FromRequestParts<S> + Send + Sync + 'static,
     T3: FromRequestParts<S> + Send + Sync + 'static,
-    F: FnOnce(T1, T2, T3, Req) -> Res + Send + Sync + Clone + 'static,
+    F: FnOnce(T1, T2, T3, Req) -> Result<Res> + Send + Sync + Clone + 'static,
 {
     fn into_handler(self, filter: MethodFilter) -> MethodRouter<S> {
         on(filter, move |disp, parts, parts2, parts3, req| {
-            internal_handler(disp, || self(parts, parts2, parts3, req).into_response())
+            internal_handler(disp, || self(parts, parts2, parts3, req).map(|v| v.into_response()))
         })
     }
 }
@@ -331,7 +335,7 @@ where
     }
 }
 
-pub fn body_iter_bytes<B: Into<Bytes> + 'static, I: IntoIterator<Item = Result<B, Error>>>(
+pub fn body_iter_bytes<B: Into<Bytes> + 'static, I: IntoIterator<Item = std::result::Result<B, std::io::Error>>>(
     chunks: I,
 ) -> Body
 where
@@ -366,7 +370,7 @@ mod tests {
 
     #[test]
     fn check_router() {
-        let router: Router<()> = Router::new().get("/", || "ok".to_text());
+        let router: Router<()> = Router::new().get("/", || Ok("ok".to_text()));
 
         let rt = Runtime::new().unwrap();
         let dispatcher = RuntimeDispatcher::default();

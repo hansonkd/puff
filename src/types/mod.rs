@@ -45,7 +45,7 @@ pub mod vector_builder;
 
 use axum::body::Bytes as AxumBytes;
 pub use bytes_builder::BytesBuilder;
-use chrono::{Date, DateTime, NaiveDateTime, Utc};
+use chrono::{Date, DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::ops::Deref;
 

@@ -12,8 +12,10 @@ use rand::thread_rng;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::oneshot;
+use tracing::info;
 
 use crate::errors::Error;
 use crate::runtime::runner::LocalSpawner;
@@ -73,6 +75,11 @@ impl RuntimeDispatcher {
         }
 
         arc_dispatcher
+    }
+
+    #[inline]
+    pub(crate) fn monitor(&self) -> () {
+        self.0.monitor()
     }
 
     #[inline]
@@ -154,6 +161,19 @@ impl Dispatcher {
     #[inline]
     fn handle(&self) -> Handle {
         self.handle.clone()
+    }
+
+    fn monitor(&self) -> () {
+        let dispatcher = self.clone();
+        std::thread::spawn(move || {
+            loop {
+                let stats = dispatcher.stats();
+                for stat in stats {
+                    info!("Dispatcher: {} {} {}", stat.worker_id, stat.total_tasks, stat.total_tasks_completed);
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        });
     }
 
     fn stats(&self) -> Vec<Stats> {

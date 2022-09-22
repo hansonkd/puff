@@ -14,7 +14,7 @@ rand = "0.8.1"
 num_cpus = "1.13.1"
 lazy_static = "1.4.0"
 tower-service = "0.3.2"
-axum = "0.6.0-rc.1"
+axum = {version="0.6.0-rc.2", features=["headers"]}
 futures-util = "0.3.24"
 compact_str = {version = "0.6.1", features=["serde"]}
 hyper = "0.14.9"
@@ -26,7 +26,20 @@ owning_ref = "0.4.1"
 chrono = {version = "0.4.22", features = ["serde"]}
 serde = {version = "1.0.144", features=["derive"]}
 serde_bytes = "0.11.7"
+reqwest = "0.11.11"
+tracing-subscriber = "0.3.15"
+percent-encoding = "2.2.0"
+pyo3 = "0.16.6"
+pyo3-asyncio = {version="0.16.0", features=["attributes", "tokio-runtime"]}
 
 [[example]]
 name = "web"
 path = "examples/web.rs"
+
+[[example]]
+name = "basic"
+path = "examples/basic.rs"
+
+[[example]]
+name = "asgi"
+path = "examples/asgi.rs"
