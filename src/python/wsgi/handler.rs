@@ -25,7 +25,7 @@ use std::{
 use std::io::Stderr;
 use std::task::{Context, Poll};
 use anyhow::{anyhow, Error};
-use axum::body::HttpBody;
+use axum::body::{Full, HttpBody};
 use axum::headers::HeaderMap;
 use axum::http::header::ToStrError;
 use futures_util::TryFutureExt;
@@ -35,6 +35,9 @@ use tracing::{error, info};
 use crate::python::wsgi;
 use crate::runtime::dispatcher::RuntimeDispatcher;
 use crate::runtime::yield_to_future;
+
+
+const MAX_LIST_BODY_INLINE_CONCAT: u64 = 1024 * 4;
 
 #[derive(Clone)]
 pub struct WsgiHandler {
@@ -126,7 +129,8 @@ impl HttpBody for HttpResponseBody {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Bytes, Self::Error>>> {
         let b = Python::with_gil(|py| {
-            let r = &self.0.as_ref(py);
+            let obj = &self.0;
+            let r = obj.as_ref(py);
             if let Ok(next_bytes) = r.call_method0("__next__") {
                 let extracted = {
                     if let Ok(bytes) = next_bytes.downcast::<PyBytes>() {
@@ -168,8 +172,8 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
         let disconnected = Arc::new(AtomicBool::new(false));
         let (req, body): (_, Body) = req.into_parts();
 
-        Box::pin(async move {
-            let body_bytes = if let Ok(body_bytes) = hyper::body::to_bytes(body).await {
+        let body_fut = move || {
+            let body_bytes = if let Ok(body_bytes) = yield_to_future(hyper::body::to_bytes(body)) {
                 body_bytes
             } else {
                  error!("Could not extract request body.");
@@ -255,11 +259,12 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
             match iterator_res {
                 Ok(Err(res)) => res.into_response(),
                 Ok(Ok(args)) => {
-                    // let iterator_res = Python::with_gil(|py| app.call1(py, args));
-                    let iterator_res = self.dispatcher.dispatch(move || Python::with_gil(|py| {
-                        Ok(app.call1(py, args)?)
-                    })).await;
+                    let iterator_res = Python::with_gil(|py| app.call1(py, args));
+                    // let iterator_res = self.dispatcher.dispatch_blocking(move || Python::with_gil(|py| {
+                    //     Ok(app.call1(py, args)?)
+                    // })).await;
 
+                    // let iterator = Python::with_gil(|py| PyObject::from(PyList::empty(py)));
                     let iterator = if let Ok(r) = iterator_res {
                         r
                     } else {
@@ -269,67 +274,47 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                     };
 
                     let mut response = Response::builder();
-                        let responded = if let Ok(r) = http_sender_rx.await {
-                            r
-                        } else {
-                            error!("Did not receive start_response");
-                            let resp = Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(Body::empty()).unwrap();
-                            return resp.into_response()
-                        };
+                    let responded = if let Ok(r) = yield_to_future(http_sender_rx) {
+                        r
+                    } else {
+                        error!("Did not receive start_response");
+                        return WsgiError::ExpectedResponseStart.into_response()
+                    };
 
-                        if let (status_code_str, headers) = responded {
-                            let extract_header_res: Result<_, Error> = Python::with_gil(|py| {
-                                let status = status_code_str.split(" ").next().unwrap();
-                                let status_code: u16 = status.parse()?;
-                                let header_info = headers.as_ref(py);
-                                let mut headers = Vec::with_capacity(header_info.len());
-                                for hp in header_info {
-                                    let (h, v) = hp.extract::<(&str, &str)>()?;
-                                    headers.push((Bytes::copy_from_slice(h.as_bytes()), Bytes::copy_from_slice(v.as_bytes())));
-                                }
-                                Ok((status_code, headers))
-                            });
 
-                            let (status, pyheaders) = match extract_header_res {
-                                Ok((status, headers)) => (status, headers),
-                                Err(e) => {
-                                    error!("Error extracting header and status from start_response {:?}", e);
-                                    let resp = Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(Body::empty()).unwrap();
-                                    return resp.into_response()
+                    if let (status_code_str, pyheaders) = responded {
+                        let status = status_code_str.split(" ").next().expect("Invalid wsgi status format");
+                        let status_code: u16 = status.parse().expect("Invalid wsgi status code format");
+                        let headers = response.headers_mut().unwrap();
+                        for (name, value) in pyheaders {
+                            let name = match HeaderName::from_bytes(name.as_bytes()) {
+                                Ok(name) => name,
+                                Err(_e) => {
+                                    return WsgiError::InvalidHeader.into_response();
                                 }
                             };
-                            response = response.status(status);
-                            let headers = response.headers_mut().unwrap();
-                            for (name, value) in pyheaders {
-                                let name = match HeaderName::from_bytes(&name[..]) {
-                                    Ok(name) => name,
-                                    Err(_e) => {
-                                        return WsgiError::InvalidHeader.into_response();
-                                    }
-                                };
-                                let value = match HeaderValue::from_bytes(&value[..]) {
-                                    Ok(value) => value,
-                                    Err(_e) => {
-                                        return WsgiError::InvalidHeader.into_response();
-                                    }
-                                };
-                                headers.append(name, value);
-                            }
+                            let value = match HeaderValue::from_bytes(value.as_bytes()) {
+                                Ok(value) => value,
+                                Err(_e) => {
+                                    return WsgiError::InvalidHeader.into_response();
+                                }
+                            };
+                            headers.append(name, value);
                         }
-
-                    let body = HttpResponseBody(iterator, content_length);
-                    match response.body(body) {
-                        Ok(r) => {
-                            return r.into_response()
-                        },
-                        Err(_e) => {
-                            error!("Error with response {:?}", _e);
-
-                            #[cfg(feature = "tracing")]
-                            tracing::error!("Failed to create response: {_e}");
-                            WsgiError::FailedToCreateResponse.into_response()
-                        }
+                        response = response.status(status_code);
                     }
+                    Python::with_gil(|py| {
+                        let iter_py = iterator.as_ref(py);
+                        if content_length.unwrap_or(u64::MAX) < MAX_LIST_BODY_INLINE_CONCAT {
+                                if let Ok(s)  = iter_py.extract::<Vec<&[u8]>>() {
+                                    let merged = s.concat();
+                                    let body = Full::from(merged);
+                                    return response.body(body).map(|f| f.into_response()).unwrap_or(WsgiError::FailedToCreateResponse.into_response())
+                                }
+                        }
+                        let body = HttpResponseBody(PyObject::from(iter_py.iter().unwrap()), content_length);
+                        response.body(body).map(|f| f.into_response()).unwrap_or(WsgiError::FailedToCreateResponse.into_response())
+                    })
                 }
                 Err(e) => {
                     #[cfg(feature = "tracing")]
@@ -337,6 +322,21 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                     Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(Body::empty()).unwrap().into_response()
                 }
             }
-        })
+        };
+
+        let real_fut = async move {
+            let ret = self.dispatcher.dispatch(|| Ok(body_fut())).await;
+            match ret {
+                Ok(r) => {
+                    r
+                }
+                Err(e) => {
+                    #[cfg(feature = "tracing")]
+                    tracing::error!("Error preparing request scope: {e:?}");
+                    Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(Body::empty()).unwrap().into_response()
+                }
+            }
+        };
+        Box::pin(real_fut)
     }
 }

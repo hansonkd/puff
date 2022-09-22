@@ -20,53 +20,20 @@ use crate::web::server::Router;
 
 
 #[pyclass]
-struct Receiver {
-    rx: Arc<Mutex<mpsc::UnboundedReceiver<Py<PyDict>>>>,
-}
-
-impl Receiver {
-    pub fn new() -> (Receiver, mpsc::UnboundedSender<Py<PyDict>>) {
-        let (tx, rx) = mpsc::unbounded_channel::<Py<PyDict>>();
-        (
-            Receiver {
-                rx: Arc::new(Mutex::new(rx)),
-            },
-            tx,
-        )
-    }
-}
-
-#[pymethods]
-impl Receiver {
-    fn __call__<'a>(&'a mut self, py: Python<'a>) -> PyResult<&'a PyAny> {
-        let rx = self.rx.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            let next = rx
-                .lock()
-                .await
-                .recv()
-                .await
-                .ok_or_else(|| PyErr::new::<PyRuntimeError, _>("connection closed"))?;
-            Ok(next)
-        })
-    }
-}
-
-#[pyclass]
 pub struct Sender {
-    tx: Option<oneshot::Sender<(String, Py<PyList>)>>
+    tx: Option<oneshot::Sender<(String, Vec<(String, String)>)>>
 }
 
 impl Sender {
-    pub fn new() -> (Sender, oneshot::Receiver<(String, Py<PyList>)>) {
-        let (tx, rx) = oneshot::channel::<(String, Py<PyList>)>();
+    pub fn new() -> (Sender, oneshot::Receiver<(String, Vec<(String, String)>)>) {
+        let (tx, rx) = oneshot::channel();
         (Sender { tx: Some(tx) }, rx)
     }
 }
 
 #[pymethods]
 impl Sender {
-    fn __call__<'a>(&'a mut self, py: Python<'a>, status: String, list: Py<PyList>) -> PyResult<PyObject> {
+    fn __call__<'a>(&'a mut self, py: Python<'a>, status: String, list: Vec<(String, String)>) -> PyResult<PyObject> {
         match self.tx.take() {
             Some(sender) => {
                 match sender.send((status, list)) {
@@ -146,7 +113,7 @@ impl<T: AsyncFn> ServerContext<T> {
 
                 Ok(fut.boxed_local())
             }
-            (_, _, _, _) => Err(anyhow!("Already Started!")),
+            _ => Err(anyhow!("Already Started!")),
         }
     }
 }

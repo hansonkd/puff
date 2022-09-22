@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::oneshot;
+use tokio::task::LocalSet;
 use tracing::info;
 
 use crate::errors::Error;
@@ -124,10 +125,13 @@ impl RuntimeDispatcher {
         let dispatcher = self.clone();
         let future = self.0.handle.spawn_blocking(|| {
             let handle = Handle::current();
-            handle.block_on(run_with_config_on_local(dispatcher, new_sender, f))
+            let local = LocalSet::new();
+            let h = local.spawn_local(run_with_config_on_local(dispatcher, new_sender, f));
+            handle.block_on(local);
+            handle.block_on(h)
         });
         let f = async {
-            future.await??;
+            future.await???;
             Ok(rec.await??)
         };
         f.boxed()

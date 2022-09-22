@@ -55,8 +55,9 @@ impl LocalSpawner {
         let num_tasks_completed = Arc::new(AtomicUsize::new(0));
         let num_tasks_loop = num_tasks.clone();
         let num_tasks_completed_loop = num_tasks_completed.clone();
+        let rt = Builder::new_current_thread().enable_all().build().unwrap();
         std::thread::spawn(move || {
-            let rt = Builder::new_current_thread().enable_all().build().unwrap();
+
             let dispatcher = rt.block_on(dispatcher_lazy).unwrap();
 
             let local = LocalSet::new();
