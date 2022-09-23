@@ -6,6 +6,8 @@ use axum::response::{IntoResponse, Response};
 use compact_str::{CompactString, ToCompactString};
 use serde::Serialize;
 use std::ops::{Add, Deref};
+use std::str::from_utf8;
+use bb8_redis::redis::{ErrorKind, FromRedisValue, RedisError, RedisResult, Value};
 
 /// Fast UTF8 data references.
 ///
@@ -149,5 +151,20 @@ impl Deref for Text {
 
     fn deref(&self) -> &Self::Target {
         self.0.as_str()
+    }
+}
+
+impl FromRedisValue for Text {
+    fn from_redis_value(v: &Value) -> RedisResult<Self> {
+        match v {
+            Value::Data(ref bytes) => Ok(from_utf8(bytes)?.into()),
+            Value::Okay => Ok("OK".into()),
+            Value::Status(ref val) => Ok(val.to_string().into()),
+            val => Err(RedisError::from((
+                    ErrorKind::TypeError,
+                    "Response was of incompatible type",
+                    format!("Response type not string compatible. (response was {:?})", val),
+                ))),
+        }
     }
 }

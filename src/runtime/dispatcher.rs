@@ -5,18 +5,22 @@
 //!
 //! The primary way to interact with the dispatcher is calling [crate::tasks::Task] or [crate::program::RunnableCommand]
 //!
+use std::cell::RefCell;
+use std::collections::HashMap;
 use futures::future::BoxFuture;
 use futures_util::FutureExt;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use pyo3::{Py, PyAny};
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::oneshot;
 use tokio::task::LocalSet;
 use tracing::info;
+use crate::databases::redis::RedisClient;
 
 use crate::errors::Error;
 use crate::runtime::runner::LocalSpawner;
@@ -45,6 +49,8 @@ impl RuntimeDispatcher {
             config: RuntimeConfig::default(),
             spawners: Vec::new(),
             strategy: Strategy::Random,
+            redis: None,
+            context_vars: Arc::new(Mutex::new(HashMap::new())),
             next: Arc::new(AtomicUsize::new(0)),
         }))
     }
@@ -52,6 +58,12 @@ impl RuntimeDispatcher {
     /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`. This function will start
     /// the number of `coroutine_threads` specified in your config.
     pub fn new(config: RuntimeConfig, handle: Handle) -> RuntimeDispatcher {
+        Self::new_with_options(config, handle, None)
+    }
+
+    /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`. This function will start
+    /// the number of `coroutine_threads` specified in your config. Includes options.
+    pub fn new_with_options(config: RuntimeConfig, handle: Handle, redis: Option<RedisClient>) -> RuntimeDispatcher {
         let size = config.coroutine_threads();
         let mut spawners = Vec::with_capacity(size);
         let mut waiting = Vec::with_capacity(size);
@@ -67,6 +79,8 @@ impl RuntimeDispatcher {
             config,
             strategy,
             spawners,
+            redis,
+            context_vars: Arc::new(Mutex::new(HashMap::new())),
             next: Arc::new(AtomicUsize::new(0)),
         };
         let arc_dispatcher = Self(Arc::new(dispatcher));
@@ -78,10 +92,23 @@ impl RuntimeDispatcher {
         arc_dispatcher
     }
 
+    pub(crate) fn with_mutable_context_vars<F: FnOnce(&mut HashMap<String, Py<PyAny>>) -> R, R>(&self, f: F) -> R {
+        let mut vars = self.0.context_vars.lock().expect("Could not lock context vars.");
+        f(&mut vars)
+    }
+
+    pub(crate) fn with_context_vars<F: FnOnce(&HashMap<String, Py<PyAny>>) -> R, R>(&self, f: F) -> R {
+        let mut vars = self.0.context_vars.lock().expect("Could not lock context vars.");
+        f(&mut vars)
+    }
+
     #[inline]
     pub(crate) fn monitor(&self) -> () {
         self.0.monitor()
     }
+
+    #[inline]
+    pub(crate) fn clone_for_new_task(&self) -> Self { RuntimeDispatcher(Arc::new(self.0.clone_for_new_task())) }
 
     #[inline]
     pub(crate) fn stack_size(&self) -> usize {
@@ -91,6 +118,10 @@ impl RuntimeDispatcher {
     #[inline]
     pub(crate) fn handle(&self) -> Handle {
         self.0.handle()
+    }
+
+    pub(crate) fn redis(&self) -> RedisClient {
+        self.0.redis().expect("Redis is not configured for this runtime.")
     }
 
     /// Information about the current threads controlled by this Dispatcher.
@@ -153,10 +184,24 @@ struct Dispatcher {
     strategy: Strategy,
     handle: Handle,
     config: RuntimeConfig,
+    redis: Option<RedisClient>,
     next: Arc<AtomicUsize>,
+    context_vars: Arc<Mutex<HashMap<String, Py<PyAny>>>>
 }
 
 impl Dispatcher {
+    fn clone_for_new_task(&self) -> Self {
+        Dispatcher {
+            spawners: self.spawners.clone(),
+            strategy: self.strategy.clone(),
+            handle: self.handle.clone(),
+            config: self.config.clone(),
+            redis: self.redis.clone(),
+            next: self.next.clone(),
+            context_vars: Arc::new(Mutex::new(HashMap::new()))
+        }
+    }
+
     #[inline]
     fn stack_size(&self) -> usize {
         self.config.stack_size()
@@ -165,6 +210,11 @@ impl Dispatcher {
     #[inline]
     fn handle(&self) -> Handle {
         self.handle.clone()
+    }
+
+    #[inline]
+    fn redis(&self) -> Option<RedisClient> {
+        self.redis.clone()
     }
 
     fn monitor(&self) -> () {

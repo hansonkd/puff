@@ -260,17 +260,12 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                 Ok(Err(res)) => res.into_response(),
                 Ok(Ok(args)) => {
                     let iterator_res = Python::with_gil(|py| app.call1(py, args));
-                    // let iterator_res = self.dispatcher.dispatch_blocking(move || Python::with_gil(|py| {
-                    //     Ok(app.call1(py, args)?)
-                    // })).await;
-
-                    // let iterator = Python::with_gil(|py| PyObject::from(PyList::empty(py)));
-                    let iterator = if let Ok(r) = iterator_res {
-                        r
-                    } else {
-                        error!("Couldn't call wsgi app function");
-                        let resp = Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(Body::empty()).unwrap();
-                        return resp.into_response();
+                    let iterator = match iterator_res {
+                        Ok(r) => r,
+                        Err(e) => {
+                            error!("Couldn't call wsgi app function, {e}");
+                            return WsgiError::PyErr(e).into_response()
+                        }
                     };
 
                     let mut response = Response::builder();
@@ -280,7 +275,6 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                         error!("Did not receive start_response");
                         return WsgiError::ExpectedResponseStart.into_response()
                     };
-
 
                     if let (status_code_str, pyheaders) = responded {
                         let status = status_code_str.split(" ").next().expect("Invalid wsgi status format");

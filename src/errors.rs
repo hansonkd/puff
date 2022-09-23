@@ -6,6 +6,7 @@ use axum::response::{IntoResponse, Response};
 
 pub type Result<T> = anyhow::Result<T>;
 pub type Error = anyhow::Error;
+pub type PuffResult<T> = Result<T>;
 
 
 pub struct RequestError(Error);

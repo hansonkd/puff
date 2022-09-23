@@ -50,6 +50,7 @@ use futures_util::TryFutureExt;
 use pyo3::{PyErr, PyObject, Python};
 use pyo3::exceptions::PyRuntimeError;
 use tokio::runtime::{Builder, Handle, Runtime};
+use crate::databases::redis::{add_redis_command_arguments, new_client_async, RedisClient};
 
 use crate::errors::Result;
 use crate::runtime::dispatcher::RuntimeDispatcher;
@@ -59,6 +60,7 @@ use crate::types::text::Text;
 use crate::types::Puff;
 
 pub mod commands;
+
 
 /// A wrapper for a boxed future that is able to be run by a Puff Program.
 pub struct Runnable(Pin<Box<dyn Future<Output = Result<()>> + 'static>>);
@@ -249,6 +251,10 @@ impl Program {
 
         let mut top_level = self.clap_command();
 
+        if self.runtime_config.redis() {
+            top_level = add_redis_command_arguments(top_level)
+        }
+
         let mut hm: HashMap<Text, PackedCommand> = HashMap::with_capacity(self.commands.len());
         for packed_command in &self.commands {
             let parser = packed_command.cli_parser();
@@ -259,7 +265,6 @@ impl Program {
 
         let arg_matches = top_level.get_matches();
 
-
         if let Some((command, args)) = arg_matches.subcommand() {
             if let Some(runner) = hm.remove(&command.to_string().into()) {
                 let mut builder = self.runtime()?;
@@ -268,41 +273,25 @@ impl Program {
                 }
 
                 if self.runtime_config.asyncio() {
-                    // let event_loop = Python::with_gil(|py| {
-                    //         let asyncio = py.import("asyncio")?;
-                    //         let obj = PyObject::from(asyncio.call_method0("new_event_loop")?);
-                    //         Result::Ok(obj)
-                    // })?;
-
-                    // builder.on_thread_start(|| {
-                    //     Python::with_gil(|py| {
-                    //         let asyncio = py.import("asyncio").unwrap();
-                    //         let event_loop = asyncio.call_method0("new_event_loop").unwrap();
-                    //         asyncio.call_method1("set_event_loop", (event_loop.clone(),)).unwrap();
-                    //     });
-                    // });
                     pyo3_asyncio::tokio::init(builder);
-
                     let rt = pyo3_asyncio::tokio::get_runtime();
-                    // let rt2 = builder.build()?;
                     let dispatcher =
                         RuntimeDispatcher::new(self.runtime_config.clone(), rt.handle().clone());
                     let runnable = runner.runnable_from_args(args, dispatcher.puff())?;
 
                     rt.block_on(DISPATCHER.scope(dispatcher, runnable.0))?;
-
-                    // rt.block_on(DISPATCHER.scope(dispatcher, runnable.0))?;
-                    //
-                    // let local = tokio::task::LocalSet::new();
-                    // let fut = runnable.0.map_err(|e| PyErr::new::<PyRuntimeError, _>(format!("error {:?}", e)));
-                    // // std::thread::spawn(move || rt2.block_on(local));
-                    // Python::with_gil(|py| pyo3_asyncio::tokio::run(py, fut))?;
-
                 } else {
                     let rt = builder.build()?;
-                    let dispatcher =
-                        RuntimeDispatcher::new(self.runtime_config.clone(), rt.handle().clone());
-                    dispatcher.monitor();
+                    let mut redis = None;
+                    if self.runtime_config.redis() {
+                        redis = Some(rt.block_on(new_client_async(arg_matches.value_of("redis_url").unwrap()))?);
+                    }
+
+                    let mut dispatcher =
+                        RuntimeDispatcher::new_with_options(self.runtime_config.clone(), rt.handle().clone(), redis);
+                    // dispatcher.monitor();
+
+
                     let runnable = runner.runnable_from_args(args, dispatcher.puff())?;
                     rt.block_on(DISPATCHER.scope(dispatcher, runnable.0))?;
                 }

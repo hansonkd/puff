@@ -64,7 +64,7 @@ impl LocalSpawner {
             let dispatcher = dispatcher.puff();
             local.spawn_local(async move {
                 while let Some(SpawnerJob(new_sender, new_task)) = recv.recv().await {
-                    let dispatcher = dispatcher.puff();
+                    let dispatcher = dispatcher.clone_for_new_task();
                     let num_tasks_loop = num_tasks_loop.clone();
                     let num_tasks_completed_loop = num_tasks_completed_loop.clone();
                     let _ = num_tasks_loop.fetch_add(1, Ordering::SeqCst);

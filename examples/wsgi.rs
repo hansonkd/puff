@@ -11,7 +11,7 @@ use puff::runtime::RuntimeConfig;
 
 fn main() {
     let app = Router::new().get("/rust/", || Ok("Cool"));
-    let rc = RuntimeConfig::default();
+    let rc = RuntimeConfig::default().set_redis(true);
 
     Program::new("my_first_app")
         .about("This is my first app")

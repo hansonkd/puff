@@ -15,6 +15,7 @@ use pyo3::exceptions::PyRuntimeError;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::Receiver;
 use tracing::info;
+use crate::python::bootstrap_puff_globals;
 use crate::python::wsgi::handler::WsgiHandler;
 use crate::types::Text;
 
@@ -63,11 +64,15 @@ impl RunnableCommand for WSGIServerCommand {
     ) -> Result<Runnable> {
         let this_self = self.clone();
         let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-        let wsgi_app: PyObject = Python::with_gil(|py| {
-            Result::Ok(py.import(self.module.as_str())?.getattr(self.attr.as_str())?.into())
-        })?;
+        bootstrap_puff_globals();
+
         info!("Creating to start server on {:?}", addr);
+        let module_str = self.module.clone().into_string();
+        let attr_str = self.attr.clone().into_string();
         let fut = async move {
+            let wsgi_app: PyObject = dispatcher.dispatch(move || Python::with_gil(|py| {
+                Result::Ok(PyObject::from(py.import(module_str.as_str())?.getattr(attr_str)?))
+            })).await?;
             info!("Preparing to start server on {:?}", addr);
             let mut ctx = create_server_context(
                 wsgi_app,

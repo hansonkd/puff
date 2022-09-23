@@ -32,7 +32,8 @@ pub fn yield_to_future<Fut, R>(future: Fut) -> R
 where
     Fut: Future<Output = R>,
 {
-    let m: *mut AsyncYielder<'static, ()> = YIELDER.get();
+    let m = YIELDER.try_with(|m| m.clone()).expect("async_suspend must be called from a Puff context");
+
     match unsafe { m.as_mut() } {
         Some(l) => l.async_suspend(future),
         None => panic!("async_suspend must be called from a Puff context"),
@@ -115,6 +116,7 @@ pub struct RuntimeConfig {
     coroutine_threads: usize,
     python: bool,
     asyncio: bool,
+    redis: bool,
     blocking_task_keep_alive: Duration,
     strategy: Strategy,
 }
@@ -164,6 +166,8 @@ impl RuntimeConfig {
     pub fn asyncio(&self) -> bool {
         self.asyncio
     }
+    /// Get if a global redis will be enabled.
+    pub fn redis(&self) -> bool { self.redis }
 
     /// Set the tokio_worker_threads for coroutines.
     ///
@@ -228,14 +232,23 @@ impl RuntimeConfig {
         new
     }
 
-    /// Sets whether to start with asyncio.
+    /// Sets whether to start with a global Redis pool.
     ///
-    /// Default: false
-    pub fn set_asyncio(self, async_io: bool) -> Self {
+    /// Default: true
+    pub fn set_redis(self, redis: bool) -> Self {
         let mut new = self;
-        new.asyncio = async_io;
+        new.redis = redis;
         new
     }
+
+    // /// Sets whether to start with asyncio.
+    // ///
+    // /// Default: false
+    // pub fn set_asyncio(self, async_io: bool) -> Self {
+    //     let mut new = self;
+    //     new.asyncio = async_io;
+    //     new
+    // }
 }
 
 impl Default for RuntimeConfig {
@@ -247,6 +260,7 @@ impl Default for RuntimeConfig {
             coroutine_threads: num_cpus::get(),
             python: true,
             asyncio: false,
+            redis: false,
             blocking_task_keep_alive: Duration::from_secs(30),
             strategy: Strategy::RoundRobin,
         }
