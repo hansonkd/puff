@@ -1,6 +1,6 @@
 //! Types used to interact with the Puff Runtime
 //!
-use crate::runtime::wormhole::{AsyncWormhole, AsyncYielder};
+use crate::runtime::wormhole::{AsyncWormhole, AsyncYielder, YIELDER, DISPATCHER};
 use corosensei::stack::DefaultStack;
 
 use std::future::Future;
@@ -8,7 +8,6 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 
 use crate::errors::Result;
-use crate::tasks::DISPATCHER;
 use crate::types::Puff;
 use dispatcher::RuntimeDispatcher;
 
@@ -16,11 +15,8 @@ pub mod dispatcher;
 mod runner;
 mod wormhole;
 
-type PuffWormhole = AsyncWormhole<'static, DefaultStack, ()>;
+type PuffWormhole = AsyncWormhole<'static, DefaultStack>;
 
-tokio::task_local! {
-    static YIELDER: *mut AsyncYielder<'static, ()>;
-}
 
 /// Suspend execution of the current coroutine and run the future. This function MUST be called from
 /// a Puff task. By default this function will run the future on the same single-threaded Tokio
@@ -34,10 +30,19 @@ where
 {
     let m = YIELDER.try_with(|m| m.clone()).expect("async_suspend must be called from a Puff context");
 
-    match unsafe { m.as_mut() } {
+    match unsafe { let x = m.borrow().as_mut(); x } {
         Some(l) => l.async_suspend(future),
         None => panic!("async_suspend must be called from a Puff context"),
     }
+}
+
+pub fn with_dispatcher<F: FnOnce(RuntimeDispatcher) -> R, R>(f: F) -> R {
+    DISPATCHER.with(|d| {
+        match d.borrow().clone() {
+            Some(d) => f(d),
+            None => panic!("Dispatcher can only be used from a puff context.")
+        }
+    })
 }
 
 /// Suspend execution of the current coroutine and run the future. This function MUST be called from
@@ -49,11 +54,12 @@ where
     Fut: Future<Output = R> + Send + 'static,
     R: Send + 'static,
 {
-    let handle = DISPATCHER.with(|v| v.handle());
+    let handle = with_dispatcher(|v| v.handle());
     Ok(yield_to_future(handle.spawn(future))?)
 }
 
 pub(crate) async fn run_local_wormhole_with_stack<F, R>(
+    dispatcher: RuntimeDispatcher,
     s: DefaultStack,
     sender: oneshot::Sender<Result<R>>,
     f: F,
@@ -62,13 +68,10 @@ where
     F: FnOnce() -> Result<R> + 'static + Send,
     R: 'static + Send,
 {
-    let dispatcher = DISPATCHER.with(|v| v.clone());
-
     Ok(
-        tokio::task::spawn_local(PuffWormhole::new(s, move |mut yielder| {
-            let inner =
-                (&yielder as *const AsyncYielder<()>) as usize as *mut AsyncYielder<'static, ()>;
-            let r = DISPATCHER.sync_scope(dispatcher, || YIELDER.sync_scope(inner, f));
+        tokio::task::spawn_local(PuffWormhole::new(s, dispatcher, move |mut yielder| {
+            // let r = DISPATCHER.sync_scope(dispatcher, || YIELDER.sync_scope(inner, f));
+            let r = f();
             // If we can't send, the future wasn't awaited
             sender.send(r).unwrap_or(())
         })?)
@@ -266,6 +269,7 @@ impl Default for RuntimeConfig {
 }
 
 async fn run_new_stack<F, R>(
+    dispatcher: RuntimeDispatcher,
     stack_size: usize,
     sender: oneshot::Sender<Result<R>>,
     f: F,
@@ -275,7 +279,7 @@ where
     R: 'static + Send,
 {
     let stack = DefaultStack::new(stack_size)?;
-    run_local_wormhole_with_stack(stack, sender, f).await
+    run_local_wormhole_with_stack(dispatcher, stack, sender, f).await
 }
 
 pub(crate) async fn run_with_config_on_local<F, R>(
@@ -288,8 +292,7 @@ where
     R: 'static + Send,
 {
     let stack_size = dispatcher.stack_size();
-    DISPATCHER
-        .scope(dispatcher, run_new_stack(stack_size, sender, f))
+    run_new_stack(dispatcher, stack_size, sender, f)
         .await
 }
 

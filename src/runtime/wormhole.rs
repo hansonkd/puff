@@ -23,9 +23,12 @@ use std::task::{Context, Poll, Waker};
 use corosensei::{stack, CoroutineResult, ScopedCoroutine, Yielder};
 
 use std::cell::RefCell;
+use crate::runtime::dispatcher::RuntimeDispatcher;
+use crate::types::Puff;
 
 thread_local! {
-    pub static FOO: RefCell<u32> = RefCell::new(1);
+    pub static YIELDER: RefCell<*mut AsyncYielder<'static>> = RefCell::new(std::ptr::null_mut());
+    pub static DISPATCHER: RefCell<Option<RuntimeDispatcher>> = RefCell::new(None);
 }
 
 /// AsyncWormhole represents a Future that uses a generator with a separate stack to execute a closure.
@@ -33,26 +36,32 @@ thread_local! {
 /// It has the capability to .await on other Futures in the closure using the received
 /// [AsyncYielder](struct.AsyncYielder). Once all Futures have been awaited on AsyncWormhole will resolve
 /// to the return value of the provided closure.
-pub struct AsyncWormhole<'a, Stack, Output>
+pub struct AsyncWormhole<'a, Stack>
 where
     Stack: stack::Stack + Send,
 {
-    generator: Option<Cell<ScopedCoroutine<'a, Waker, Option<Output>, (), Stack>>>,
+    generator: Option<Cell<ScopedCoroutine<'a, Waker, Option<()>, (), Stack>>>,
 }
 
-impl<'a, Stack, Output> AsyncWormhole<'a, Stack, Output>
+impl<'a, Stack> AsyncWormhole<'a, Stack>
 where
     Stack: stack::Stack + Send,
 {
     /// Returns a new AsyncWormhole, using the passed `stack` to execute the closure `f` on.
     /// The closure will not be executed right away, only if you pass AsyncWormhole to an
     /// async executor (.await on it)
-    pub fn new<F>(stack: Stack, f: F) -> Result<Self, Error>
+    pub fn new<F>(stack: Stack, dispatcher: RuntimeDispatcher, f: F) -> Result<Self, Error>
     where
-        F: FnOnce(AsyncYielder<Output>) -> Output + 'a + Send,
+        F: FnOnce(AsyncYielder) -> () + 'a + Send,
     {
-        let generator = ScopedCoroutine::with_stack(stack, |yielder, waker| {
-            let async_yielder = AsyncYielder::new(yielder, waker);
+        let generator = ScopedCoroutine::with_stack(stack, move |yielder, waker| {
+            let async_yielder = AsyncYielder::new(yielder, waker, dispatcher.puff());
+            YIELDER.with(|y| {
+                *y.borrow_mut() = async_yielder.as_pointer();
+            });
+            DISPATCHER.with(|d| {
+                *d.borrow_mut() = Some(dispatcher.puff())
+            });
             let finished = Some(f(async_yielder));
             yielder.suspend(finished);
         });
@@ -63,11 +72,11 @@ where
     }
 }
 
-impl<'a, Stack, Output> Future for AsyncWormhole<'a, Stack, Output>
+impl<'a, Stack> Future for AsyncWormhole<'a, Stack>
 where
     Stack: stack::Stack + Unpin + Send,
 {
-    type Output = Output;
+    type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let result = self
@@ -95,14 +104,15 @@ where
 }
 
 #[derive(Clone)]
-pub struct AsyncYielder<'a, Output> {
-    yielder: &'a Yielder<Waker, Option<Output>>,
+pub struct AsyncYielder<'a> {
+    yielder: &'a Yielder<Waker, Option<()>>,
     waker: Waker,
+    dispatcher: RuntimeDispatcher
 }
 
-impl<'a, Output> AsyncYielder<'a, Output> {
-    pub(crate) fn new(yielder: &'a Yielder<Waker, Option<Output>>, waker: Waker) -> Self {
-        Self { yielder, waker }
+impl<'a> AsyncYielder<'a> {
+    pub(crate) fn new(yielder: &'a Yielder<Waker, Option<()>>, waker: Waker, dispatcher: RuntimeDispatcher) -> Self {
+        Self { yielder, waker, dispatcher }
     }
 
     /// Takes an `impl Future` and awaits it, returning the value from it once ready.
@@ -115,8 +125,20 @@ impl<'a, Output> AsyncYielder<'a, Output> {
             let mut cx = Context::from_waker(&mut self.waker);
             self.waker = match future.as_mut().poll(&mut cx) {
                 Poll::Pending => self.yielder.suspend(None),
-                Poll::Ready(result) => return result,
+                Poll::Ready(result) => {
+                    YIELDER.with(|y| {
+                        *y.borrow_mut() = self.as_pointer();
+                    });
+                    DISPATCHER.with(|d| {
+                        *d.borrow_mut() = Some(self.dispatcher.puff())
+                    });
+                    return result
+                },
             };
         }
+    }
+
+    pub fn as_pointer(&self) -> *mut AsyncYielder<'static> {
+        (self as *const AsyncYielder) as usize as *mut AsyncYielder<'static>
     }
 }

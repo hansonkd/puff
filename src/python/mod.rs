@@ -5,7 +5,7 @@ use pyo3::types::PyType;
 use crate::errors::PuffResult;
 use crate::python::redis::RedisGlobal;
 use pyo3::prelude::*;
-use crate::tasks::DISPATCHER;
+use crate::runtime::with_dispatcher;
 
 pub mod asgi;
 pub mod wsgi;
@@ -38,7 +38,7 @@ impl ContextVar {
     }
 
     fn set(&mut self, value: Py<PyAny>) -> Token {
-        let old_value = DISPATCHER.with(|d| {
+        let old_value = with_dispatcher(|d| {
             d.with_mutable_context_vars(|vars| {
                 vars.insert(self.name.clone(), value.clone())
             })
@@ -58,7 +58,7 @@ impl ContextVar {
     }
 
     fn get(&self, py: Python, default: Option<Py<PyAny>>) -> Option<Py<PyAny>> {
-        DISPATCHER.with(|d| {
+        with_dispatcher(|d| {
             d.with_context_vars(|vars| {
                 vars.get(&self.name).map(|v| v.into_py(py)).or(default).or(self.default.clone())
             })

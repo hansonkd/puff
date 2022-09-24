@@ -363,7 +363,6 @@ where
 mod tests {
     use super::*;
     use crate::runtime::dispatcher::RuntimeDispatcher;
-    use crate::tasks::DISPATCHER;
     use crate::types::text::ToText;
     use crate::types::Puff;
     use tokio::runtime::Runtime;

@@ -55,7 +55,6 @@ use crate::databases::redis::{add_redis_command_arguments, new_client_async, Red
 use crate::errors::Result;
 use crate::runtime::dispatcher::RuntimeDispatcher;
 use crate::runtime::RuntimeConfig;
-use crate::tasks::DISPATCHER;
 use crate::types::text::Text;
 use crate::types::Puff;
 

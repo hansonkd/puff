@@ -14,7 +14,7 @@
 //! assert_eq!(task.join().unwrap(), 42)
 //! ```
 //!
-use crate::runtime::yield_to_future;
+use crate::runtime::{with_dispatcher, yield_to_future};
 use futures::future::BoxFuture;
 
 use std::time::Duration;
@@ -23,9 +23,6 @@ use crate::errors::Error;
 
 use crate::runtime::dispatcher::RuntimeDispatcher;
 
-tokio::task_local! {
-    pub(crate) static DISPATCHER: RuntimeDispatcher;
-}
 
 /// A Task representing a currently executing coroutine. Can be awaited on using `join`.
 ///
@@ -68,7 +65,7 @@ where
         F: FnOnce() -> Result<R, Error> + Send + 'static,
     {
         Task {
-            handle: DISPATCHER.with(move |v| v.dispatch(f)),
+            handle: with_dispatcher(move |v| v.dispatch(f)),
         }
     }
 
@@ -97,7 +94,7 @@ where
         F: FnOnce() -> Result<R, Error> + Send + 'static,
     {
         Task {
-            handle: DISPATCHER.with(move |v| v.dispatch_blocking(f)),
+            handle: with_dispatcher(move |v| v.dispatch_blocking(f)),
         }
     }
 
