@@ -381,7 +381,7 @@ mod tests {
                 .unwrap(),
         );
 
-        let result = rt.block_on(DISPATCHER.scope(dispatcher, fut));
+        let result = rt.block_on(fut);
         assert!(result.is_ok());
         let response = result.unwrap();
         println!("{:?}", response.body());

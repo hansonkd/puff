@@ -68,9 +68,7 @@ where
         tokio::task::spawn_local(PuffWormhole::new(s, move |mut yielder| {
             let inner =
                 (&yielder as *const AsyncYielder<()>) as usize as *mut AsyncYielder<'static, ()>;
-            let r = yielder
-                .async_suspend(DISPATCHER.scope(dispatcher, YIELDER.scope(inner, async { f() })));
-
+            let r = DISPATCHER.sync_scope(dispatcher, || YIELDER.sync_scope(inner, f));
             // If we can't send, the future wasn't awaited
             sender.send(r).unwrap_or(())
         })?)
@@ -310,7 +308,7 @@ where
         .unwrap();
     let config = RuntimeConfig::default().set_coroutine_threads(1);
     let dispatcher = RuntimeDispatcher::new(config, rt.handle().clone());
-    rt.block_on(DISPATCHER.scope(dispatcher.puff(), dispatcher.dispatch(f)))
+    rt.block_on(dispatcher.dispatch(f))
 }
 
 #[cfg(test)]
@@ -321,21 +319,6 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::Mutex;
-
-    async fn run<F, R>(f: F) -> Result<R>
-    where
-        F: FnOnce() -> Result<R> + 'static + Send,
-        R: 'static + Send,
-    {
-        let dispatcher = DISPATCHER.with(|v| v.clone());
-        let local = tokio::task::LocalSet::new();
-        let (sender, recv) = oneshot::channel();
-        local
-            .run_until(DISPATCHER.scope(dispatcher, run_new_stack(1024 * 1024, sender, f)))
-            .await?;
-        recv.await
-            .map_err(|_| anyhow!("Could not receive result for closure"))?
-    }
 
     #[test]
     fn check_wormhole() {
@@ -363,44 +346,5 @@ mod tests {
     #[test]
     fn check_recurse() {
         start_runtime_and_run(|| Ok(recurse(10000))).unwrap();
-    }
-
-    #[test]
-    fn check_wormhole_tasks_many_wormholes_dont_block() {
-        // Run a sequence of futures. The futures should resolve in reverse order.
-        const NUMBER_TASKS: usize = 50;
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let config = RuntimeConfig::default();
-        let dispatcher = RuntimeDispatcher::new(config, rt.handle().clone());
-
-        rt.block_on(DISPATCHER.scope(dispatcher, async {
-            let mut tasks = Vec::new();
-            let mut expected = Vec::new();
-            let results = Arc::new(Mutex::new(Vec::new()));
-            for xx in 0..NUMBER_TASKS {
-                let results = results.clone();
-                let task = run(move || {
-                    let r = yield_to_future(async move {
-                        tokio::time::sleep(Duration::from_millis(10 * (NUMBER_TASKS - xx) as u64))
-                            .await;
-                        results.lock().await.push(xx);
-                        xx
-                    });
-                    assert_eq!(r, xx);
-                    Ok(())
-                });
-                tasks.push(task);
-                expected.push(xx);
-            }
-
-            expected.reverse();
-
-            join_all(tasks).await;
-
-            assert_eq!(*results.lock().await, expected);
-        }));
     }
 }

@@ -319,7 +319,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
         };
 
         let real_fut = async move {
-            let ret = self.dispatcher.dispatch(|| Ok(body_fut())).await;
+            let ret = self.dispatcher.dispatch_blocking(|| Ok(body_fut())).await;
             match ret {
                 Ok(r) => {
                     r

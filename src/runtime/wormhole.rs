@@ -22,6 +22,12 @@ use std::task::{Context, Poll, Waker};
 
 use corosensei::{stack, CoroutineResult, ScopedCoroutine, Yielder};
 
+use std::cell::RefCell;
+
+thread_local! {
+    pub static FOO: RefCell<u32> = RefCell::new(1);
+}
+
 /// AsyncWormhole represents a Future that uses a generator with a separate stack to execute a closure.
 ///
 /// It has the capability to .await on other Futures in the closure using the received

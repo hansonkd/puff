@@ -305,7 +305,16 @@ mod tests {
     #[test]
     fn check_nested_task() {
         let val = start_runtime_and_run(|| {
-            let task = Task::spawn(move || Task::spawn(move || Ok(59)).join());
+            println!("Nested Task");
+            let task = Task::spawn(move || {
+                println!("Outer Task Start");
+                let ret = Task::spawn(move || {
+                    println!("Inner Task Start");
+                    Ok(59)
+                }).join();
+                println!("Outer Task End");
+                ret
+            });
             task.join()
         })
         .unwrap();

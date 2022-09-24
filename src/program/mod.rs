@@ -279,7 +279,7 @@ impl Program {
                         RuntimeDispatcher::new(self.runtime_config.clone(), rt.handle().clone());
                     let runnable = runner.runnable_from_args(args, dispatcher.puff())?;
 
-                    rt.block_on(DISPATCHER.scope(dispatcher, runnable.0))?;
+                    rt.block_on(runnable.0)?;
                 } else {
                     let rt = builder.build()?;
                     let mut redis = None;
@@ -293,7 +293,7 @@ impl Program {
 
 
                     let runnable = runner.runnable_from_args(args, dispatcher.puff())?;
-                    rt.block_on(DISPATCHER.scope(dispatcher, runnable.0))?;
+                    rt.block_on(runnable.0)?;
                 }
             }
         }

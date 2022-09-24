@@ -153,7 +153,7 @@ impl RuntimeDispatcher {
         R: Send + 'static,
     {
         let (new_sender, rec) = oneshot::channel();
-        let dispatcher = self.clone();
+        let dispatcher = self.clone_for_new_task();
         let future = self.0.handle.spawn_blocking(|| {
             let handle = Handle::current();
             let local = LocalSet::new();
