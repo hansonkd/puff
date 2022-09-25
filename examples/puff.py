@@ -98,12 +98,16 @@ def wrap_async(f):
     thread = parent_thread.get()
     context = greenlet_context.get()
 
-    def return_result(result):
-        thread.return_result(sub_job, result)
+    def return_result(r, e):
+        thread.return_result(sub_job, (r, e))
 
     f(context, return_result)
 
-    return thread.event_loop_processor.switch()
+    result, exception = thread.event_loop_processor.switch()
+    if exception:
+        raise exception
+    else:
+        return result
 
 
 def get_redis():

@@ -14,6 +14,7 @@ use dispatcher::RuntimeDispatcher;
 pub mod dispatcher;
 mod runner;
 mod wormhole;
+mod shutdown;
 
 type PuffWormhole = AsyncWormhole<'static, DefaultStack>;
 

@@ -30,12 +30,12 @@ use axum::headers::HeaderMap;
 use axum::http::header::ToStrError;
 use futures_util::TryFutureExt;
 use hyper::body::{Buf, SizeHint};
+use pyo3::exceptions::PyException;
 use tokio::sync::{mpsc::{self, UnboundedReceiver}, Mutex, oneshot};
 use tracing::{error, info};
 use crate::python::greenlet::GreenletDispatcher;
 use crate::python::wsgi;
 use crate::runtime::dispatcher::RuntimeDispatcher;
-use crate::runtime::yield_to_future;
 
 
 const MAX_LIST_BODY_INLINE_CONCAT: u64 = 1024 * 4;
@@ -48,8 +48,8 @@ pub struct WsgiHandler {
 }
 
 impl WsgiHandler {
-    pub fn new(app: PyObject, dispatcher: RuntimeDispatcher, greenlet: GreenletDispatcher) -> WsgiHandler {
-        WsgiHandler { app, dispatcher, greenlet: Some(greenlet) }
+    pub fn new(app: PyObject, dispatcher: RuntimeDispatcher, greenlet: Option<GreenletDispatcher>) -> WsgiHandler {
+        WsgiHandler { app, dispatcher, greenlet }
     }
 
     pub fn blocking(app: PyObject, dispatcher: RuntimeDispatcher) -> WsgiHandler {
@@ -178,8 +178,8 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
         let disconnected = Arc::new(AtomicBool::new(false));
         let (req, body): (_, Body) = req.into_parts();
 
-        let body_fut = move || {
-            let body_bytes = if let Ok(body_bytes) = yield_to_future(hyper::body::to_bytes(body)) {
+        let body_fut = async move  {
+            let body_bytes = if let Ok(body_bytes) =hyper::body::to_bytes(body).await {
                 body_bytes
             } else {
                  error!("Could not extract request body.");
@@ -189,7 +189,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
 
             // receiver_tx.send(Some(body)).unwrap();
             let _disconnected = SetTrueOnDrop(disconnected);
-            let iterator_res: Result<Result<(PyObject, PyObject), Response<Body>>, Error> = Python::with_gil(|py| {
+            let args_to_send: Result<Result<(PyObject, PyObject), Response<Body>>, Error> = Python::with_gil(|py| {
                 let environ = PyDict::new(py);
                 environ.set_item("wsgi.version", (1, 0))?;
                 environ.set_item("wsgi.url_scheme", req.uri.scheme_str().unwrap_or("http"))?;
@@ -262,20 +262,32 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                 Ok::<_, Error>(Ok(args))
             });
 
-            match iterator_res {
+            match args_to_send {
                 Ok(Err(res)) => res.into_response(),
                 Ok(Ok(args)) => {
-                    let iterator_res = Python::with_gil(|py| app.call1(py, args));
-                    let iterator = match iterator_res {
-                        Ok(r) => r,
-                        Err(e) => {
-                            error!("Couldn't call wsgi app function, {e}");
-                            return WsgiError::PyErr(e).into_response()
-                        }
-                    };
+                    let iterator =
+                        match self.greenlet {
+                            Some(g) => {
+                                let r = {
+                                    let res = Python::with_gil(|py| g.dispatch_py(py, app, args.into_py(py), PyDict::new(py).into_py(py)));
+                                    let rec = match res {
+                                        Ok(r) => r,
+                                        Err(e) => return WsgiError::PyErr(e).into_response()
+                                    };
+                                    rec.await.map_err(|e| PyException::new_err("Could not await greenlet result in wsgi."))
+                                };
+                                match r {
+                                    Ok(r) => r,
+                                    Err(e) => return WsgiError::PyErr(e).into_response()
+                                }
+                            },
+                            None => {
+                                panic!("Blocking not implemented.")
+                            }
+                        };
 
                     let mut response = Response::builder();
-                    let responded = if let Ok(r) = yield_to_future(http_sender_rx) {
+                    let responded = if let Ok(r) = http_sender_rx.await {
                         r
                     } else {
                         error!("Did not receive start_response");
@@ -324,24 +336,6 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
             }
         };
 
-        let real_fut = async move {
-            let ret =
-                if self.blocking {
-                    self.dispatcher.dispatch_blocking(|| Ok(body_fut())).await
-                } else {
-                    self.dispatcher.dispatch(|| Ok(body_fut())).await
-                };
-            match ret {
-                Ok(r) => {
-                    r
-                }
-                Err(e) => {
-                    #[cfg(feature = "tracing")]
-                    tracing::error!("Error preparing request scope: {e:?}");
-                    Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(Body::empty()).unwrap().into_response()
-                }
-            }
-        };
-        Box::pin(real_fut)
+        Box::pin(body_fut)
     }
 }

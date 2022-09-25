@@ -13,9 +13,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::{spawn_local, LocalSet};
 use tracing::warn;
+use crate::runtime::shutdown::Shutdown;
 
 type PuffReturn = Box<dyn Any + Send + 'static>;
 
@@ -43,13 +44,14 @@ impl LocalSpawner {
     fn without_dispatcher() -> Self {
         let rt = Runtime::new().unwrap();
         let (send, rec) = oneshot::channel();
-        let runner = LocalSpawner::new(rec);
+        let (c, _) = broadcast::channel(1);
+        let runner = LocalSpawner::new(rec, Shutdown::new(c.subscribe()));
         send.send(RuntimeDispatcher::empty(rt.handle().clone()))
             .unwrap_or(());
         runner
     }
 
-    pub(crate) fn new(dispatcher_lazy: oneshot::Receiver<RuntimeDispatcher>) -> Self {
+    pub(crate) fn new(dispatcher_lazy: oneshot::Receiver<RuntimeDispatcher>, mut shutdown: Shutdown) -> Self {
         let (send, mut recv) = mpsc::unbounded_channel();
         let num_tasks = Arc::new(AtomicUsize::new(0));
         let num_tasks_completed = Arc::new(AtomicUsize::new(0));
@@ -63,21 +65,30 @@ impl LocalSpawner {
             let local = LocalSet::new();
             let dispatcher = dispatcher.puff();
             local.spawn_local(async move {
-                while let Some(SpawnerJob(new_sender, new_task)) = recv.recv().await {
-                    let dispatcher = dispatcher.clone_for_new_task();
-                    let num_tasks_loop = num_tasks_loop.clone();
-                    let num_tasks_completed_loop = num_tasks_completed_loop.clone();
-                    let _ = num_tasks_loop.fetch_add(1, Ordering::SeqCst);
-                    let fut = async move {
-                        let res = run_with_config_on_local(dispatcher, new_sender, new_task).await;
-                        let _ = num_tasks_completed_loop.fetch_add(1, Ordering::SeqCst);
-                        res
-                    };
+                while !shutdown.is_shutdown() {
+                    if let Some(SpawnerJob(new_sender, new_task)) = tokio::select! {
+                            res = recv.recv() => res,
+                            _ = shutdown.recv() => {
+                                return ();
+                            }
+                        } {
+                        let dispatcher = dispatcher.clone_for_new_task();
+                        let num_tasks_loop = num_tasks_loop.clone();
+                        let num_tasks_completed_loop = num_tasks_completed_loop.clone();
+                        let _ = num_tasks_loop.fetch_add(1, Ordering::SeqCst);
+                        let fut = async move {
+                            let res = run_with_config_on_local(dispatcher, new_sender, new_task).await;
+                            let _ = num_tasks_completed_loop.fetch_add(1, Ordering::SeqCst);
+                            res
+                        };
 
-                    spawn_local(fut);
+                        spawn_local(fut);
+                    } else {
+                    break
                 }
-                // If the while loop returns, then all the LocalSpawner
-                // objects have have been dropped.
+                    // If the while loop returns, then all the LocalSpawner
+                    // objects have have been dropped.
+                }
             });
 
             // This will return once all senders are dropped and all

@@ -14,6 +14,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString};
 use tokio::sync::{mpsc, oneshot, Mutex};
+use crate::python::greenlet::GreenletDispatcher;
 use crate::python::wsgi::handler::WsgiHandler;
 use crate::runtime::dispatcher::RuntimeDispatcher;
 use crate::web::server::Router;
@@ -69,6 +70,7 @@ pub struct ServerContext<T: AsyncFn> {
     app: Option<PyObject>,
     server: Option<T>,
     dispatcher: RuntimeDispatcher,
+    greenlet: Option<GreenletDispatcher>
 }
 
 
@@ -104,7 +106,7 @@ impl<T: AsyncFn> ServerContext<T> {
             (Some(rx), Some(app), Some(server), Some(tx)) => {
                 let fut = async move {
                     // create wsgi service
-                    let wsgi_handler = WsgiHandler::new(app.clone(), self.dispatcher.clone());
+                    let wsgi_handler = WsgiHandler::new(app.clone(), self.dispatcher.clone(), self.greenlet.clone());
 
                     server.call(wsgi_handler, rx).await;
                     
@@ -121,7 +123,8 @@ impl<T: AsyncFn> ServerContext<T> {
 pub fn create_server_context<T: AsyncFn>(
     app: PyObject,
     server: T,
-    dispatcher: RuntimeDispatcher
+    dispatcher: RuntimeDispatcher,
+    greenlet: Option<GreenletDispatcher>
 ) -> ServerContext<T> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let (wait_shutdown_tx, wait_shutdown_rx) = tokio::sync::oneshot::channel();
@@ -132,6 +135,7 @@ pub fn create_server_context<T: AsyncFn>(
         wait_shutdown_rx: Some(wait_shutdown_rx),
         app: Some(app),
         server: Some(server),
+        greenlet,
         dispatcher
     }
 }

@@ -1,9 +1,11 @@
 use bb8_redis::redis::Value;
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyException, PyValueError};
 use crate::databases::redis::{Cmd, RedisClient, with_redis};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList};
+use crate::python::greenlet::ThreadDispatcher;
 use crate::python::into_py_result;
+use crate::types::Bytes;
 
 
 #[pyclass]
@@ -42,8 +44,31 @@ fn extract_redis_to_python(py: Python, val: Value) -> PyObject {
 
 #[pymethods]
 impl PythonRedis {
-    fn get(&self, py: Python, val: &str) -> PyResult<String> {
-        py.allow_threads(|| into_py_result(self.0.query(Cmd::get(val))))
+    fn get(&self, py: Python, ctx: &ThreadDispatcher, return_fun: PyObject, val: &str) -> PyResult<PyObject> {
+        let h = ctx.dispatcher().handle();
+        let command = Cmd::get(val);
+        let client = self.0.client();
+        h.spawn(async move {
+            let conn_res = client.get().await.map_err(|r| PyException::new_err(format!("Pool exception: {r}")));
+            let mut conn = match conn_res {
+                Ok(r) => r,
+                Err(e) => {
+                    Python::with_gil(|py| return_fun.call1(py, (py.None(), e))).expect("Could not return");
+                    return ();
+                }
+            };
+            let res: PyResult<Bytes> = command.query_async(&mut *conn).await.map_err(|r| PyException::new_err(format!("Redis exception: {r}")));
+            match res {
+                Ok(r) => Python::with_gil(|py| {
+                    Python::with_gil(|py| return_fun.call1(py, (&r.into_py(py), py.None())))
+                }),
+                Err(e) => {
+                    Python::with_gil(|py| return_fun.call1(py, (py.None(), e)))
+                }
+            }.expect("Could not return");
+        });
+
+        Ok(py.None())
     }
 
     fn set(&self, py: Python, key: &str, val: &str) -> PyResult<()> {

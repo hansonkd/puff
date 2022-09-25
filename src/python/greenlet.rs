@@ -19,11 +19,19 @@ impl GreenletReturn {
 
 
 #[pyclass]
+#[derive(Clone)]
 pub struct ThreadDispatcher(RuntimeDispatcher);
 
+impl ThreadDispatcher {
+    pub fn dispatcher(&self) -> RuntimeDispatcher {
+        self.0.clone()
+    }
+}
 
+#[derive(Clone)]
 pub struct GreenletDispatcher {
-    thread_obj: PyObject
+    thread_obj: PyObject,
+    thread_dispatcher: ThreadDispatcher
 }
 
 
@@ -31,11 +39,12 @@ impl GreenletDispatcher {
     pub fn new(dispatcher: RuntimeDispatcher) -> PyResult<Self> {
         let thread_obj = Python::with_gil(|py| {
             let puff = py.import("puff")?;
-            let td = ThreadDispatcher(dispatcher);
-            let ret = puff.call_method1("start_event_loop", (td,))?;
+
+            let ret = puff.call_method0("start_event_loop")?;
             PyResult::Ok(ret.into_py(py))
         })?;
-        PyResult::Ok(Self { thread_obj })
+        let thread_dispatcher = ThreadDispatcher(dispatcher);
+        PyResult::Ok(Self { thread_obj, thread_dispatcher })
     }
 
     pub fn dispatch(&self, function: PyObject, args: PyObject, kwargs: PyObject) -> PyResult<oneshot::Receiver<PyObject>> {
@@ -45,8 +54,7 @@ impl GreenletDispatcher {
     pub fn dispatch_py(&self, py: Python, function: PyObject, args: PyObject, kwargs: PyObject) -> PyResult<oneshot::Receiver<PyObject>> {
         let (sender, rec) = oneshot::channel();
         let returner = GreenletReturn(Some(sender));
-        self.thread_obj.call_method1(py, "spawn", (function, args, kwargs, returner))?;
+        self.thread_obj.call_method1(py, "spawn", (function, self.thread_dispatcher.clone(), args, kwargs, returner))?;
         Ok(rec)
     }
-
 }

@@ -32,14 +32,20 @@ puff_redis = puff.get_redis()
 #     return b"".join(gets)
 #
 
+from puff import wrap_async
+
+
+def redis_get(q):
+    return wrap_async(lambda ctx, rr: puff_redis.get(ctx, rr, q))
+
+
 def app(environ, start_response):
     start_response("200 OK", [])
-    puff_redis.set("blam", "ok")
+    # puff_redis.set("blam", "ok")
     gets = []
     for _ in range(SAMPLE):
-        gets.append(puff_redis.get("blam"))
-    st = "".join(gets)
-    return [st.encode("utf8")]
+        gets.append(redis_get("blam"))
+    return [b"".join(gets)]
 #
 #
 # def do_work(q, return_result):

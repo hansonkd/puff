@@ -28,6 +28,10 @@ impl RedisClient {
             PuffResult::Ok(command.query_async(&mut *conn).await?)
         })?)
     }
+
+    pub fn client(&self) -> Pool<RedisConnectionManager> {
+        return self.client.clone()
+    }
 }
 
 pub async fn new_client_async<T: IntoConnectionInfo>(conn: T) -> PuffResult<RedisClient> {

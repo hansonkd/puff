@@ -14,8 +14,9 @@ use pyo3::{PyErr, PyObject, Python};
 use pyo3::exceptions::PyRuntimeError;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::Receiver;
-use tracing::info;
+use tracing::{error, info};
 use crate::python::bootstrap_puff_globals;
+use crate::python::greenlet::GreenletDispatcher;
 use crate::python::wsgi::handler::WsgiHandler;
 use crate::types::Text;
 
@@ -65,6 +66,7 @@ impl RunnableCommand for WSGIServerCommand {
         let this_self = self.clone();
         let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
         bootstrap_puff_globals();
+        let greenlet = GreenletDispatcher::new(dispatcher.clone())?;
 
         info!("Creating to start server on {:?}", addr);
         let module_str = self.module.clone().into_string();
@@ -77,10 +79,30 @@ impl RunnableCommand for WSGIServerCommand {
             let mut ctx = create_server_context(
                 wsgi_app,
                 WSGIConstructor{addr, dispatcher: dispatcher.clone(), router: this_self.router},
-                dispatcher
+                dispatcher,
+                Some(greenlet)
             );
-            let result = ctx.start()?.await;
-            result
+            let shutdown = tokio::signal::ctrl_c();
+            // let result = ctx.start()?.await;
+            tokio::select! {
+                res = ctx.start()? => {
+                    // If an error is received here, accepting connections from the TCP
+                    // listener failed multiple times and the server is giving up and
+                    // shutting down.
+                    //
+                    // Errors encountered when handling individual connections do not
+                    // bubble up to this point.
+                    if let Err(err) = res {
+                        error!(cause = %err, "failed to start server");
+                    }
+                }
+                _ = shutdown => {
+                    // The shutdown signal has been received.
+                    info!("shutting down");
+                }
+            }
+
+            Ok(())
         };
         Ok(Runnable::new(fut))
     }

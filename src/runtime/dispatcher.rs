@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use pyo3::{Py, PyAny};
 use tokio::runtime::{Handle, Runtime};
-use tokio::sync::oneshot;
+use tokio::sync::{broadcast, oneshot};
 use tokio::task::LocalSet;
 use tracing::info;
 use crate::databases::redis::RedisClient;
@@ -25,6 +25,7 @@ use crate::databases::redis::RedisClient;
 use crate::errors::Error;
 use crate::runtime::runner::LocalSpawner;
 use crate::runtime::{run_with_config_on_local, RuntimeConfig, Strategy};
+use crate::runtime::shutdown::Shutdown;
 use crate::types::Puff;
 
 /// Simple statistics about each worker.
@@ -44,8 +45,10 @@ pub struct RuntimeDispatcher(Arc<Dispatcher>);
 impl RuntimeDispatcher {
     /// Creates an empty RuntimeDispatcher with no active threads for testing.
     pub fn empty(handle: Handle) -> RuntimeDispatcher {
+        let (notify_shutdown, _) = broadcast::channel(1);
         Self(Arc::new(Dispatcher {
             handle,
+            notify_shutdown,
             config: RuntimeConfig::default(),
             spawners: Vec::new(),
             strategy: Strategy::Random,
@@ -67,9 +70,11 @@ impl RuntimeDispatcher {
         let size = config.coroutine_threads();
         let mut spawners = Vec::with_capacity(size);
         let mut waiting = Vec::with_capacity(size);
+        let (notify_shutdown, _) = broadcast::channel(1);
+
         for _ in 0..size {
             let (send, rec) = oneshot::channel();
-            spawners.push(LocalSpawner::new(rec));
+            spawners.push(LocalSpawner::new(rec, Shutdown::new(notify_shutdown.subscribe())));
             waiting.push(send);
         }
 
@@ -80,6 +85,7 @@ impl RuntimeDispatcher {
             strategy,
             spawners,
             redis,
+            notify_shutdown,
             context_vars: Arc::new(Mutex::new(HashMap::new())),
             next: Arc::new(AtomicUsize::new(0)),
         };
@@ -186,6 +192,7 @@ struct Dispatcher {
     config: RuntimeConfig,
     redis: Option<RedisClient>,
     next: Arc<AtomicUsize>,
+    notify_shutdown: broadcast::Sender<()>,
     context_vars: Arc<Mutex<HashMap<String, Py<PyAny>>>>
 }
 
@@ -198,6 +205,7 @@ impl Dispatcher {
             config: self.config.clone(),
             redis: self.redis.clone(),
             next: self.next.clone(),
+            notify_shutdown: self.notify_shutdown.clone(),
             context_vars: Arc::new(Mutex::new(HashMap::new()))
         }
     }

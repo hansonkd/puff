@@ -130,7 +130,7 @@ impl<T: Into<AxumBytes>> From<T> for Bytes {
 }
 
 impl Deref for Bytes {
-    type Target = AxumBytes;
+    type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
         &self.0
