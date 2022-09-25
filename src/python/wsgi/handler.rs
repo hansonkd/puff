@@ -32,6 +32,7 @@ use futures_util::TryFutureExt;
 use hyper::body::{Buf, SizeHint};
 use tokio::sync::{mpsc::{self, UnboundedReceiver}, Mutex, oneshot};
 use tracing::{error, info};
+use crate::python::greenlet::GreenletDispatcher;
 use crate::python::wsgi;
 use crate::runtime::dispatcher::RuntimeDispatcher;
 use crate::runtime::yield_to_future;
@@ -42,12 +43,17 @@ const MAX_LIST_BODY_INLINE_CONCAT: u64 = 1024 * 4;
 #[derive(Clone)]
 pub struct WsgiHandler {
     app: PyObject,
-    dispatcher: RuntimeDispatcher
+    dispatcher: RuntimeDispatcher,
+    greenlet: Option<GreenletDispatcher>
 }
 
 impl WsgiHandler {
-    pub fn new(app: PyObject, dispatcher: RuntimeDispatcher) -> WsgiHandler {
-        WsgiHandler { app, dispatcher }
+    pub fn new(app: PyObject, dispatcher: RuntimeDispatcher, greenlet: GreenletDispatcher) -> WsgiHandler {
+        WsgiHandler { app, dispatcher, greenlet: Some(greenlet) }
+    }
+
+    pub fn blocking(app: PyObject, dispatcher: RuntimeDispatcher) -> WsgiHandler {
+        WsgiHandler { app, dispatcher, greenlet: None }
     }
 }
 
@@ -319,7 +325,12 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
         };
 
         let real_fut = async move {
-            let ret = self.dispatcher.dispatch_blocking(|| Ok(body_fut())).await;
+            let ret =
+                if self.blocking {
+                    self.dispatcher.dispatch_blocking(|| Ok(body_fut())).await
+                } else {
+                    self.dispatcher.dispatch(|| Ok(body_fut())).await
+                };
             match ret {
                 Ok(r) => {
                     r

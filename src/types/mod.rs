@@ -48,6 +48,8 @@ pub use bytes_builder::BytesBuilder;
 use chrono::{Date, DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::ops::Deref;
+use axum::response::{IntoResponse, Response};
+use bb8_redis::redis::{ErrorKind, FromRedisValue, RedisError, RedisResult, Value};
 
 pub use map::Map;
 pub use map_builder::MapBuilder;
@@ -77,6 +79,27 @@ impl Serialize for Bytes {
         S: Serializer,
     {
         serde_bytes::Bytes::new(&self.0).serialize(serializer)
+    }
+}
+
+impl FromRedisValue for Bytes {
+    fn from_redis_value(v: &Value) -> RedisResult<Self> {
+        match v {
+            Value::Data(v) => Ok(Bytes::copy_from_slice(v.as_slice())),
+            Value::Okay => Ok("OK".into()),
+            Value::Status(ref val) => Ok(val.to_string().into()),
+            val => Err(RedisError::from((
+                ErrorKind::TypeError,
+                "Response was of incompatible type",
+                format!("Response type not bytes compatible. (response was {:?})", val),
+            ))),
+        }
+    }
+}
+
+impl IntoResponse for Bytes {
+    fn into_response(self) -> Response {
+        self.0.into_response()
     }
 }
 

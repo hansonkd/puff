@@ -72,8 +72,6 @@
 //! Run with `cargo run server` or use `cargo run help` to show all CLI options of your Puff program.
 //!
 //!
-extern crate core;
-
 pub mod channels;
 pub mod errors;
 pub mod program;

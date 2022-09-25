@@ -37,12 +37,8 @@ where
 }
 
 pub fn with_dispatcher<F: FnOnce(RuntimeDispatcher) -> R, R>(f: F) -> R {
-    DISPATCHER.with(|d| {
-        match d.borrow().clone() {
-            Some(d) => f(d),
-            None => panic!("Dispatcher can only be used from a puff context.")
-        }
-    })
+    let dispatcher = DISPATCHER.with(|d| d.borrow().clone() ).expect("Dispatcher can only be used from a puff context.");
+    f(dispatcher)
 }
 
 /// Suspend execution of the current coroutine and run the future. This function MUST be called from
@@ -69,7 +65,7 @@ where
     R: 'static + Send,
 {
     Ok(
-        tokio::task::spawn_local(PuffWormhole::new(s, dispatcher, move |mut yielder| {
+        tokio::task::spawn_local(PuffWormhole::new(s, dispatcher, move || {
             // let r = DISPATCHER.sync_scope(dispatcher, || YIELDER.sync_scope(inner, f));
             let r = f();
             // If we can't send, the future wasn't awaited

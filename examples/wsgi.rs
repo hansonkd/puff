@@ -1,16 +1,29 @@
 use puff::program::commands::wsgi::WSGIServerCommand;
 use puff::program::Program;
 use puff::types::text::{Text, ToText};
-use puff::errors::Result;
+use puff::errors::{PuffResult, Result};
 use puff::web::server::Router;
 use puff::web::client::{Client, PuffClientResponse, PuffRequestBuilder};
 use std::time::Duration;
+use bb8_redis::redis::Cmd;
 use pyo3::{PyObject, Python};
+use puff::databases::redis::with_redis;
 use puff::runtime::RuntimeConfig;
+use puff::types::{Bytes, BytesBuilder};
 
 
 fn main() {
-    let app = Router::new().get("/rust/", || Ok("Cool"));
+    let app = Router::new().get("/rust/", || {
+        let r = with_redis(|r| {
+            let mut builder = BytesBuilder::new();
+            for _ in 0..10 {
+                let res = r.query::<Bytes>(Cmd::get("blam"))?;
+                builder.put(res)
+            }
+            PuffResult::Ok(builder.into_bytes())
+        })?;
+        Ok(r)
+    });
     let rc = RuntimeConfig::default().set_redis(true);
 
     Program::new("my_first_app")
