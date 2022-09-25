@@ -50,6 +50,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::ops::Deref;
 use axum::response::{IntoResponse, Response};
 use bb8_redis::redis::{ErrorKind, FromRedisValue, RedisError, RedisResult, Value};
+use pyo3::{Py, PyObject};
+use pyo3::{IntoPy, Python, ToPyObject};
+use pyo3::types::PyBytes;
 
 pub use map::Map;
 pub use map_builder::MapBuilder;
@@ -128,6 +131,19 @@ impl<T: Into<AxumBytes>> From<T> for Bytes {
         Bytes(v.into())
     }
 }
+
+impl IntoPy<Py<PyBytes>> for Bytes {
+    fn into_py(self, py: Python<'_>) -> Py<PyBytes> {
+        PyBytes::new(py, &self).into_py(py)
+    }
+}
+
+impl ToPyObject for Bytes {
+    fn to_object(&self, py: Python<'_>) -> PyObject {
+        self.clone().into_py(py).to_object(py)
+    }
+}
+
 
 impl Deref for Bytes {
     type Target = [u8];

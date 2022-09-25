@@ -265,27 +265,25 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
             match args_to_send {
                 Ok(Err(res)) => res.into_response(),
                 Ok(Ok(args)) => {
-                    let iterator =
+                    let calculate_value = async {
                         match self.greenlet {
                             Some(g) => {
                                 let r = {
-                                    let res = Python::with_gil(|py| g.dispatch_py(py, app, args.into_py(py), PyDict::new(py).into_py(py)));
-                                    let rec = match res {
-                                        Ok(r) => r,
-                                        Err(e) => return WsgiError::PyErr(e).into_response()
-                                    };
-                                    rec.await.map_err(|e| PyException::new_err("Could not await greenlet result in wsgi."))
+                                    let rec = Python::with_gil(|py| g.dispatch_py(py, app, args.into_py(py), PyDict::new(py).into_py(py)))?;
+                                    rec.await.map_err(|e| PyException::new_err("Could not await greenlet result in wsgi."))??
                                 };
-                                match r {
-                                    Ok(r) => r,
-                                    Err(e) => return WsgiError::PyErr(e).into_response()
-                                }
+                                Ok(r)
                             },
                             None => {
                                 panic!("Blocking not implemented.")
                             }
-                        };
-
+                        }
+                    };
+                    let iterator_res = calculate_value.await;
+                    let iterator = match iterator_res {
+                        Ok(r) => r,
+                        Err(e) => return WsgiError::PyErr(e).into_response()
+                    };
                     let mut response = Response::builder();
                     let responded = if let Ok(r) = http_sender_rx.await {
                         r

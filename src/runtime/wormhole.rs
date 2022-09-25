@@ -47,8 +47,7 @@ where
 {
     generator: Option<Cell<ScopedCoroutine<'a, Waker, Option<()>, (), Stack>>>,
     ref_yielder: Rc<Mutex<*mut AsyncYielder<'static>>>,
-    dispatcher: RuntimeDispatcher,
-    context: PythonContext,
+    dispatcher: RuntimeDispatcher
 }
 
 impl<'a, Stack> AsyncWormhole<'a, Stack>
@@ -65,7 +64,6 @@ where
         let ref_yielder = Rc::new(Mutex::new(std::ptr::null_mut()));
         let mut coroutine_yielder = ref_yielder.clone();
         let coroutine_dispatcher = dispatcher.clone();
-        let context = PythonContext::copy_context();
         let generator = ScopedCoroutine::with_stack(stack, move |yielder, waker| {
             let async_yielder = AsyncYielder::new(yielder, waker, coroutine_dispatcher.puff());
             // coroutine_yielder.replace(async_yielder.as_pointer());
@@ -84,7 +82,6 @@ where
         Ok(Self {
             ref_yielder,
             dispatcher,
-            context,
             generator: Some(Cell::new(generator)),
         })
     }

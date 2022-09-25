@@ -25,10 +25,9 @@ class Task:
 @dataclasses.dataclass(frozen=True, slots=True)
 class Result:
     greenlet: Any
-    result: Any
 
     def process(self):
-        self.greenlet.switch(self.result)
+        self.greenlet.switch()
 
 
 class MainThread(Thread):
@@ -56,15 +55,20 @@ class MainThread(Thread):
         task = Task(args=args, kwargs=kwargs, ret_func=ret_func, task_function=task_function_wrapped, context=context)
         self.event_queue.put(task)
 
-    def return_result(self, greenlet, result_value):
-        result_event = Result(greenlet=greenlet, result=result_value)
+    def return_result(self, greenlet):
+        result_event = Result(greenlet=greenlet)
         self.event_queue.put(result_event)
 
     def generate_spawner(self, func):
         def override_spawner(args, kwargs, ret_func, context):
             parent_thread.set(self)
             greenlet_context.set(context)
-            ret_func(func(*args, **kwargs))
+            try:
+                val = func(*args, **kwargs)
+                ret_func(val, None)
+            except Exception as e:
+                ret_func(None, e)
+
         return override_spawner
 
     def loop_commands(self):
@@ -93,21 +97,98 @@ def start_event_loop():
     return loop_thread
 
 
-def wrap_async(f):
-    sub_job = greenlet.getcurrent()
+@dataclasses.dataclass
+class Greenlet:
+    thread: Any
+    result: Any = None
+    exception: Any = None
+    finished: bool = False
+
+    def join(self):
+        while not self.finished:
+            self.thread.event_loop_processor.switch()
+
+        if self.exception:
+            raise self.exception
+        else:
+            return self.result
+
+    def set_result(self, result, exception):
+        self.result = result
+        self.exception = exception
+        self.finished = True
+
+
+def wrap_async(f, join=True):
+    this_greenlet = greenlet.getcurrent()
     thread = parent_thread.get()
     context = greenlet_context.get()
 
+    greenlet_obj = Greenlet(thread=thread)
+
     def return_result(r, e):
-        thread.return_result(sub_job, (r, e))
+        greenlet_obj.set_result(r, e)
+        thread.return_result(this_greenlet)
 
     f(context, return_result)
+    if join:
+        return greenlet_obj.join()
+    else:
+        return greenlet_obj
+
+
+def spawn(f, *args, **kwargs):
+
+    thread = parent_thread.get()
+    context = greenlet_context.get()
+    this_greenlet = greenlet.getcurrent()
+
+    greenlet_obj = Greenlet(thread=thread)
+
+    def return_result(val, e):
+        greenlet_obj.set_result(val, e)
+        this_greenlet.switch()
+
+    def run_and_catch():
+        try:
+            res = f(*args, **kwargs)
+            return res, None
+        except Exception as e:
+            return None, e
+
+    thread.spawn(run_and_catch, context, [], {}, return_result)
 
     result, exception = thread.event_loop_processor.switch()
     if exception:
         raise exception
     else:
         return result
+
+
+def join_all(greenlets):
+    if not greenlets:
+        return []
+    thread = greenlets[0].thread
+    while not all(g.finished for g in greenlets):
+        thread.event_loop_processor.switch()
+    return [g.result for g in greenlets]
+
+
+def join_iter(greenlets):
+    if not greenlets:
+        return None
+
+    thread = greenlets[0].thread
+    left = set(greenlets)
+
+    while left:
+        thread.event_loop_processor.switch()
+        remove = set()
+        for x in left:
+            if x.finished:
+                yield x.result
+                remove.add(x)
+        left = left - remove
 
 
 def get_redis():

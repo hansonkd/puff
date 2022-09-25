@@ -94,13 +94,11 @@ pub fn error_on_minusone(py: Python<'_>, result: c_int) -> PyResult<()> {
 
 impl PythonContext {
     pub(crate) fn copy_context() -> Self {
-        println!("Getting pycontext");
         Python::with_gil(|py| {
             let ctx = unsafe{
                 let r = pyo3::ffi::PyContext_New();
                 py.from_owned_ptr::<PyAny>(r)
             };
-            println!("Got pycontext");
             PythonContext(ctx.into_py(py))
         })
     }

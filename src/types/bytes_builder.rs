@@ -63,6 +63,19 @@ impl BytesBuilder {
         self.0.extend_from_slice(slice.into().as_ref())
     }
 
+    /// Puts a slice into the builder.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use puff::types::BytesBuilder;
+    /// let mut builder = BytesBuilder::new();
+    /// builder.put_splice("Hi".as_bytes());
+    /// ```
+    pub fn put_slice(&mut self, slice: &[u8]) {
+        self.0.extend_from_slice(slice)
+    }
+
     /// Converts `BytesBuilder` into `Bytes`.
     pub fn into_bytes(self) -> Bytes {
         Bytes::from(self.0)
