@@ -12,7 +12,6 @@
 //!     * Std Compatible
 //! * Python Compatible
 //!     * WSGI Compatible
-//!     * ASGI Compatible
 //!     * Django Compatible
 //!     * Flask Compatible
 //! * Easy-To-Use Interface
