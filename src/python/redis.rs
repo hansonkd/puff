@@ -47,18 +47,6 @@ fn extract_redis_to_python(py: Python, val: Value) -> PyObject {
     }
 }
 
-async fn handle_it<F: Future<Output = PyResult<PyObject>>>(return_fun: PyObject, f: F) {
-    let res = f.await;
-    Python::with_gil(|py| match res {
-        Ok(r) => return_fun
-            .call1(py, (r, py.None()))
-            .expect("Could not return value"),
-        Err(e) => return_fun
-            .call1(py, (py.None(), e))
-            .expect("Could not return exception"),
-    });
-}
-
 impl PythonRedis {
     fn run_command<T: ToPyObject + FromRedisValue + 'static>(
         &self,

@@ -2,14 +2,13 @@
 use crate::context::PuffContext;
 use crate::errors::Result;
 use crate::program::{Runnable, RunnableCommand};
-use crate::python::wsgi::{create_server_context, AsyncFn};
+use crate::python::wsgi::{create_server_context, WsgiServerSpawner};
 use crate::web::server::Router;
 use clap::{ArgMatches, Command};
 
 use crate::python::greenlet::GreenletDispatcher;
 use crate::python::wsgi::handler::WsgiHandler;
 use crate::types::Text;
-use axum::handler::HandlerWithoutStateExt;
 use futures_util::future::{LocalBoxFuture};
 use futures_util::{FutureExt};
 
@@ -25,9 +24,9 @@ struct WSGIConstructor {
     dispatcher: PuffContext,
 }
 
-impl AsyncFn for WSGIConstructor {
-    fn call(self, handler: WsgiHandler, rx: Receiver<()>) -> LocalBoxFuture<'static, ()> {
-        start(self.addr, self.router, self.dispatcher, rx, handler).boxed_local()
+impl WsgiServerSpawner for WSGIConstructor {
+    fn call(self, handler: WsgiHandler) -> LocalBoxFuture<'static, ()> {
+        start(self.addr, self.router, self.dispatcher, handler).boxed_local()
     }
 }
 
@@ -102,7 +101,6 @@ impl<R: IntoPy<Py<PyAny>> + Clone + 'static> RunnableCommand for WSGIServerComma
                     dispatcher: context.clone(),
                     router: this_self.router.clone(),
                 },
-                context,
                 Some(greenlet),
             );
             let shutdown = tokio::signal::ctrl_c();
@@ -135,7 +133,6 @@ async fn start(
     addr: SocketAddr,
     router: Router,
     dispatcher: PuffContext,
-    _shutdown_signal: oneshot::Receiver<()>,
     wsgi: WsgiHandler,
 ) {
     let app = router.into_axum_router(dispatcher).fallback(wsgi);

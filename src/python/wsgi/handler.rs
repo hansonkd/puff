@@ -8,7 +8,6 @@ use axum::headers::{HeaderMap, HeaderName};
 
 use axum::http::{HeaderValue, Request, StatusCode, Version};
 use axum::response::{IntoResponse, Response};
-use futures_util::TryFutureExt;
 use hyper::body::{SizeHint};
 use pyo3::exceptions::{PyException};
 use pyo3::prelude::*;
@@ -31,27 +30,23 @@ const MAX_LIST_BODY_INLINE_CONCAT: u64 = 1024 * 4;
 #[derive(Clone)]
 pub struct WsgiHandler {
     app: PyObject,
-    dispatcher: PuffContext,
     greenlet: Option<GreenletDispatcher>,
 }
 
 impl WsgiHandler {
     pub fn new(
         app: PyObject,
-        dispatcher: PuffContext,
         greenlet: Option<GreenletDispatcher>,
     ) -> WsgiHandler {
         WsgiHandler {
             app,
-            dispatcher,
             greenlet,
         }
     }
 
-    pub fn blocking(app: PyObject, dispatcher: PuffContext) -> WsgiHandler {
+    pub fn blocking(app: PyObject) -> WsgiHandler {
         WsgiHandler {
             app,
-            dispatcher,
             greenlet: None,
         }
     }
@@ -62,7 +57,6 @@ enum WsgiError {
     PyErr(PyErr),
     InvalidHttpVersion,
     ExpectedResponseStart,
-    MissingResponse,
     ExpectedResponseBody,
     FailedToCreateResponse,
     InvalidHeader,
@@ -94,7 +88,6 @@ impl IntoResponse for WsgiError {
             WsgiError::InvalidUtf8InPath => (StatusCode::BAD_REQUEST, "Invalid Utf8 in path"),
             WsgiError::PyErr(_)
             | WsgiError::ExpectedResponseStart
-            | WsgiError::MissingResponse
             | WsgiError::ExpectedResponseBody
             | WsgiError::FailedToCreateResponse
             | WsgiError::InvalidHeader => {
@@ -112,12 +105,6 @@ impl Drop for SetTrueOnDrop {
     fn drop(&mut self) {
         self.0.store(true, Ordering::SeqCst);
     }
-}
-
-#[pyclass]
-struct HttpReceiver {
-    disconnected: Arc<AtomicBool>,
-    rx: Arc<Mutex<UnboundedReceiver<Option<Body>>>>,
 }
 
 pub struct HttpResponseBody(PyObject, Option<u64>);
@@ -182,17 +169,13 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                 body_bytes
             } else {
                 error!("Could not extract request body.");
-                return Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Body::empty())
-                    .unwrap()
-                    .into_response();
+                return WsgiError::ExpectedResponseBody.into_response()
             };
             let mut content_length: Option<u64> = None;
 
             // receiver_tx.send(Some(body)).unwrap();
             let _disconnected = SetTrueOnDrop(disconnected);
-            let args_to_send: Result<Result<(PyObject, PyObject), Response<Body>>, Error> =
+            let args_to_send: Result<Result<(PyObject, PyObject), Response>, Error> =
                 Python::with_gil(|py| {
                     let environ = PyDict::new(py);
                     environ.set_item("wsgi.version", (1, 0))?;
@@ -208,10 +191,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                         Version::HTTP_2 => "HTTP/2",
                         _ => {
                             error!("Invalid HTTP version");
-                            return Ok(Err(Response::builder()
-                                .status(StatusCode::BAD_REQUEST)
-                                .body(Body::empty())
-                                .unwrap()));
+                            return Ok(Err(WsgiError::InvalidHttpVersion.into_response()));
                         }
                     };
 
@@ -228,10 +208,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                             r
                         } else {
                             error!("Invalid path encoding");
-                            return Ok(Err(Response::builder()
-                                .status(StatusCode::BAD_REQUEST)
-                                .body(Body::empty()))
-                            .unwrap());
+                            return Ok(Err(WsgiError::InvalidUtf8InPath.into_response()))
                         };
 
                         environ.set_item("PATH_INFO", path)?;
@@ -314,8 +291,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                         error!("Did not receive start_response");
                         return WsgiError::ExpectedResponseStart.into_response();
                     };
-
-                    if let (status_code_str, pyheaders) = responded {
+                    let (status_code_str, pyheaders) = responded;
                         let status = status_code_str
                             .split(" ")
                             .next()
@@ -339,7 +315,6 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                             headers.append(name, value);
                         }
                         response = response.status(status_code);
-                    }
                     Python::with_gil(|py| {
                         let iter_py = iterator.as_ref(py);
                         if content_length.unwrap_or(u64::MAX) < MAX_LIST_BODY_INLINE_CONCAT {

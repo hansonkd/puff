@@ -109,9 +109,6 @@ impl PuffContext {
         arc_dispatcher
     }
 
-    // #[inline]
-    // pub(crate) fn clone_for_new_task(&self) -> Self { RuntimeDispatcher(Arc::new(self.0.clone_for_new_task())) }
-
     /// A Handle into the multi-threaded async runtime
     pub fn handle(&self) -> Handle {
         self.handle.clone()

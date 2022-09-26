@@ -8,7 +8,6 @@ use clap::{ArgMatches, Command};
 
 use crate::python::asgi::handler::AsgiHandler;
 use crate::types::Text;
-use axum::handler::HandlerWithoutStateExt;
 use futures_util::future::{LocalBoxFuture};
 use futures_util::{FutureExt};
 

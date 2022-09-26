@@ -50,70 +50,41 @@ impl Sender {
     }
 }
 
-pub trait AsyncFn {
-    fn call(self, handler: WsgiHandler, rx: oneshot::Receiver<()>) -> LocalBoxFuture<'static, ()>;
+pub trait WsgiServerSpawner {
+    fn call(self, handler: WsgiHandler) -> LocalBoxFuture<'static, ()>;
 }
 
-impl<T, F> AsyncFn for T
+impl<T, F> WsgiServerSpawner for T
 where
-    T: FnOnce(WsgiHandler, oneshot::Receiver<()>) -> F,
+    T: FnOnce(WsgiHandler) -> F,
     F: Future<Output = ()> + 'static,
 {
-    fn call(self, handler: WsgiHandler, rx: oneshot::Receiver<()>) -> LocalBoxFuture<'static, ()> {
-        Box::pin(self(handler, rx))
+    fn call(self, handler: WsgiHandler) -> LocalBoxFuture<'static, ()> {
+        Box::pin(self(handler))
     }
 }
 
-pub struct ServerContext<T: AsyncFn> {
-    trigger_shutdown_tx: Option<oneshot::Sender<()>>,
-    trigger_shutdown_rx: Option<oneshot::Receiver<()>>,
-    wait_shutdown_tx: Option<oneshot::Sender<()>>,
-    wait_shutdown_rx: Option<oneshot::Receiver<()>>,
+pub struct ServerContext<T: WsgiServerSpawner> {
     app: Option<PyObject>,
     server: Option<T>,
-    dispatcher: PuffContext,
     greenlet: Option<GreenletDispatcher>,
 }
 
-impl<T: AsyncFn> ServerContext<T> {
-    fn shutdown<'a>(&'a mut self, py: Python<'a>) -> PyResult<&'a PyAny> {
-        if let (Some(tx), Some(rx)) = (
-            self.trigger_shutdown_tx.take(),
-            self.wait_shutdown_rx.take(),
-        ) {
-            if let Err(_e) = tx.send(()) {
-                tracing::warn!("failed to send shutdown notification: {:?}", _e);
-            }
-            pyo3_asyncio::tokio::future_into_py(py, async move {
-                if let Err(_e) = rx.await {
-                    tracing::warn!("failed waiting for shutdown: {:?}", _e);
-                }
-                Ok::<_, PyErr>(Python::with_gil(|py| py.None()))
-            })
-        } else {
-            pyo3_asyncio::tokio::future_into_py(py, async move {
-                Ok::<_, PyErr>(Python::with_gil(|py| py.None()))
-            })
-        }
-    }
-
+impl<T: WsgiServerSpawner> ServerContext<T> {
     pub fn start(&mut self) -> Result<LocalBoxFuture<Result<()>>> {
         match (
-            self.trigger_shutdown_rx.take(),
             self.app.take(),
             self.server.take(),
-            self.wait_shutdown_tx.take(),
         ) {
-            (Some(rx), Some(app), Some(server), Some(_tx)) => {
+            (Some(app), Some(server)) => {
                 let fut = async move {
                     // create wsgi service
                     let wsgi_handler = WsgiHandler::new(
                         app.clone(),
-                        self.dispatcher.clone(),
                         self.greenlet.clone(),
                     );
 
-                    server.call(wsgi_handler, rx).await;
+                    server.call(wsgi_handler).await;
 
                     Ok(())
                 };
@@ -125,22 +96,14 @@ impl<T: AsyncFn> ServerContext<T> {
     }
 }
 
-pub fn create_server_context<T: AsyncFn>(
+pub fn create_server_context<T: WsgiServerSpawner>(
     app: PyObject,
     server: T,
-    dispatcher: PuffContext,
     greenlet: Option<GreenletDispatcher>,
 ) -> ServerContext<T> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let (wait_shutdown_tx, wait_shutdown_rx) = tokio::sync::oneshot::channel();
     ServerContext {
-        trigger_shutdown_tx: Some(tx),
-        trigger_shutdown_rx: Some(rx),
-        wait_shutdown_tx: Some(wait_shutdown_tx),
-        wait_shutdown_rx: Some(wait_shutdown_rx),
         app: Some(app),
         server: Some(server),
-        greenlet,
-        dispatcher,
+        greenlet
     }
 }

@@ -12,7 +12,6 @@
 //! point of the execution. Once you pass it a closure inside [AsyncWormhole::new](struct.AsyncWormhole.html#method.new)
 //! you will get back a future that you can `.await` on. The passed in closure is going to be executed on a
 //! new stack.
-use std::borrow::BorrowMut;
 use std::cell::Cell;
 use std::future::Future;
 use std::io::Error;
@@ -20,11 +19,7 @@ use std::io::Error;
 use std::pin::Pin;
 
 use std::task::{Context, Poll, Waker};
-
 use corosensei::{stack, CoroutineResult, ScopedCoroutine, Yielder};
-
-
-
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Mutex;

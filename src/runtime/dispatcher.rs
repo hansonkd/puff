@@ -8,7 +8,6 @@
 use crate::context::PuffContext;
 
 use futures::future::BoxFuture;
-use futures_util::FutureExt;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
 
@@ -47,16 +46,6 @@ pub struct Dispatcher {
 }
 
 impl Dispatcher {
-    fn clone_for_new_task(&self) -> Self {
-        Dispatcher {
-            spawners: self.spawners.clone(),
-            strategy: self.strategy.clone(),
-            config: self.config.clone(),
-            next: self.next.clone(),
-            notify_shutdown: self.notify_shutdown.clone(),
-        }
-    }
-
     pub fn empty(notify_shutdown: broadcast::Sender<()>) -> Self {
         Dispatcher {
             notify_shutdown,
