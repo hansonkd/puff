@@ -1,22 +1,22 @@
 pub mod handler;
 
 use anyhow::{anyhow, Result};
-use axum::handler::HandlerWithoutStateExt;
+
 use std::future::Future;
-use std::net::SocketAddr;
-use std::sync::Arc;
+
+
 
 use crate::context::PuffContext;
 use crate::python::greenlet::GreenletDispatcher;
 use crate::python::wsgi::handler::WsgiHandler;
-use crate::web::server::Router;
-use futures::future::BoxFuture;
+
+
 use futures_util::future::LocalBoxFuture;
 use futures_util::FutureExt;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyString};
-use tokio::sync::{mpsc, oneshot, Mutex};
+
+use tokio::sync::{oneshot};
 
 #[pyclass]
 pub struct Sender {
@@ -104,7 +104,7 @@ impl<T: AsyncFn> ServerContext<T> {
             self.server.take(),
             self.wait_shutdown_tx.take(),
         ) {
-            (Some(rx), Some(app), Some(server), Some(tx)) => {
+            (Some(rx), Some(app), Some(server), Some(_tx)) => {
                 let fut = async move {
                     // create wsgi service
                     let wsgi_handler = WsgiHandler::new(

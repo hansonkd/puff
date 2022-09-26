@@ -1,10 +1,10 @@
 use puff::errors::Result;
 use puff::program::commands::http::ServerCommand;
 use puff::program::Program;
-use puff::types::text::{Text, ToText};
+use puff::types::text::{Text};
 use puff::web::client::{Client, PuffClientResponse, PuffRequestBuilder};
 use puff::web::server::Router;
-use std::time::Duration;
+
 
 fn main() {
     // build our application with a route

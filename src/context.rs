@@ -1,16 +1,16 @@
 use crate::databases::redis::RedisClient;
 use crate::errors::Error;
-use crate::runtime::dispatcher::{Dispatcher, Stats};
-use crate::runtime::runner::LocalSpawner;
-use crate::runtime::shutdown::Shutdown;
-use crate::runtime::{run_with_config_on_local, RuntimeConfig, Strategy};
+use crate::runtime::dispatcher::{Dispatcher};
+
+
+use crate::runtime::{run_with_config_on_local, RuntimeConfig};
 use crate::types::Puff;
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
-use pyo3::{Py, PyAny};
+
 use std::cell::RefCell;
-use std::collections::HashMap;
-use std::sync::atomic::AtomicUsize;
+
+
 use std::sync::{Arc, Mutex};
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::{broadcast, oneshot};
@@ -39,11 +39,11 @@ thread_local! {
 }
 
 pub fn set_puff_context(context: PuffContext) {
-    PUFF_CONTEXT.with(|mut d| *d.borrow_mut() = Some(context.puff()));
+    PUFF_CONTEXT.with(|d| *d.borrow_mut() = Some(context.puff()));
 }
 
 pub fn set_puff_context_waiting(context: Arc<Mutex<Option<PuffContext>>>) {
-    PUFF_CONTEXT_WAITING.with(|mut d| *d.borrow_mut() = Some(context.clone()));
+    PUFF_CONTEXT_WAITING.with(|d| *d.borrow_mut() = Some(context.clone()));
 }
 
 pub fn with_puff_context<F: FnOnce(PuffContext) -> R, R>(f: F) -> R {
@@ -73,7 +73,7 @@ pub fn with_puff_context<F: FnOnce(PuffContext) -> R, R>(f: F) -> R {
 }
 
 pub fn with_context(context: PuffContext) {
-    PUFF_CONTEXT.with(|mut d| *d.borrow_mut() = Some(context.puff()));
+    PUFF_CONTEXT.with(|d| *d.borrow_mut() = Some(context.puff()));
 }
 
 impl PuffContext {

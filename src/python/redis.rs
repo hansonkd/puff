@@ -1,11 +1,11 @@
 use crate::databases::redis::{with_redis, Cmd, RedisClient};
-use crate::errors::PuffResult;
+
 use crate::python::greenlet::{greenlet_async, GreenletContext};
 use crate::python::into_py_result;
-use crate::types::{Bytes, BytesBuilder};
+use crate::types::{Bytes};
 use bb8_redis::redis::{FromRedisValue, Value};
-use futures_util::future::join_all;
-use pyo3::exceptions::{PyException, PyValueError};
+
+use pyo3::exceptions::{PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList};
 use std::future::Future;

@@ -2,28 +2,28 @@ use crate::context::PuffContext;
 use crate::python::greenlet::GreenletDispatcher;
 use crate::python::wsgi;
 use anyhow::{anyhow, Error};
-use axum::body::{boxed, Body, BoxBody, Bytes, Full, HttpBody};
+use axum::body::{Body, BoxBody, Bytes, Full, HttpBody};
 use axum::handler::Handler;
 use axum::headers::{HeaderMap, HeaderName};
-use axum::http::header::ToStrError;
+
 use axum::http::{HeaderValue, Request, StatusCode, Version};
 use axum::response::{IntoResponse, Response};
 use futures_util::TryFutureExt;
-use hyper::body::{Buf, SizeHint};
-use pyo3::exceptions::{PyException, PyRuntimeError};
+use hyper::body::{SizeHint};
+use pyo3::exceptions::{PyException};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList, PyLong, PyMapping, PyString};
+use pyo3::types::{PyBytes, PyDict, PyString};
 use pyo3::PyDowncastError;
 use std::future::Future;
-use std::io::Stderr;
+
 use std::pin::Pin;
 use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::sync::mpsc::{self, UnboundedReceiver};
-use tokio::sync::{oneshot, Mutex};
-use tracing::{error, info};
+use tokio::sync::mpsc::{UnboundedReceiver};
+use tokio::sync::{Mutex};
+use tracing::{error};
 use wsgi::Sender;
 
 const MAX_LIST_BODY_INLINE_CONCAT: u64 = 1024 * 4;
@@ -129,7 +129,7 @@ impl HttpBody for HttpResponseBody {
 
     fn poll_data(
         self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
+        _cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Bytes, Self::Error>>> {
         let b = Python::with_gil(|py| {
             let obj = &self.0;
@@ -154,7 +154,7 @@ impl HttpBody for HttpResponseBody {
 
     fn poll_trailers(
         self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
+        _cx: &mut Context<'_>,
     ) -> Poll<Result<Option<HeaderMap>, Self::Error>> {
         Poll::Ready(Ok(None))
     }
@@ -173,7 +173,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
 
     fn call(self, req: Request<Body>, _state: Arc<S>) -> Self::Future {
         let app = self.app.clone();
-        let (http_sender, mut http_sender_rx) = Sender::new();
+        let (http_sender, http_sender_rx) = Sender::new();
         let disconnected = Arc::new(AtomicBool::new(false));
         let (req, body): (_, Body) = req.into_parts();
 
@@ -289,7 +289,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                                             PyDict::new(py).into_py(py),
                                         )
                                     })?;
-                                    rec.await.map_err(|e| {
+                                    rec.await.map_err(|_e| {
                                         PyException::new_err(
                                             "Could not await greenlet result in wsgi.",
                                         )
@@ -362,7 +362,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                             .unwrap_or(WsgiError::FailedToCreateResponse.into_response())
                     })
                 }
-                Err(e) => {
+                Err(_e) => {
                     #[cfg(feature = "tracing")]
                     tracing::error!("Error preparing request scope: {e:?}");
                     Response::builder()

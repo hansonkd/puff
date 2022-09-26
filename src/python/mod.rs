@@ -1,10 +1,10 @@
-use crate::context::with_puff_context;
+
 use crate::errors::PuffResult;
 use crate::python::redis::RedisGlobal;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use pyo3::types::PyType;
-use pyo3::{AsPyPointer, PyResult, Python};
+
+use pyo3::{PyResult, Python};
 use std::os::raw::c_int;
 
 pub mod asgi;

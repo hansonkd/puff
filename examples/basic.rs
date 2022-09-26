@@ -22,7 +22,7 @@ fn my_command() -> Result<()> {
     let redis = RedisClient::new("redis://localhost")?;
 
     let client = Client::new();
-    let client2 = client.puff();
+    let _client2 = client.puff();
     // let task1 = Task::spawn(move || {
     //     background_task_1(client2)
     // });

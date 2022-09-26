@@ -52,7 +52,7 @@ impl LocalSpawner {
     }
 
     pub(crate) fn new(
-        contgext_lazy: oneshot::Receiver<PuffContext>,
+        context_lazy: oneshot::Receiver<PuffContext>,
         mut shutdown: Shutdown,
     ) -> Self {
         let (send, mut recv) = mpsc::unbounded_channel();
@@ -62,7 +62,7 @@ impl LocalSpawner {
         let num_tasks_completed_loop = num_tasks_completed.clone();
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
         std::thread::spawn(move || {
-            let context = rt.block_on(contgext_lazy).unwrap();
+            let context = rt.block_on(context_lazy).unwrap();
             set_puff_context(context.puff());
             let local = LocalSet::new();
             local.spawn_local(async move {

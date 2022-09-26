@@ -13,7 +13,7 @@ pub struct GreenletReturn(Option<oneshot::Sender<PyResult<PyObject>>>);
 impl GreenletReturn {
     pub fn __call__(
         &mut self,
-        py: Python,
+        _py: Python,
         value: PyObject,
         exception: Option<&PyException>,
     ) -> PyResult<()> {

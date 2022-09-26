@@ -10,10 +10,10 @@ use crate::python::greenlet::GreenletDispatcher;
 use crate::python::wsgi::handler::WsgiHandler;
 use crate::types::Text;
 use axum::handler::HandlerWithoutStateExt;
-use futures_util::future::{BoxFuture, LocalBoxFuture};
-use futures_util::{FutureExt, TryFutureExt};
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::{IntoPy, Py, PyAny, PyErr, PyObject, Python};
+use futures_util::future::{LocalBoxFuture};
+use futures_util::{FutureExt};
+
+use pyo3::{IntoPy, Py, PyAny, PyObject, Python};
 use std::net::SocketAddr;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::Receiver;
@@ -135,7 +135,7 @@ async fn start(
     addr: SocketAddr,
     router: Router,
     dispatcher: PuffContext,
-    shutdown_signal: oneshot::Receiver<()>,
+    _shutdown_signal: oneshot::Receiver<()>,
     wsgi: WsgiHandler,
 ) {
     let app = router.into_axum_router(dispatcher).fallback(wsgi);

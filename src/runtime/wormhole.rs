@@ -23,8 +23,8 @@ use std::task::{Context, Poll, Waker};
 
 use corosensei::{stack, CoroutineResult, ScopedCoroutine, Yielder};
 
-use crate::types::Puff;
-use pyo3::{Py, Python};
+
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Mutex;
@@ -58,7 +58,7 @@ where
         F: FnOnce() -> () + 'a + Send,
     {
         let ref_yielder = Rc::new(Mutex::new(std::ptr::null_mut()));
-        let mut coroutine_yielder = ref_yielder.clone();
+        let coroutine_yielder = ref_yielder.clone();
         let generator = ScopedCoroutine::with_stack(stack, move |yielder, waker| {
             let async_yielder = AsyncYielder::new(yielder, waker);
             // coroutine_yielder.replace(async_yielder.as_pointer());

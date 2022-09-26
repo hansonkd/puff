@@ -40,22 +40,22 @@
 //! Run with `cargo run my_custom_command` or use `cargo run help`
 
 use clap::{ArgMatches, Command};
-use std::borrow::BorrowMut;
 
-use crate::databases::redis::{add_redis_command_arguments, new_client_async, RedisClient};
-use futures_util::future::BoxFuture;
-use futures_util::TryFutureExt;
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::{PyErr, PyObject, Python};
+
+use crate::databases::redis::{add_redis_command_arguments, new_client_async};
+
+
+
+
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
-use tokio::runtime::{Builder, Handle, Runtime};
+use std::sync::{Arc, Mutex};
+
+use tokio::runtime::{Builder};
 use tokio::sync::broadcast;
 
-use crate::context::{set_puff_context, set_puff_context_waiting, PuffContext, PUFF_CONTEXT};
+use crate::context::{set_puff_context_waiting, PuffContext};
 use crate::errors::Result;
 use crate::python::bootstrap_puff_globals;
 use crate::runtime::dispatcher::Dispatcher;
@@ -313,7 +313,7 @@ impl Program {
                         ))?);
                     }
 
-                    let mut context =
+                    let context =
                         PuffContext::new_with_options(rt.handle().clone(), arc_dispatcher, redis);
                     // dispatcher.monitor();
 
