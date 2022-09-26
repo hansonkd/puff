@@ -41,11 +41,7 @@
 
 use clap::{ArgMatches, Command};
 
-
 use crate::databases::redis::{add_redis_command_arguments, new_client_async};
-
-
-
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -272,70 +268,40 @@ impl Program {
                     bootstrap_puff_globals();
                 }
 
-                if self.runtime_config.asyncio() {
-                    pyo3_asyncio::tokio::init(builder);
-                    // let rt = pyo3_asyncio::tokio::get_runtime();
-                    // let dispatcher =
-                    //     PuffContext::new(self.runtime_config.clone(), rt.handle().clone());
-                    // let runnable = runner.runnable_from_args(args, dispatcher.puff())?;
+                let (dispatcher, waiting) =
+                    Dispatcher::new(notify_shutdown, self.runtime_config.clone());
+                let arc_dispatcher = Arc::new(dispatcher);
+                let mutex_switcher = Arc::new(Mutex::new(None::<PuffContext>));
+                let thread_mutex = mutex_switcher.clone();
 
-                    // rt.block_on(runnable.0)?;
-                } else {
-                    // let pair = Arc::new((Mutex::new(None), Condvar::new()));
-                    // let pair2 = Arc::clone(&pair);
+                builder.on_thread_start(move || {
+                    set_puff_context_waiting(thread_mutex.clone());
+                });
 
-                    // builder.on_thread_start(move || {
-                    //     let (lock, cvar) = &*pair;
-                    //     let mut started = lock.lock().unwrap();
-                    //     while started.is_none() {
-                    //         started = cvar.wait(started).unwrap();
-                    //     }
-                    //     PUFF_CONTEXT.with(|mut d| {
-                    //         *d.borrow_mut() = lock.lock().unwrap().clone()
-                    //     });
-                    // });
-
-                    let (dispatcher, waiting) =
-                        Dispatcher::new(notify_shutdown, self.runtime_config.clone());
-                    let arc_dispatcher = Arc::new(dispatcher);
-                    let mutex_switcher = Arc::new(Mutex::new(None::<PuffContext>));
-                    let thread_mutex = mutex_switcher.clone();
-
-                    builder.on_thread_start(move || {
-                        set_puff_context_waiting(thread_mutex.clone());
-                    });
-
-                    let rt = builder.build()?;
-                    let mut redis = None;
-                    if self.runtime_config.redis() {
-                        redis = Some(rt.block_on(new_client_async(
-                            arg_matches.value_of("redis_url").unwrap(),
-                        ))?);
-                    }
-
-                    let context =
-                        PuffContext::new_with_options(rt.handle().clone(), arc_dispatcher, redis);
-                    // dispatcher.monitor();
-
-                    for i in waiting {
-                        i.send(context.puff()).unwrap_or(());
-                    }
-
-                    let context_to_set = context.puff();
-                    {
-                        let mut borrowed = mutex_switcher.lock().unwrap();
-                        *borrowed = Some(context_to_set);
-                    }
-                    //
-                    // let (lock, cvar) = &*pair2;
-                    // let mut started = lock.lock().unwrap();
-                    // *started = Some(dispatcher.puff());
-                    // // We notify the condvar that the value has changed.
-                    // cvar.notify_one();
-
-                    let runnable = runner.runnable_from_args(args, context)?;
-                    rt.block_on(runnable.0)?;
+                let rt = builder.build()?;
+                let mut redis = None;
+                if self.runtime_config.redis() {
+                    redis = Some(rt.block_on(new_client_async(
+                        arg_matches.value_of("redis_url").unwrap(),
+                    ))?);
                 }
+
+                let context =
+                    PuffContext::new_with_options(rt.handle().clone(), arc_dispatcher, redis);
+                // dispatcher.monitor();
+
+                for i in waiting {
+                    i.send(context.puff()).unwrap_or(());
+                }
+
+                let context_to_set = context.puff();
+                {
+                    let mut borrowed = mutex_switcher.lock().unwrap();
+                    *borrowed = Some(context_to_set);
+                }
+
+                let runnable = runner.runnable_from_args(args, context)?;
+                rt.block_on(runnable.0)?;
             }
         }
 

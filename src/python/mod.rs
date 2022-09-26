@@ -7,7 +7,6 @@ use pyo3::prelude::*;
 use pyo3::{PyResult, Python};
 use std::os::raw::c_int;
 
-pub mod asgi;
 pub mod greenlet;
 pub mod redis;
 pub mod wsgi;

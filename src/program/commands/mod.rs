@@ -6,7 +6,6 @@ use anyhow::anyhow;
 use clap::{ArgMatches, Command};
 use std::sync::Mutex;
 
-pub mod asgi;
 pub mod http;
 pub mod wsgi;
 
