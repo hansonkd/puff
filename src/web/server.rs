@@ -78,7 +78,7 @@ pub use axum::http::StatusCode;
 
 use axum::extract::{FromRequest, FromRequestParts};
 
-use crate::runtime::dispatcher::RuntimeDispatcher;
+use crate::context::PuffContext;
 
 use crate::types::text::Text;
 
@@ -94,13 +94,13 @@ pub type ResponseBuilder = AxumResponse<()>;
 pub struct Router<S = ()>(axum::Router<S>);
 
 async fn internal_handler<F>(
-    Extension(dispatcher): Extension<RuntimeDispatcher>,
+    Extension(dispatcher): Extension<PuffContext>,
     f: F,
 ) -> AxumResponse<BoxBody>
 where
     F: FnOnce() -> Result<AxumResponse<BoxBody>> + Send + Sync + 'static,
 {
-    let res = dispatcher.dispatch(|| Ok(f())).await;
+    let res = dispatcher.dispatcher().dispatch(|| Ok(f())).await;
     match res {
         Ok(r) => r.unwrap_or_else(|e| handle_response_error(e)),
         Err(r) => handle_response_error(r)
@@ -321,14 +321,14 @@ where
         Self(self.0.route(&path.into(), any_service(f)))
     }
 
-    pub(crate) fn into_axum_router(self, dispatcher: RuntimeDispatcher) -> axum::Router<S> {
+    pub(crate) fn into_axum_router(self, dispatcher: PuffContext) -> axum::Router<S> {
         self.0.layer(Extension(dispatcher)).clone()
     }
 
     pub fn into_hyper_server(
         self,
         addr: &SocketAddr,
-        dispatcher: RuntimeDispatcher,
+        dispatcher: PuffContext,
     ) -> axum::Server<AddrIncoming, IntoMakeService<axum::Router<S>>> {
         let new_router = self.into_axum_router(dispatcher);
         axum::Server::bind(addr).serve(new_router.into_make_service())
@@ -362,7 +362,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::dispatcher::RuntimeDispatcher;
+    use crate::context::PuffContext;
     use crate::types::text::ToText;
     use crate::types::Puff;
     use tokio::runtime::Runtime;
@@ -372,7 +372,7 @@ mod tests {
         let router: Router<()> = Router::new().get("/", || Ok("ok".to_text()));
 
         let rt = Runtime::new().unwrap();
-        let dispatcher = RuntimeDispatcher::default();
+        let dispatcher = PuffContext::default();
 
         let fut = router.into_axum_router(dispatcher.puff()).call(
             AxumRequest::get("http://localhost/")

@@ -11,7 +11,7 @@
 //! ```no_run
 //! use clap::{ArgMatches, Command};
 //! use puff::program::{Program, Runnable, RunnableCommand};
-//! use puff::runtime::dispatcher::RuntimeDispatcher;
+//! use puff::context::PuffContext;
 //!
 //! struct MyCommand;
 //!
@@ -20,7 +20,7 @@
 //!         Command::new("my_custom_command")
 //!     }
 //!
-//!     fn runnable_from_args(&self, args: &ArgMatches, dispatcher: RuntimeDispatcher) -> puff::errors::Result<Runnable> {
+//!     fn runnable_from_args(&self, args: &ArgMatches, dispatcher: PuffContext) -> puff::errors::Result<Runnable> {
 //!         Ok(Runnable::new(dispatcher.dispatch(|| {
 //!             println!("Hello World from a Puff coroutine!");
 //!             Ok(())
@@ -39,21 +39,25 @@
 //!
 //! Run with `cargo run my_custom_command` or use `cargo run help`
 
+use std::borrow::BorrowMut;
 use clap::{ArgMatches, Command};
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 use futures_util::future::BoxFuture;
 use futures_util::TryFutureExt;
 use pyo3::{PyErr, PyObject, Python};
 use pyo3::exceptions::PyRuntimeError;
 use tokio::runtime::{Builder, Handle, Runtime};
+use tokio::sync::broadcast;
 use crate::databases::redis::{add_redis_command_arguments, new_client_async, RedisClient};
 
 use crate::errors::Result;
-use crate::runtime::dispatcher::RuntimeDispatcher;
+use crate::context::{PUFF_CONTEXT, PuffContext, set_puff_context, set_puff_context_waiting};
+use crate::runtime::dispatcher::Dispatcher;
 use crate::runtime::RuntimeConfig;
 use crate::types::text::Text;
 use crate::types::Puff;
@@ -79,7 +83,7 @@ impl Runnable {
 /// ```no_run
 /// use clap::{ArgMatches, Command};
 /// use puff::program::{Runnable, RunnableCommand};
-/// use puff::runtime::dispatcher::RuntimeDispatcher;
+/// use puff::context::PuffContext;
 ///
 /// struct MyCommand;
 ///
@@ -88,7 +92,7 @@ impl Runnable {
 ///         Command::new("my_custom_command")
 ///     }
 ///
-///     fn runnable_from_args(&self, _args: &ArgMatches, dispatcher: RuntimeDispatcher) -> puff::errors::Result<Runnable> {
+///     fn runnable_from_args(&self, _args: &ArgMatches, dispatcher: PuffContext) -> puff::errors::Result<Runnable> {
 ///         Ok(Runnable::new(dispatcher.dispatch(|| {
 ///             // Do something in Puff
 ///             Ok(())
@@ -104,7 +108,7 @@ pub trait RunnableCommand: 'static {
     fn runnable_from_args(
         &self,
         args: &ArgMatches,
-        dispatcher: RuntimeDispatcher,
+        dispatcher: PuffContext,
     ) -> Result<Runnable>;
 }
 
@@ -119,11 +123,12 @@ impl PackedCommand {
     pub fn runnable_from_args(
         &self,
         args: &ArgMatches,
-        dispatcher: RuntimeDispatcher,
+        dispatcher: PuffContext,
     ) -> Result<Runnable> {
         self.0.runnable_from_args(args, dispatcher)
     }
 }
+
 
 /// A Puff Program that is responsible for parsing CLI arguments and starting the Runtime.
 #[derive(Clone)]
@@ -247,6 +252,7 @@ impl Program {
     /// coroutine worker threads and blocks until the command finishes.
     pub fn try_run(&self) -> Result<()> {
         tracing_subscriber::fmt::init();
+        let (notify_shutdown, _) = broadcast::channel(1);
 
         let mut top_level = self.clap_command();
 
@@ -273,25 +279,62 @@ impl Program {
 
                 if self.runtime_config.asyncio() {
                     pyo3_asyncio::tokio::init(builder);
-                    let rt = pyo3_asyncio::tokio::get_runtime();
-                    let dispatcher =
-                        RuntimeDispatcher::new(self.runtime_config.clone(), rt.handle().clone());
-                    let runnable = runner.runnable_from_args(args, dispatcher.puff())?;
+                    // let rt = pyo3_asyncio::tokio::get_runtime();
+                    // let dispatcher =
+                    //     PuffContext::new(self.runtime_config.clone(), rt.handle().clone());
+                    // let runnable = runner.runnable_from_args(args, dispatcher.puff())?;
 
-                    rt.block_on(runnable.0)?;
+                    // rt.block_on(runnable.0)?;
                 } else {
+                    // let pair = Arc::new((Mutex::new(None), Condvar::new()));
+                    // let pair2 = Arc::clone(&pair);
+
+                    // builder.on_thread_start(move || {
+                    //     let (lock, cvar) = &*pair;
+                    //     let mut started = lock.lock().unwrap();
+                    //     while started.is_none() {
+                    //         started = cvar.wait(started).unwrap();
+                    //     }
+                    //     PUFF_CONTEXT.with(|mut d| {
+                    //         *d.borrow_mut() = lock.lock().unwrap().clone()
+                    //     });
+                    // });
+
+                    let (dispatcher, waiting) = Dispatcher::new(notify_shutdown, self.runtime_config.clone());
+                    let arc_dispatcher = Arc::new(dispatcher);
+                    let mutex_switcher = Arc::new(Mutex::new(None::<PuffContext>));
+                    let thread_mutex = mutex_switcher.clone();
+
+                    builder.on_thread_start(move || {
+                        set_puff_context_waiting(thread_mutex.clone());
+                    });
+
                     let rt = builder.build()?;
                     let mut redis = None;
                     if self.runtime_config.redis() {
                         redis = Some(rt.block_on(new_client_async(arg_matches.value_of("redis_url").unwrap()))?);
                     }
 
-                    let mut dispatcher =
-                        RuntimeDispatcher::new_with_options(self.runtime_config.clone(), rt.handle().clone(), redis);
+                    let mut context =
+                        PuffContext::new_with_options(rt.handle().clone(), arc_dispatcher, redis);
                     // dispatcher.monitor();
 
+                    // let mut borrowed = mutex_switcher.lock().unwrap();
+                    // *borrowed = Some(context.puff());
+                    // drop(borrowed);
 
-                    let runnable = runner.runnable_from_args(args, dispatcher.puff())?;
+                    for i in waiting {
+                        i.send(context.puff()).unwrap_or(());
+                    }
+
+                    //
+                    // let (lock, cvar) = &*pair2;
+                    // let mut started = lock.lock().unwrap();
+                    // *started = Some(dispatcher.puff());
+                    // // We notify the condvar that the value has changed.
+                    // cvar.notify_one();
+
+                    let runnable = runner.runnable_from_args(args, context)?;
                     rt.block_on(runnable.0)?;
                 }
             }

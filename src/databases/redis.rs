@@ -2,10 +2,11 @@ use bb8_redis::bb8::Pool;
 use bb8_redis::RedisConnectionManager;
 use bb8_redis::redis::{FromRedisValue, IntoConnectionInfo};
 use crate::errors::PuffResult;
-use crate::runtime::{with_dispatcher, yield_to_future, yield_to_future_io};
+use crate::runtime::{yield_to_future, yield_to_future_io};
 
 pub use bb8_redis::redis::Cmd;
 use clap::{Arg, Command};
+use crate::context::with_puff_context;
 use crate::types::Puff;
 
 
@@ -44,11 +45,11 @@ pub async fn new_client_async<T: IntoConnectionInfo>(conn: T) -> PuffResult<Redi
 
 
 pub fn query_redis<T: FromRedisValue + Send + 'static>(command: Cmd) -> PuffResult<T> {
-    with_dispatcher(move |d| d.redis().query(command))
+    with_puff_context(move |d| d.redis().query(command))
 }
 
 pub fn with_redis<F: FnOnce(RedisClient) -> T, T>(f: F) -> T {
-    with_dispatcher(move |d| f(d.redis()))
+    with_puff_context(move |d| f(d.redis()))
 }
 
 pub(crate) fn add_redis_command_arguments(command: Command) -> Command {

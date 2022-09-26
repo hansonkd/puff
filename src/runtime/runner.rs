@@ -1,5 +1,5 @@
 use crate::errors::Error;
-use crate::runtime::dispatcher::RuntimeDispatcher;
+use crate::context::{PuffContext, set_puff_context};
 use crate::runtime::run_with_config_on_local;
 
 use anyhow::anyhow;
@@ -46,12 +46,12 @@ impl LocalSpawner {
         let (send, rec) = oneshot::channel();
         let (c, _) = broadcast::channel(1);
         let runner = LocalSpawner::new(rec, Shutdown::new(c.subscribe()));
-        send.send(RuntimeDispatcher::empty(rt.handle().clone()))
+        send.send(PuffContext::empty(rt.handle().clone()))
             .unwrap_or(());
         runner
     }
 
-    pub(crate) fn new(dispatcher_lazy: oneshot::Receiver<RuntimeDispatcher>, mut shutdown: Shutdown) -> Self {
+    pub(crate) fn new(contgext_lazy: oneshot::Receiver<PuffContext>, mut shutdown: Shutdown) -> Self {
         let (send, mut recv) = mpsc::unbounded_channel();
         let num_tasks = Arc::new(AtomicUsize::new(0));
         let num_tasks_completed = Arc::new(AtomicUsize::new(0));
@@ -60,10 +60,9 @@ impl LocalSpawner {
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
         std::thread::spawn(move || {
 
-            let dispatcher = rt.block_on(dispatcher_lazy).unwrap();
-
+            let context = rt.block_on(contgext_lazy).unwrap();
+            set_puff_context(context.puff());
             let local = LocalSet::new();
-            let dispatcher = dispatcher.puff();
             local.spawn_local(async move {
                 while !shutdown.is_shutdown() {
                     if let Some(SpawnerJob(new_sender, new_task)) = tokio::select! {
@@ -72,12 +71,12 @@ impl LocalSpawner {
                                 return ();
                             }
                         } {
-                        let dispatcher = dispatcher.clone_for_new_task();
+                        let task_context = context.clone();
                         let num_tasks_loop = num_tasks_loop.clone();
                         let num_tasks_completed_loop = num_tasks_completed_loop.clone();
                         let _ = num_tasks_loop.fetch_add(1, Ordering::SeqCst);
                         let fut = async move {
-                            let res = run_with_config_on_local(dispatcher, new_sender, new_task).await;
+                            let res = run_with_config_on_local(task_context, new_sender, new_task).await;
                             let _ = num_tasks_completed_loop.fetch_add(1, Ordering::SeqCst);
                             res
                         };

@@ -55,12 +55,12 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::dispatcher::RuntimeDispatcher;
+    use crate::context::PuffContext;
     use crate::runtime::start_runtime_and_run;
 
     #[test]
     fn check_oneshot() {
-        let dispatcher = RuntimeDispatcher::default();
+        let dispatcher = PuffContext::default();
         let (sender, recv) = channel();
         dispatcher.dispatch(|| Ok(sender.send(42).unwrap_or(())));
         let r = start_runtime_and_run(|| Ok(recv.recv().unwrap_or(0))).unwrap();

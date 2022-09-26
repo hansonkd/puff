@@ -1,20 +1,23 @@
 //! Types used to interact with the Puff Runtime
 //!
-use crate::runtime::wormhole::{AsyncWormhole, AsyncYielder, YIELDER, DISPATCHER};
+use crate::runtime::wormhole::{AsyncWormhole, AsyncYielder, YIELDER};
 use corosensei::stack::DefaultStack;
 
 use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::oneshot;
+use tokio::sync::{broadcast, oneshot};
+use crate::context;
 
 use crate::errors::Result;
 use crate::types::Puff;
-use dispatcher::RuntimeDispatcher;
+use crate::context::{PUFF_CONTEXT, PuffContext};
+use crate::runtime::dispatcher::Dispatcher;
 
 pub mod dispatcher;
-mod runner;
+pub mod runner;
+pub mod shutdown;
 mod wormhole;
-mod shutdown;
 
 type PuffWormhole = AsyncWormhole<'static, DefaultStack>;
 
@@ -37,11 +40,6 @@ where
     }
 }
 
-pub fn with_dispatcher<F: FnOnce(RuntimeDispatcher) -> R, R>(f: F) -> R {
-    let dispatcher = DISPATCHER.with(|d| d.borrow().clone() ).expect("Dispatcher can only be used from a puff context.");
-    f(dispatcher)
-}
-
 /// Suspend execution of the current coroutine and run the future. This function MUST be called from
 /// a Puff task. This function will run on the parent multi-threaded runtime.
 ///
@@ -51,12 +49,12 @@ where
     Fut: Future<Output = R> + Send + 'static,
     R: Send + 'static,
 {
-    let handle = with_dispatcher(|v| v.handle());
+    let handle = context::with_puff_context(|v| v.handle());
     Ok(yield_to_future(handle.spawn(future))?)
 }
 
 pub(crate) async fn run_local_wormhole_with_stack<F, R>(
-    dispatcher: RuntimeDispatcher,
+    dispatcher: PuffContext,
     s: DefaultStack,
     sender: oneshot::Sender<Result<R>>,
     f: F,
@@ -266,7 +264,7 @@ impl Default for RuntimeConfig {
 }
 
 async fn run_new_stack<F, R>(
-    dispatcher: RuntimeDispatcher,
+    dispatcher: PuffContext,
     stack_size: usize,
     sender: oneshot::Sender<Result<R>>,
     f: F,
@@ -280,7 +278,7 @@ where
 }
 
 pub(crate) async fn run_with_config_on_local<F, R>(
-    dispatcher: RuntimeDispatcher,
+    dispatcher: PuffContext,
     sender: oneshot::Sender<Result<R>>,
     f: F,
 ) -> Result<()>
@@ -288,7 +286,7 @@ where
     F: FnOnce() -> Result<R> + Send + 'static,
     R: 'static + Send,
 {
-    let stack_size = dispatcher.stack_size();
+    let stack_size = dispatcher.dispatcher().stack_size();
     run_new_stack(dispatcher, stack_size, sender, f)
         .await
 }
@@ -307,8 +305,13 @@ where
         .build()
         .unwrap();
     let config = RuntimeConfig::default().set_coroutine_threads(1);
-    let dispatcher = RuntimeDispatcher::new(config, rt.handle().clone());
-    rt.block_on(dispatcher.dispatch(f))
+    let (notify_shutdown, _) = broadcast::channel(1);
+    let (dispatcher, waiting) = Dispatcher::new(notify_shutdown, config);
+    let context = PuffContext::new(Arc::new(dispatcher), rt.handle().clone());
+    for wait in waiting {
+        wait.send(context.puff()).unwrap_or(());
+    }
+    rt.block_on(context.dispatcher().dispatch(f))
 }
 
 #[cfg(test)]

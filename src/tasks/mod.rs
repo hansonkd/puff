@@ -14,14 +14,14 @@
 //! assert_eq!(task.join().unwrap(), 42)
 //! ```
 //!
-use crate::runtime::{with_dispatcher, yield_to_future};
+use crate::runtime::yield_to_future;
 use futures::future::BoxFuture;
 
 use std::time::Duration;
 
 use crate::errors::Error;
 
-use crate::runtime::dispatcher::RuntimeDispatcher;
+use crate::context::{PuffContext, with_puff_context};
 
 
 /// A Task representing a currently executing coroutine. Can be awaited on using `join`.
@@ -65,14 +65,14 @@ where
         F: FnOnce() -> Result<R, Error> + Send + 'static,
     {
         Task {
-            handle: with_dispatcher(move |v| v.dispatch(f)),
+            handle: with_puff_context(move |v| v.dispatcher().dispatch(f)),
         }
     }
 
     /// Run the closure asynchronously in a blocking thread. This is useful if your function takes a
     /// lot of computational power or uses a non-async blocking function.
     ///
-    /// See [crate::runtime::dispatcher::RuntimeDispatcher::dispatch_blocking] for more information.
+    /// See [crate::context::PuffContext::dispatch_blocking] for more information.
     ///
     /// # Examples
     ///
@@ -94,7 +94,7 @@ where
         F: FnOnce() -> Result<R, Error> + Send + 'static,
     {
         Task {
-            handle: with_dispatcher(move |v| v.dispatch_blocking(f)),
+            handle: with_puff_context(move |v| v.dispatch_blocking(f)),
         }
     }
 

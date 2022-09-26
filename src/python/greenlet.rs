@@ -4,7 +4,7 @@ use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use tokio::sync::oneshot;
 use crate::errors::PuffResult;
-use crate::runtime::dispatcher::RuntimeDispatcher;
+use crate::context::PuffContext;
 
 #[pyclass]
 pub struct GreenletReturn(Option<oneshot::Sender<PyResult<PyObject>>>);
@@ -27,10 +27,10 @@ impl GreenletReturn {
 
 #[pyclass]
 #[derive(Clone)]
-pub struct GreenletContext(RuntimeDispatcher, PyObject);
+pub struct GreenletContext(PuffContext, PyObject);
 
 impl GreenletContext {
-    pub fn dispatcher(&self) -> RuntimeDispatcher {
+    pub fn dispatcher(&self) -> PuffContext {
         self.0.clone()
     }
 }
@@ -50,7 +50,7 @@ pub struct GreenletDispatcher {
 
 
 impl GreenletDispatcher {
-    pub fn new(dispatcher: RuntimeDispatcher, global_state: PyObject) -> PyResult<Self> {
+    pub fn new(dispatcher: PuffContext, global_state: PyObject) -> PyResult<Self> {
         let thread_obj = Python::with_gil(|py| {
             let puff = py.import("puff")?;
 

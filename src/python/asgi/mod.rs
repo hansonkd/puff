@@ -15,7 +15,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use crate::python::asgi::handler::AsgiHandler;
-use crate::runtime::dispatcher::RuntimeDispatcher;
+use crate::context::PuffContext;
 use crate::web::server::Router;
 
 

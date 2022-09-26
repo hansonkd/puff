@@ -15,11 +15,11 @@ use std::fmt::Debug;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use pyo3::{Py, PyAny};
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::{broadcast, oneshot};
 use tokio::task::LocalSet;
 use tracing::info;
+use crate::context::PuffContext;
 use crate::databases::redis::RedisClient;
 
 use crate::errors::Error;
@@ -36,164 +36,14 @@ pub struct Stats {
     pub total_tasks_completed: usize,
 }
 
-/// The central control structure for dispatching tasks onto coroutine workers.
-/// All tasks in the same runtime will have access to the same dispatcher. The dispatcher contains
-/// a reference to the parent Tokio Runtime as well as references to all coroutine workers.
+/// An abstraction to schedule coroutines onto threads (LocalSpawners).
 #[derive(Clone)]
-pub struct RuntimeDispatcher(Arc<Dispatcher>);
-
-impl RuntimeDispatcher {
-    /// Creates an empty RuntimeDispatcher with no active threads for testing.
-    pub fn empty(handle: Handle) -> RuntimeDispatcher {
-        let (notify_shutdown, _) = broadcast::channel(1);
-        Self(Arc::new(Dispatcher {
-            handle,
-            notify_shutdown,
-            config: RuntimeConfig::default(),
-            spawners: Vec::new(),
-            strategy: Strategy::Random,
-            redis: None,
-            context_vars: Arc::new(Mutex::new(HashMap::new())),
-            next: Arc::new(AtomicUsize::new(0)),
-        }))
-    }
-
-    /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`. This function will start
-    /// the number of `coroutine_threads` specified in your config.
-    pub fn new(config: RuntimeConfig, handle: Handle) -> RuntimeDispatcher {
-        Self::new_with_options(config, handle, None)
-    }
-
-    /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`. This function will start
-    /// the number of `coroutine_threads` specified in your config. Includes options.
-    pub fn new_with_options(config: RuntimeConfig, handle: Handle, redis: Option<RedisClient>) -> RuntimeDispatcher {
-        let size = config.coroutine_threads();
-        let mut spawners = Vec::with_capacity(size);
-        let mut waiting = Vec::with_capacity(size);
-        let (notify_shutdown, _) = broadcast::channel(1);
-
-        for _ in 0..size {
-            let (send, rec) = oneshot::channel();
-            spawners.push(LocalSpawner::new(rec, Shutdown::new(notify_shutdown.subscribe())));
-            waiting.push(send);
-        }
-
-        let strategy = config.strategy().clone();
-        let dispatcher = Dispatcher {
-            handle,
-            config,
-            strategy,
-            spawners,
-            redis,
-            notify_shutdown,
-            context_vars: Arc::new(Mutex::new(HashMap::new())),
-            next: Arc::new(AtomicUsize::new(0)),
-        };
-        let arc_dispatcher = Self(Arc::new(dispatcher));
-
-        for i in waiting {
-            i.send(arc_dispatcher.puff()).unwrap_or(());
-        }
-
-        arc_dispatcher
-    }
-
-    pub(crate) fn with_mutable_context_vars<F: FnOnce(&mut HashMap<String, Py<PyAny>>) -> R, R>(&self, f: F) -> R {
-        let mut vars = self.0.context_vars.lock().expect("Could not lock context vars.");
-        f(&mut vars)
-    }
-
-    pub(crate) fn with_context_vars<F: FnOnce(&HashMap<String, Py<PyAny>>) -> R, R>(&self, f: F) -> R {
-        let mut vars = self.0.context_vars.lock().expect("Could not lock context vars.");
-        f(&mut vars)
-    }
-
-    #[inline]
-    pub(crate) fn monitor(&self) -> () {
-        self.0.monitor()
-    }
-
-    #[inline]
-    pub(crate) fn clone_for_new_task(&self) -> Self { RuntimeDispatcher(Arc::new(self.0.clone_for_new_task())) }
-
-    #[inline]
-    pub(crate) fn stack_size(&self) -> usize {
-        self.0.stack_size()
-    }
-
-    #[inline]
-    pub(crate) fn handle(&self) -> Handle {
-        self.0.handle()
-    }
-
-    pub fn redis(&self) -> RedisClient {
-        self.0.redis().expect("Redis is not configured for this runtime.")
-    }
-
-    /// Information about the current threads controlled by this Dispatcher.
-    pub fn stats(&self) -> Vec<Stats> {
-        self.0.stats()
-    }
-
-    /// Dispatch a task onto a coroutine worker thread and return a future to await on. Tasks are
-    /// dispatched according to the `strategy` in [crate::runtime::RuntimeConfig].
-    #[inline]
-    pub fn dispatch<F, R>(&self, f: F) -> BoxFuture<'static, Result<R, Error>>
-    where
-        F: FnOnce() -> Result<R, Error> + Send + 'static,
-        R: Send + 'static,
-    {
-        self.0.dispatch(f)
-    }
-
-    /// Dispatch a task onto a blocking thread. This must be used if you use any type of non-async
-    /// blocking functions (like from the std-lib). This is also useful if you have a task that takes
-    /// a lot of computational power.
-    ///
-    /// Tokio will create up to `max_blocking_threads` as specified in [crate::runtime::RuntimeConfig], after
-    /// which it will start to queue tasks until previous tasks finish. Each task will execute up
-    /// to the duration specified in `blocking_task_keep_alive`.
-    pub fn dispatch_blocking<F, R>(&self, f: F) -> BoxFuture<'static, Result<R, Error>>
-    where
-        F: FnOnce() -> Result<R, Error> + Send + 'static,
-        R: Send + 'static,
-    {
-        let (new_sender, rec) = oneshot::channel();
-        let dispatcher = self.clone_for_new_task();
-        let future = self.0.handle.spawn_blocking(|| {
-            let handle = Handle::current();
-            let local = LocalSet::new();
-            let h = local.spawn_local(run_with_config_on_local(dispatcher, new_sender, f));
-            handle.block_on(local);
-            handle.block_on(h)
-        });
-        let f = async {
-            future.await???;
-            Ok(rec.await??)
-        };
-        f.boxed()
-    }
-}
-
-impl Default for RuntimeDispatcher {
-    fn default() -> Self {
-        let rt = Runtime::new().unwrap();
-        RuntimeDispatcher::new(RuntimeConfig::default(), rt.handle().clone())
-    }
-}
-
-impl Puff for RuntimeDispatcher {}
-
-#[derive(Clone)]
-struct Dispatcher {
+pub struct Dispatcher {
     spawners: Vec<LocalSpawner>,
     strategy: Strategy,
-    handle: Handle,
     config: RuntimeConfig,
-    redis: Option<RedisClient>,
     next: Arc<AtomicUsize>,
-    notify_shutdown: broadcast::Sender<()>,
-    context_vars: Arc<Mutex<HashMap<String, Py<PyAny>>>>
+    notify_shutdown: broadcast::Sender<()>
 }
 
 impl Dispatcher {
@@ -201,44 +51,63 @@ impl Dispatcher {
         Dispatcher {
             spawners: self.spawners.clone(),
             strategy: self.strategy.clone(),
-            handle: self.handle.clone(),
             config: self.config.clone(),
-            redis: self.redis.clone(),
             next: self.next.clone(),
             notify_shutdown: self.notify_shutdown.clone(),
-            context_vars: Arc::new(Mutex::new(HashMap::new()))
         }
     }
 
+    pub fn empty(notify_shutdown: broadcast::Sender<()>) -> Self {
+        Dispatcher {
+            notify_shutdown,
+            config: RuntimeConfig::default(),
+            spawners: Vec::new(),
+            strategy: Strategy::Random,
+            next: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    pub fn new(notify_shutdown: broadcast::Sender<()>, config: RuntimeConfig) -> (Self, Vec<oneshot::Sender<PuffContext>>) {
+        let size = config.coroutine_threads();
+        let mut spawners = Vec::with_capacity(size);
+        let mut waiting = Vec::with_capacity(size);
+        let strategy = config.strategy();
+        for _ in 0..size {
+            let (send, rec) = oneshot::channel();
+            spawners.push(LocalSpawner::new(rec, Shutdown::new(notify_shutdown.subscribe())));
+            waiting.push(send);
+        }
+        let disptcher = Self {
+            config,
+            strategy,
+            spawners,
+            notify_shutdown,
+            next: Arc::new(AtomicUsize::new(0)),
+        };
+        return (disptcher, waiting)
+    }
+
     #[inline]
-    fn stack_size(&self) -> usize {
+    pub fn stack_size(&self) -> usize {
         self.config.stack_size()
     }
 
-    #[inline]
-    fn handle(&self) -> Handle {
-        self.handle.clone()
-    }
-
-    #[inline]
-    fn redis(&self) -> Option<RedisClient> {
-        self.redis.clone()
-    }
-
-    fn monitor(&self) -> () {
+    /// Start a debugging monitor that prints stats.
+    pub fn monitor(&self) -> () {
         let dispatcher = self.clone();
         std::thread::spawn(move || {
             loop {
                 let stats = dispatcher.stats();
                 for stat in stats {
-                    info!("Dispatcher: {} {} {}", stat.worker_id, stat.total_tasks, stat.total_tasks_completed);
+                    info!("Worker: {} | Total: {} | Completed: {}", stat.worker_id, stat.total_tasks, stat.total_tasks_completed);
                 }
                 std::thread::sleep(Duration::from_secs(1));
             }
         });
     }
 
-    fn stats(&self) -> Vec<Stats> {
+    /// Information about the current threads controlled by this Dispatcher.
+    pub fn stats(&self) -> Vec<Stats> {
         self.spawners
             .iter()
             .enumerate()
@@ -250,7 +119,9 @@ impl Dispatcher {
             .collect()
     }
 
-    fn dispatch<F, R>(&self, f: F) -> BoxFuture<'static, Result<R, Error>>
+    /// Dispatch a task onto a coroutine worker thread and return a future to await on. Tasks are
+    /// dispatched according to the `strategy` in [crate::runtime::RuntimeConfig].
+    pub fn dispatch<F, R>(&self, f: F) -> BoxFuture<'static, Result<R, Error>>
     where
         F: FnOnce() -> Result<R, Error> + Send + 'static,
         R: Send + 'static,

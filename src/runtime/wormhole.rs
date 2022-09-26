@@ -27,13 +27,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Mutex;
 use pyo3::{Py, Python};
-use crate::python::PythonContext;
-use crate::runtime::dispatcher::RuntimeDispatcher;
+use crate::context::{PUFF_CONTEXT, PuffContext};
 use crate::types::Puff;
 
 thread_local! {
     pub static YIELDER: RefCell<*mut AsyncYielder<'static>> = RefCell::new(std::ptr::null_mut());
-    pub static DISPATCHER: RefCell<Option<RuntimeDispatcher>> = RefCell::new(None);
 }
 
 /// AsyncWormhole represents a Future that uses a generator with a separate stack to execute a closure.
@@ -47,7 +45,7 @@ where
 {
     generator: Option<Cell<ScopedCoroutine<'a, Waker, Option<()>, (), Stack>>>,
     ref_yielder: Rc<Mutex<*mut AsyncYielder<'static>>>,
-    dispatcher: RuntimeDispatcher
+    puff_context: PuffContext
 }
 
 impl<'a, Stack> AsyncWormhole<'a, Stack>
@@ -57,7 +55,7 @@ where
     /// Returns a new AsyncWormhole, using the passed `stack` to execute the closure `f` on.
     /// The closure will not be executed right away, only if you pass AsyncWormhole to an
     /// async executor (.await on it)
-    pub fn new<F>(stack: Stack, dispatcher: RuntimeDispatcher, f: F) -> Result<Self, Error>
+    pub fn new<F>(stack: Stack, dispatcher: PuffContext, f: F) -> Result<Self, Error>
     where
         F: FnOnce() -> () + 'a + Send,
     {
@@ -81,7 +79,7 @@ where
 
         Ok(Self {
             ref_yielder,
-            dispatcher,
+            puff_context: dispatcher,
             generator: Some(Cell::new(generator)),
         })
     }
@@ -91,8 +89,8 @@ where
             *y.borrow_mut() = self.ref_yielder.lock().unwrap().clone();
         });
 
-        DISPATCHER.with(|d| {
-            *d.borrow_mut() = Some(self.dispatcher.puff())
+        PUFF_CONTEXT.with(|d| {
+            *d.borrow_mut() = Some(self.puff_context.puff())
         });
     }
 }
@@ -161,11 +159,11 @@ where
 pub struct AsyncYielder<'a> {
     yielder: &'a Yielder<Waker, Option<()>>,
     waker: Waker,
-    dispatcher: RuntimeDispatcher
+    dispatcher: PuffContext
 }
 
 impl<'a> AsyncYielder<'a> {
-    pub(crate) fn new(yielder: &'a Yielder<Waker, Option<()>>, waker: Waker, dispatcher: RuntimeDispatcher) -> Self {
+    pub(crate) fn new(yielder: &'a Yielder<Waker, Option<()>>, waker: Waker, dispatcher: PuffContext) -> Self {
         Self { yielder, waker, dispatcher }
     }
 

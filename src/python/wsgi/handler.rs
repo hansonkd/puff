@@ -35,7 +35,7 @@ use tokio::sync::{mpsc::{self, UnboundedReceiver}, Mutex, oneshot};
 use tracing::{error, info};
 use crate::python::greenlet::GreenletDispatcher;
 use crate::python::wsgi;
-use crate::runtime::dispatcher::RuntimeDispatcher;
+use crate::context::PuffContext;
 
 
 const MAX_LIST_BODY_INLINE_CONCAT: u64 = 1024 * 4;
@@ -43,16 +43,16 @@ const MAX_LIST_BODY_INLINE_CONCAT: u64 = 1024 * 4;
 #[derive(Clone)]
 pub struct WsgiHandler {
     app: PyObject,
-    dispatcher: RuntimeDispatcher,
+    dispatcher: PuffContext,
     greenlet: Option<GreenletDispatcher>
 }
 
 impl WsgiHandler {
-    pub fn new(app: PyObject, dispatcher: RuntimeDispatcher, greenlet: Option<GreenletDispatcher>) -> WsgiHandler {
+    pub fn new(app: PyObject, dispatcher: PuffContext, greenlet: Option<GreenletDispatcher>) -> WsgiHandler {
         WsgiHandler { app, dispatcher, greenlet }
     }
 
-    pub fn blocking(app: PyObject, dispatcher: RuntimeDispatcher) -> WsgiHandler {
+    pub fn blocking(app: PyObject, dispatcher: PuffContext) -> WsgiHandler {
         WsgiHandler { app, dispatcher, greenlet: None }
     }
 }

@@ -1,7 +1,7 @@
 //! Convert a `Router` into a `RunnableCommand`
 use crate::errors::Result;
 use crate::program::{Runnable, RunnableCommand};
-use crate::runtime::dispatcher::RuntimeDispatcher;
+use crate::context::PuffContext;
 use crate::web::server::Router;
 use clap::{ArgMatches, Command};
 
@@ -27,7 +27,7 @@ impl RunnableCommand for ServerCommand {
     fn runnable_from_args(
         &self,
         _args: &ArgMatches,
-        dispatcher: RuntimeDispatcher,
+        context: PuffContext,
     ) -> Result<Runnable> {
         let this_self = self.clone();
         let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
@@ -35,7 +35,7 @@ impl RunnableCommand for ServerCommand {
             Ok(this_self
                 .0
                 .clone()
-                .into_hyper_server(&addr, dispatcher)
+                .into_hyper_server(&addr, context)
                 .await?)
         };
         Ok(Runnable::new(fut))

@@ -1,7 +1,7 @@
 //! Convert a `Router` into a `RunnableCommand`
 use crate::errors::Result;
 use crate::program::{Runnable, RunnableCommand};
-use crate::runtime::dispatcher::RuntimeDispatcher;
+use crate::context::PuffContext;
 use crate::web::server::Router;
 use crate::python::asgi::{AsyncFn, create_server_context};
 use clap::{ArgMatches, Command};
@@ -22,7 +22,7 @@ use crate::types::Text;
 struct ASGIConstructor {
     addr: SocketAddr,
     router: Router,
-    dispatcher: RuntimeDispatcher
+    dispatcher: PuffContext
 }
 
 impl AsyncFn for ASGIConstructor {
@@ -59,7 +59,7 @@ impl RunnableCommand for ASGIServerCommand {
     fn runnable_from_args(
         &self,
         _args: &ArgMatches,
-        dispatcher: RuntimeDispatcher,
+        context: PuffContext,
     ) -> Result<Runnable> {
         let this_self = self.clone();
         let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
@@ -71,7 +71,7 @@ impl RunnableCommand for ASGIServerCommand {
             info!("Preparing to start server on {:?}", addr);
             let mut ctx = create_server_context(
                 asgi_app,
-                ASGIConstructor{addr, dispatcher, router: this_self.router}
+                ASGIConstructor{addr, dispatcher: context, router: this_self.router}
             );
             let result = ctx.start()?.await;
             result
@@ -80,7 +80,7 @@ impl RunnableCommand for ASGIServerCommand {
     }
 }
 
-async fn start(addr: SocketAddr, router: Router, dispatcher: RuntimeDispatcher, shutdown_signal: oneshot::Receiver<()>, asgi: AsgiHandler) {
+async fn start(addr: SocketAddr, router: Router, dispatcher: PuffContext, shutdown_signal: oneshot::Receiver<()>, asgi: AsgiHandler) {
     let app = router.into_axum_router(dispatcher).fallback(asgi);
     info!("Starting server on {:?}", addr);
     if let Err(err) = axum::Server::bind(&addr)

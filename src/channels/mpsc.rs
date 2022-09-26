@@ -67,12 +67,12 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::dispatcher::RuntimeDispatcher;
+    use crate::context::PuffContext;
     use crate::runtime::start_runtime_and_run;
 
     #[test]
     fn check_mpsc() {
-        let dispatcher = RuntimeDispatcher::default();
+        let dispatcher = PuffContext::default();
         let (sender, mut recv) = channel();
         dispatcher.dispatch(move || {
             sender.send(42).unwrap_or(());

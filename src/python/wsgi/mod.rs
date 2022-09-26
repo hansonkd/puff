@@ -16,7 +16,7 @@ use pyo3::types::{PyDict, PyList, PyString};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use crate::python::greenlet::GreenletDispatcher;
 use crate::python::wsgi::handler::WsgiHandler;
-use crate::runtime::dispatcher::RuntimeDispatcher;
+use crate::context::PuffContext;
 use crate::web::server::Router;
 
 
@@ -69,7 +69,7 @@ pub struct ServerContext<T: AsyncFn> {
     wait_shutdown_rx: Option<oneshot::Receiver<()>>,
     app: Option<PyObject>,
     server: Option<T>,
-    dispatcher: RuntimeDispatcher,
+    dispatcher: PuffContext,
     greenlet: Option<GreenletDispatcher>
 }
 
@@ -123,7 +123,7 @@ impl<T: AsyncFn> ServerContext<T> {
 pub fn create_server_context<T: AsyncFn>(
     app: PyObject,
     server: T,
-    dispatcher: RuntimeDispatcher,
+    dispatcher: PuffContext,
     greenlet: Option<GreenletDispatcher>
 ) -> ServerContext<T> {
     let (tx, rx) = tokio::sync::oneshot::channel();

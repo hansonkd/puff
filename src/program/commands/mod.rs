@@ -4,7 +4,7 @@ use clap::{ArgMatches, Command};
 use crate::types::Text;
 use crate::errors::Result;
 use crate::program::{Runnable, RunnableCommand};
-use crate::runtime::dispatcher::RuntimeDispatcher;
+use crate::context::PuffContext;
 
 pub mod http;
 pub mod asgi;
@@ -32,10 +32,10 @@ impl<F: FnOnce() -> Result<()> + Send + Sync + 'static> RunnableCommand for Basi
     fn runnable_from_args(
         &self,
         _args: &ArgMatches,
-        dispatcher: RuntimeDispatcher,
+        context: PuffContext,
     ) -> Result<Runnable> {
         let this_self_func = self.inner_func.lock().unwrap().take().ok_or(anyhow!("Already ran command."))?;
-        let fut = dispatcher.dispatch(this_self_func);
+        let fut = context.dispatcher().dispatch(this_self_func);
         Ok(Runnable::new(fut))
     }
 }
