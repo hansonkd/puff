@@ -6,7 +6,7 @@ use std::future::Future;
 
 
 
-use crate::context::PuffContext;
+
 use crate::python::greenlet::GreenletDispatcher;
 use crate::python::wsgi::handler::WsgiHandler;
 

@@ -1,4 +1,4 @@
-use crate::context::PuffContext;
+
 use crate::python::greenlet::GreenletDispatcher;
 use crate::python::wsgi;
 use anyhow::{anyhow, Error};
@@ -20,8 +20,8 @@ use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::sync::mpsc::{UnboundedReceiver};
-use tokio::sync::{Mutex};
+
+
 use tracing::{error};
 use wsgi::Sender;
 

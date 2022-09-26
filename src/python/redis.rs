@@ -8,7 +8,7 @@ use bb8_redis::redis::{FromRedisValue, Value};
 use pyo3::exceptions::{PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList};
-use std::future::Future;
+
 
 #[pyclass]
 pub struct RedisGlobal;

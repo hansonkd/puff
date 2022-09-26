@@ -14,8 +14,8 @@ use futures_util::{FutureExt};
 
 use pyo3::{IntoPy, Py, PyAny, PyObject, Python};
 use std::net::SocketAddr;
-use tokio::sync::oneshot;
-use tokio::sync::oneshot::Receiver;
+
+
 use tracing::{error, info};
 
 struct WSGIConstructor {
