@@ -8,7 +8,6 @@ use puff::python::greenlet::{greenlet_async, GreenletContext};
 use puff::runtime::RuntimeConfig;
 use puff::types::text::{Text, ToText};
 use puff::types::{Bytes, BytesBuilder};
-use puff::web::client::{Client, PuffClientResponse, PuffRequestBuilder};
 use puff::web::server::Router;
 use pyo3::prelude::*;
 use std::time::Duration;

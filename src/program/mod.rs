@@ -20,8 +20,8 @@
 //!         Command::new("my_custom_command")
 //!     }
 //!
-//!     fn runnable_from_args(&self, args: &ArgMatches, dispatcher: PuffContext) -> puff::errors::Result<Runnable> {
-//!         Ok(Runnable::new(dispatcher.dispatch(|| {
+//!     fn runnable_from_args(&self, args: &ArgMatches, context: PuffContext) -> puff::errors::Result<Runnable> {
+//!         Ok(Runnable::new(context.dispatcher().dispatch(|| {
 //!             println!("Hello World from a Puff coroutine!");
 //!             Ok(())
 //!         })))
@@ -92,9 +92,9 @@ impl Runnable {
 ///         Command::new("my_custom_command")
 ///     }
 ///
-///     fn runnable_from_args(&self, _args: &ArgMatches, dispatcher: PuffContext) -> puff::errors::Result<Runnable> {
-///         Ok(Runnable::new(dispatcher.dispatch(|| {
-///             // Do something in Puff
+///     fn runnable_from_args(&self, _args: &ArgMatches, context: PuffContext) -> puff::errors::Result<Runnable> {
+///         Ok(Runnable::new(context.dispatcher().dispatch(|| {
+///             // Do something in a Puff coroutine
 ///             Ok(())
 ///         })))
 ///     }

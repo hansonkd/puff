@@ -58,7 +58,6 @@ where
 }
 
 pub(crate) async fn run_local_wormhole_with_stack<F, R>(
-    dispatcher: PuffContext,
     s: DefaultStack,
     sender: oneshot::Sender<Result<R>>,
     f: F,
@@ -68,7 +67,7 @@ where
     R: 'static + Send,
 {
     Ok(
-        tokio::task::spawn_local(PuffWormhole::new(s, dispatcher, move || {
+        tokio::task::spawn_local(PuffWormhole::new(s, move || {
             // let r = DISPATCHER.sync_scope(dispatcher, || YIELDER.sync_scope(inner, f));
             let r = f();
             // If we can't send, the future wasn't awaited
@@ -270,7 +269,6 @@ impl Default for RuntimeConfig {
 }
 
 async fn run_new_stack<F, R>(
-    dispatcher: PuffContext,
     stack_size: usize,
     sender: oneshot::Sender<Result<R>>,
     f: F,
@@ -280,7 +278,7 @@ where
     R: 'static + Send,
 {
     let stack = DefaultStack::new(stack_size)?;
-    run_local_wormhole_with_stack(dispatcher, stack, sender, f).await
+    run_local_wormhole_with_stack( stack, sender, f).await
 }
 
 pub(crate) async fn run_with_config_on_local<F, R>(
@@ -293,7 +291,7 @@ where
     R: 'static + Send,
 {
     let stack_size = dispatcher.dispatcher().stack_size();
-    run_new_stack(dispatcher, stack_size, sender, f).await
+    run_new_stack(stack_size, sender, f).await
 }
 
 /// Start a default single-threaded runtime and run a closure in a Puff context.

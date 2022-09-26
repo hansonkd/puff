@@ -23,7 +23,6 @@ use std::task::{Context, Poll, Waker};
 
 use corosensei::{stack, CoroutineResult, ScopedCoroutine, Yielder};
 
-use crate::context::{PuffContext, PUFF_CONTEXT};
 use crate::types::Puff;
 use pyo3::{Py, Python};
 use std::cell::RefCell;
@@ -44,8 +43,7 @@ where
     Stack: stack::Stack + Send,
 {
     generator: Option<Cell<ScopedCoroutine<'a, Waker, Option<()>, (), Stack>>>,
-    ref_yielder: Rc<Mutex<*mut AsyncYielder<'static>>>,
-    puff_context: PuffContext,
+    ref_yielder: Rc<Mutex<*mut AsyncYielder<'static>>>
 }
 
 impl<'a, Stack> AsyncWormhole<'a, Stack>
@@ -55,19 +53,19 @@ where
     /// Returns a new AsyncWormhole, using the passed `stack` to execute the closure `f` on.
     /// The closure will not be executed right away, only if you pass AsyncWormhole to an
     /// async executor (.await on it)
-    pub fn new<F>(stack: Stack, dispatcher: PuffContext, f: F) -> Result<Self, Error>
+    pub fn new<F>(stack: Stack, f: F) -> Result<Self, Error>
     where
         F: FnOnce() -> () + 'a + Send,
     {
         let ref_yielder = Rc::new(Mutex::new(std::ptr::null_mut()));
         let mut coroutine_yielder = ref_yielder.clone();
-        let coroutine_dispatcher = dispatcher.clone();
         let generator = ScopedCoroutine::with_stack(stack, move |yielder, waker| {
-            let async_yielder = AsyncYielder::new(yielder, waker, coroutine_dispatcher.puff());
+            let async_yielder = AsyncYielder::new(yielder, waker);
             // coroutine_yielder.replace(async_yielder.as_pointer());
-            let mut mutex_changer = coroutine_yielder.lock().unwrap();
-            *mutex_changer = async_yielder.as_pointer();
-            drop(mutex_changer);
+            {
+                let mut mutex_changer = coroutine_yielder.lock().unwrap();
+                *mutex_changer = async_yielder.as_pointer();
+            }
             YIELDER.with(|y| {
                 *y.borrow_mut() = async_yielder.as_pointer();
             });
@@ -78,7 +76,6 @@ where
 
         Ok(Self {
             ref_yielder,
-            puff_context: dispatcher,
             generator: Some(Cell::new(generator)),
         })
     }
@@ -87,8 +84,6 @@ where
         YIELDER.with(|y| {
             *y.borrow_mut() = self.ref_yielder.lock().unwrap().clone();
         });
-
-        PUFF_CONTEXT.with(|d| *d.borrow_mut() = Some(self.puff_context.puff()));
     }
 }
 
@@ -152,20 +147,17 @@ where
 #[derive(Clone)]
 pub struct AsyncYielder<'a> {
     yielder: &'a Yielder<Waker, Option<()>>,
-    waker: Waker,
-    dispatcher: PuffContext,
+    waker: Waker
 }
 
 impl<'a> AsyncYielder<'a> {
     pub(crate) fn new(
         yielder: &'a Yielder<Waker, Option<()>>,
-        waker: Waker,
-        dispatcher: PuffContext,
+        waker: Waker
     ) -> Self {
         Self {
             yielder,
-            waker,
-            dispatcher,
+            waker
         }
     }
 

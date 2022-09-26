@@ -74,7 +74,7 @@ mod tests {
     fn check_mpsc() {
         let dispatcher = PuffContext::default();
         let (sender, mut recv) = channel();
-        dispatcher.dispatch(move || {
+        dispatcher.dispatcher().dispatch(move || {
             sender.send(42).unwrap_or(());
             Ok(sender.send(43).unwrap_or(()))
         });

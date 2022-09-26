@@ -26,6 +26,13 @@ pub struct PuffContext {
     redis: Option<RedisClient>,
 }
 
+// Context consists of a hierarchy of Contexts. PUFF_CONTEXT is the primary thread local that holds
+// the current context. PUFF_CONTEXT_WAITING is a Mutex used to bootstrap the variable into a tokio
+// thread. Since certain parts of the context require the tokio runtime, we have to start threads
+// with no PUFF_CONTEXT set, build the PuffContext, and then set the PUFF_CONTEXT_WAITING mutex.
+// If PUFF_CONTEXT is not set when trying to access it, it will look at the PUFF_CONTEXT_WAITING
+// and set PUFF_CONTEXT for the thread. This allows us to lazily set the context while avoiding
+// a mutex lock every time trying to access it.
 thread_local! {
     pub static PUFF_CONTEXT_WAITING: RefCell<Option<Arc<Mutex<Option<PuffContext>>>>> = RefCell::new(None);
     pub static PUFF_CONTEXT: RefCell<Option<PuffContext >> = RefCell::new(None);
@@ -154,7 +161,13 @@ impl PuffContext {
 impl Default for PuffContext {
     fn default() -> Self {
         let rt = Runtime::new().unwrap();
-        PuffContext::empty(rt.handle().clone())
+        let (notify_shutdown, _) = broadcast::channel(1);
+        let (dispatcher, waiting) = Dispatcher::new(notify_shutdown, RuntimeConfig::default());
+        let ctx = PuffContext::new(Arc::new(dispatcher), rt.handle().clone());
+        for w in waiting {
+            w.send(ctx.clone()).unwrap_or(());
+        }
+        ctx
     }
 }
 
