@@ -1,30 +1,28 @@
 //! Convert a `Router` into a `RunnableCommand`
+use crate::context::PuffContext;
 use crate::errors::Result;
 use crate::program::{Runnable, RunnableCommand};
-use crate::context::PuffContext;
+use crate::python::wsgi::{create_server_context, AsyncFn};
 use crate::web::server::Router;
-use crate::python::wsgi::{AsyncFn, create_server_context};
 use clap::{ArgMatches, Command};
 
-use std::net::SocketAddr;
-use axum::handler::HandlerWithoutStateExt;
-use futures_util::future::{BoxFuture, LocalBoxFuture};
-use futures_util::{FutureExt, TryFutureExt};
-use pyo3::{IntoPy, Py, PyAny, PyErr, PyObject, Python};
-use pyo3::exceptions::PyRuntimeError;
-use tokio::sync::oneshot;
-use tokio::sync::oneshot::Receiver;
-use tracing::{error, info};
-use crate::python::bootstrap_puff_globals;
 use crate::python::greenlet::GreenletDispatcher;
 use crate::python::wsgi::handler::WsgiHandler;
 use crate::types::Text;
-
+use axum::handler::HandlerWithoutStateExt;
+use futures_util::future::{BoxFuture, LocalBoxFuture};
+use futures_util::{FutureExt, TryFutureExt};
+use pyo3::exceptions::PyRuntimeError;
+use pyo3::{IntoPy, Py, PyAny, PyErr, PyObject, Python};
+use std::net::SocketAddr;
+use tokio::sync::oneshot;
+use tokio::sync::oneshot::Receiver;
+use tracing::{error, info};
 
 struct WSGIConstructor {
     addr: SocketAddr,
     router: Router,
-    dispatcher: PuffContext
+    dispatcher: PuffContext,
 }
 
 impl AsyncFn for WSGIConstructor {
@@ -41,7 +39,7 @@ pub struct WSGIServerCommand<R: IntoPy<Py<PyAny>> + Clone + 'static = ()> {
     router: Router,
     module: Text,
     attr: Text,
-    global: Option<R>
+    global: Option<R>,
 }
 
 impl<G: IntoPy<Py<PyAny>> + Clone + 'static> WSGIServerCommand<G> {
@@ -50,15 +48,20 @@ impl<G: IntoPy<Py<PyAny>> + Clone + 'static> WSGIServerCommand<G> {
             router,
             module: module.into(),
             attr: attr.into(),
-            global: None
+            global: None,
         }
     }
-    pub fn with_global<M: Into<Text>, A: Into<Text>>(router: Router, module: M, attr: A, global: G) -> Self {
+    pub fn with_global<M: Into<Text>, A: Into<Text>>(
+        router: Router,
+        module: M,
+        attr: A,
+        global: G,
+    ) -> Self {
         Self {
             router,
             module: module.into(),
             attr: attr.into(),
-            global: Some(global)
+            global: Some(global),
         }
     }
 }
@@ -68,38 +71,39 @@ impl<R: IntoPy<Py<PyAny>> + Clone + 'static> RunnableCommand for WSGIServerComma
         Command::new("wsgi")
     }
 
-    fn runnable_from_args(
-        &self,
-        _args: &ArgMatches,
-        context: PuffContext,
-    ) -> Result<Runnable> {
+    fn runnable_from_args(&self, _args: &ArgMatches, context: PuffContext) -> Result<Runnable> {
         let this_self = self.clone();
         let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-        bootstrap_puff_globals();
 
-        info!("Creating to start server on {:?}", addr);
         let module_str = self.module.clone().into_string();
         let attr_str = self.attr.clone().into_string();
         let g_obj = this_self.global.clone();
         let fut = async move {
             let greenlet = Python::with_gil(|py| {
-                        let global_obj =
-                match g_obj {
+                let global_obj = match g_obj {
                     Some(v) => v.into_py(py),
-                    None => py.None()
+                    None => py.None(),
                 };
                 GreenletDispatcher::new(context.clone(), global_obj)
-
             })?;
-            let wsgi_app = tokio::task::spawn_blocking(move || Python::with_gil(|py| {
-                Result::Ok(PyObject::from(py.import(module_str.as_str())?.getattr(attr_str)?))
-            })).await??;
+            let wsgi_app = tokio::task::spawn_blocking(move || {
+                Python::with_gil(|py| {
+                    Result::Ok(PyObject::from(
+                        py.import(module_str.as_str())?.getattr(attr_str)?,
+                    ))
+                })
+            })
+            .await??;
             info!("Preparing to start server on {:?}", addr);
             let mut ctx = create_server_context(
                 wsgi_app,
-                WSGIConstructor{addr, dispatcher: context.clone(), router: this_self.router.clone()},
+                WSGIConstructor {
+                    addr,
+                    dispatcher: context.clone(),
+                    router: this_self.router.clone(),
+                },
                 context,
-                Some(greenlet)
+                Some(greenlet),
             );
             let shutdown = tokio::signal::ctrl_c();
             // let result = ctx.start()?.await;
@@ -127,7 +131,13 @@ impl<R: IntoPy<Py<PyAny>> + Clone + 'static> RunnableCommand for WSGIServerComma
     }
 }
 
-async fn start(addr: SocketAddr, router: Router, dispatcher: PuffContext, shutdown_signal: oneshot::Receiver<()>, wsgi: WsgiHandler) {
+async fn start(
+    addr: SocketAddr,
+    router: Router,
+    dispatcher: PuffContext,
+    shutdown_signal: oneshot::Receiver<()>,
+    wsgi: WsgiHandler,
+) {
     let app = router.into_axum_router(dispatcher).fallback(wsgi);
     info!("Starting server on {:?}", addr);
     if let Err(err) = axum::Server::bind(&addr)
@@ -137,4 +147,3 @@ async fn start(addr: SocketAddr, router: Router, dispatcher: PuffContext, shutdo
         eprintln!("error running server: {err}");
     };
 }
-

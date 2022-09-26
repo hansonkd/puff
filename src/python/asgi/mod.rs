@@ -1,12 +1,14 @@
 pub mod handler;
 
+use anyhow::{anyhow, Result};
+use axum::handler::HandlerWithoutStateExt;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use anyhow::anyhow;
-use anyhow::Result;
-use axum::handler::HandlerWithoutStateExt;
 
+use crate::context::PuffContext;
+use crate::python::asgi::handler::AsgiHandler;
+use crate::web::server::Router;
 use futures::future::BoxFuture;
 use futures_util::future::LocalBoxFuture;
 use futures_util::FutureExt;
@@ -14,10 +16,6 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use tokio::sync::{mpsc, oneshot, Mutex};
-use crate::python::asgi::handler::AsgiHandler;
-use crate::context::PuffContext;
-use crate::web::server::Router;
-
 
 #[pyclass]
 struct Receiver {
@@ -87,7 +85,7 @@ pub trait AsyncFn {
 impl<T, F> AsyncFn for T
 where
     T: FnOnce(AsgiHandler, oneshot::Receiver<()>) -> F,
-    F: Future<Output = ()>  + 'static,
+    F: Future<Output = ()> + 'static,
 {
     fn call(self, handler: AsgiHandler, rx: oneshot::Receiver<()>) -> LocalBoxFuture<'static, ()> {
         Box::pin(self(handler, rx))
@@ -102,7 +100,6 @@ pub struct ServerContext<T: AsyncFn> {
     app: Option<PyObject>,
     server: Option<T>,
 }
-
 
 impl<T: AsyncFn> ServerContext<T> {
     fn shutdown<'a>(&'a mut self, py: Python<'a>) -> PyResult<&'a PyAny> {
@@ -134,7 +131,8 @@ impl<T: AsyncFn> ServerContext<T> {
             self.wait_shutdown_tx.take(),
         ) {
             (Some(rx), Some(app), Some(server), Some(tx)) => {
-                let locals = Python::with_gil(|py| pyo3_asyncio::TaskLocals::with_running_loop(py))?;
+                let locals =
+                    Python::with_gil(|py| pyo3_asyncio::TaskLocals::with_running_loop(py))?;
                 let (lifespan_receiver, lifespan_receiver_tx) = Receiver::new();
                 let (lifespan_sender, mut lifespan_sender_rx) = Sender::new(locals.clone());
                 //let (ready_tx, ready_rx) = oneshot::channel::<()>();
@@ -164,9 +162,7 @@ impl<T: AsyncFn> ServerContext<T> {
                         Ok::<Py<PyDict>, PyErr>(scope)
                     })?;
                     if lifespan_receiver_tx.send(lifespan_startup).is_err() {
-                        return Err(anyhow!(
-                            "Failed to send lifespan startup",
-                        ));
+                        return Err(anyhow!("Failed to send lifespan startup",));
                     }
 
                     // will continue running until the server sends lifespan.shutdown
@@ -186,9 +182,7 @@ impl<T: AsyncFn> ServerContext<T> {
                                     return Ok(());
                                 }
                             }
-                            Err(anyhow!(
-                                "Failed during asgi startup",
-                            ))
+                            Err(anyhow!("Failed during asgi startup",))
                         })?;
                     }
 
@@ -205,9 +199,7 @@ impl<T: AsyncFn> ServerContext<T> {
                         Ok::<Py<PyDict>, PyErr>(scope)
                     })?;
                     if lifespan_receiver_tx.send(lifespan_shutdown).is_err() {
-                        return Err(anyhow!(
-                            "Failed to send lifespan shutdown",
-                        ));
+                        return Err(anyhow!("Failed to send lifespan shutdown",));
                     }
 
                     // receive the shutdown success, event though we don't care about it. without this the sender_rx gets dropped too early and the shutdown fails.
@@ -227,10 +219,7 @@ impl<T: AsyncFn> ServerContext<T> {
     }
 }
 
-pub fn create_server_context<T: AsyncFn>(
-    app: PyObject,
-    server: T,
-) -> ServerContext<T> {
+pub fn create_server_context<T: AsyncFn>(app: PyObject, server: T) -> ServerContext<T> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let (wait_shutdown_tx, wait_shutdown_rx) = tokio::sync::oneshot::channel();
     ServerContext {

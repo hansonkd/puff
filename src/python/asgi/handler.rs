@@ -1,31 +1,20 @@
-use asgi::Sender;
-use axum::{
-    body::{boxed, Body, BoxBody, Bytes},
-    handler::Handler,
-    headers::HeaderName,
-    http::{HeaderValue, Request, StatusCode, Version},
-    response::{IntoResponse, Response},
-};
-use pyo3::types::{PyBytes, PyDict, PyLong, PyString};
-use pyo3::{
-    exceptions::PyRuntimeError,
-    prelude::*,
-    types::{PyList, PyMapping},
-    PyDowncastError,
-};
-use std::{
-    future::Future,
-    pin::Pin,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
-use tokio::sync::{
-    mpsc::{self, UnboundedReceiver},
-    Mutex,
-};
 use crate::python::asgi;
+use asgi::Sender;
+use axum::body::{boxed, Body, BoxBody, Bytes};
+use axum::handler::Handler;
+use axum::headers::HeaderName;
+use axum::http::{HeaderValue, Request, StatusCode, Version};
+use axum::response::{IntoResponse, Response};
+use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
+use pyo3::types::{PyBytes, PyDict, PyList, PyLong, PyMapping, PyString};
+use pyo3::PyDowncastError;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tokio::sync::mpsc::{self, UnboundedReceiver};
+use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub struct AsgiHandler {

@@ -1,28 +1,27 @@
 //! Convert a `Router` into a `RunnableCommand`
+use crate::context::PuffContext;
 use crate::errors::Result;
 use crate::program::{Runnable, RunnableCommand};
-use crate::context::PuffContext;
+use crate::python::asgi::{create_server_context, AsyncFn};
 use crate::web::server::Router;
-use crate::python::asgi::{AsyncFn, create_server_context};
 use clap::{ArgMatches, Command};
 
-use std::net::SocketAddr;
+use crate::python::asgi::handler::AsgiHandler;
+use crate::types::Text;
 use axum::handler::HandlerWithoutStateExt;
 use futures_util::future::{BoxFuture, LocalBoxFuture};
 use futures_util::{FutureExt, TryFutureExt};
-use pyo3::{PyErr, PyObject, Python};
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::{PyErr, PyObject, Python};
+use std::net::SocketAddr;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::Receiver;
 use tracing::info;
-use crate::python::asgi::handler::AsgiHandler;
-use crate::types::Text;
-
 
 struct ASGIConstructor {
     addr: SocketAddr,
     router: Router,
-    dispatcher: PuffContext
+    dispatcher: PuffContext,
 }
 
 impl AsyncFn for ASGIConstructor {
@@ -38,7 +37,7 @@ impl AsyncFn for ASGIConstructor {
 pub struct ASGIServerCommand {
     router: Router,
     module: Text,
-    attr: Text
+    attr: Text,
 }
 
 impl ASGIServerCommand {
@@ -46,7 +45,7 @@ impl ASGIServerCommand {
         Self {
             router,
             module: module.into(),
-            attr: attr.into()
+            attr: attr.into(),
         }
     }
 }
@@ -56,22 +55,26 @@ impl RunnableCommand for ASGIServerCommand {
         Command::new("asgi")
     }
 
-    fn runnable_from_args(
-        &self,
-        _args: &ArgMatches,
-        context: PuffContext,
-    ) -> Result<Runnable> {
+    fn runnable_from_args(&self, _args: &ArgMatches, context: PuffContext) -> Result<Runnable> {
         let this_self = self.clone();
         let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
         let asgi_app: PyObject = Python::with_gil(|py| {
-            Result::Ok(py.import(self.module.as_str())?.getattr(self.attr.as_str())?.into())
+            Result::Ok(
+                py.import(self.module.as_str())?
+                    .getattr(self.attr.as_str())?
+                    .into(),
+            )
         })?;
         info!("Creating to start server on {:?}", addr);
         let fut = async move {
             info!("Preparing to start server on {:?}", addr);
             let mut ctx = create_server_context(
                 asgi_app,
-                ASGIConstructor{addr, dispatcher: context, router: this_self.router}
+                ASGIConstructor {
+                    addr,
+                    dispatcher: context,
+                    router: this_self.router,
+                },
             );
             let result = ctx.start()?.await;
             result
@@ -80,7 +83,13 @@ impl RunnableCommand for ASGIServerCommand {
     }
 }
 
-async fn start(addr: SocketAddr, router: Router, dispatcher: PuffContext, shutdown_signal: oneshot::Receiver<()>, asgi: AsgiHandler) {
+async fn start(
+    addr: SocketAddr,
+    router: Router,
+    dispatcher: PuffContext,
+    shutdown_signal: oneshot::Receiver<()>,
+    asgi: AsgiHandler,
+) {
     let app = router.into_axum_router(dispatcher).fallback(asgi);
     info!("Starting server on {:?}", addr);
     if let Err(err) = axum::Server::bind(&addr)
@@ -95,4 +104,3 @@ async fn start(addr: SocketAddr, router: Router, dispatcher: PuffContext, shutdo
         eprintln!("error running server: {err}");
     };
 }
-

@@ -44,15 +44,14 @@ pub mod vector;
 pub mod vector_builder;
 
 use axum::body::Bytes as AxumBytes;
-pub use bytes_builder::BytesBuilder;
-use chrono::{Date, DateTime, Utc};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::ops::Deref;
 use axum::response::{IntoResponse, Response};
 use bb8_redis::redis::{ErrorKind, FromRedisValue, RedisError, RedisResult, Value};
-use pyo3::{Py, PyObject};
-use pyo3::{IntoPy, Python, ToPyObject};
+pub use bytes_builder::BytesBuilder;
+use chrono::{Date, DateTime, Utc};
 use pyo3::types::PyBytes;
+use pyo3::{IntoPy, Py, PyObject, Python, ToPyObject};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::ops::Deref;
 
 pub use map::Map;
 pub use map_builder::MapBuilder;
@@ -94,7 +93,10 @@ impl FromRedisValue for Bytes {
             val => Err(RedisError::from((
                 ErrorKind::TypeError,
                 "Response was of incompatible type",
-                format!("Response type not bytes compatible. (response was {:?})", val),
+                format!(
+                    "Response type not bytes compatible. (response was {:?})",
+                    val
+                ),
             ))),
         }
     }
@@ -143,7 +145,6 @@ impl ToPyObject for Bytes {
         self.clone().into_py(py).to_object(py)
     }
 }
-
 
 impl Deref for Bytes {
     type Target = [u8];

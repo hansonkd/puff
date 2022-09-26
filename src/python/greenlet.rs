@@ -1,29 +1,31 @@
-use std::future::Future;
-use pyo3::{IntoPy, PyObject, PyResult, Python};
+use crate::context::PuffContext;
+use crate::errors::PuffResult;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
+use pyo3::{IntoPy, PyObject, PyResult, Python};
+use std::future::Future;
 use tokio::sync::oneshot;
-use crate::errors::PuffResult;
-use crate::context::PuffContext;
 
 #[pyclass]
 pub struct GreenletReturn(Option<oneshot::Sender<PyResult<PyObject>>>);
 
 #[pymethods]
 impl GreenletReturn {
-    pub fn __call__(&mut self, py: Python, value: PyObject, exception: Option<&PyException>) -> PyResult<()> {
+    pub fn __call__(
+        &mut self,
+        py: Python,
+        value: PyObject,
+        exception: Option<&PyException>,
+    ) -> PyResult<()> {
         match self.0.take() {
-            Some(sender) => {
-                match exception {
-                    Some(e) => Ok(sender.send(Err(e.into())).unwrap_or(())),
-                    None => Ok(sender.send(Ok(value)).unwrap_or(()))
-                }
+            Some(sender) => match exception {
+                Some(e) => Ok(sender.send(Err(e.into())).unwrap_or(())),
+                None => Ok(sender.send(Ok(value)).unwrap_or(())),
             },
             None => Err(PyException::new_err("Already used GreenletReturn")),
         }
     }
 }
-
 
 #[pyclass]
 #[derive(Clone)]
@@ -45,9 +47,8 @@ impl GreenletContext {
 #[derive(Clone)]
 pub struct GreenletDispatcher {
     thread_obj: PyObject,
-    thread_dispatcher: GreenletContext
+    thread_dispatcher: GreenletContext,
 }
-
 
 impl GreenletDispatcher {
     pub fn new(dispatcher: PuffContext, global_state: PyObject) -> PyResult<Self> {
@@ -58,33 +59,74 @@ impl GreenletDispatcher {
             PyResult::Ok(ret.into_py(py))
         })?;
         let thread_dispatcher = GreenletContext(dispatcher, global_state);
-        PyResult::Ok(Self { thread_obj, thread_dispatcher })
+        PyResult::Ok(Self {
+            thread_obj,
+            thread_dispatcher,
+        })
     }
 
-    pub fn dispatch(&self, function: PyObject, args: PyObject, kwargs: PyObject) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
+    pub fn dispatch(
+        &self,
+        function: PyObject,
+        args: PyObject,
+        kwargs: PyObject,
+    ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
         Python::with_gil(|py| self.dispatch_py(py, function, args, kwargs))
     }
 
-    pub fn dispatch_py(&self, py: Python, function: PyObject, args: PyObject, kwargs: PyObject) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
+    pub fn dispatch_py(
+        &self,
+        py: Python,
+        function: PyObject,
+        args: PyObject,
+        kwargs: PyObject,
+    ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
         let (sender, rec) = oneshot::channel();
         let returner = GreenletReturn(Some(sender));
-        self.thread_obj.call_method1(py, "spawn", (function, self.thread_dispatcher.clone(), args, kwargs, returner))?;
+        self.thread_obj.call_method1(
+            py,
+            "spawn",
+            (
+                function,
+                self.thread_dispatcher.clone(),
+                args,
+                kwargs,
+                returner,
+            ),
+        )?;
         Ok(rec)
     }
 }
 
-async fn handle_return<F: Future<Output=PuffResult<R>> + Send + 'static, R: ToPyObject + 'static>(return_fun: PyObject, f: F) {
+async fn handle_return<
+    F: Future<Output = PuffResult<R>> + Send + 'static,
+    R: ToPyObject + 'static,
+>(
+    return_fun: PyObject,
+    f: F,
+) {
     let res = f.await;
     Python::with_gil(|py| match res {
-        Ok(r) => return_fun.call1(py, (r.to_object(py), py.None())).expect("Could not return value"),
+        Ok(r) => return_fun
+            .call1(py, (r.to_object(py), py.None()))
+            .expect("Could not return value"),
         Err(e) => {
             let py_err = PyException::new_err(format!("Greenlet async exception: {e}"));
-            return_fun.call1(py, (py.None(), py_err)).expect("Could not return exception")
+            return_fun
+                .call1(py, (py.None(), py_err))
+                .expect("Could not return exception")
         }
     });
 }
 
-pub fn greenlet_async<F: Future<Output=PuffResult<R>> + Send + 'static, R: ToPyObject + 'static>(ctx: &GreenletContext, return_fun: PyObject, f: F) {
+pub fn greenlet_async<
+    F: Future<Output = PuffResult<R>> + Send + 'static,
+    R: ToPyObject + 'static,
+>(
+    ctx: &GreenletContext,
+    return_fun: PyObject,
+    f: F,
+) {
     let h = ctx.dispatcher().handle();
     h.spawn(handle_return(return_fun, f));
 }

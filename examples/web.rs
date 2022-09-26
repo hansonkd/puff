@@ -1,9 +1,9 @@
+use puff::errors::Result;
 use puff::program::commands::http::ServerCommand;
 use puff::program::Program;
 use puff::types::text::{Text, ToText};
-use puff::errors::Result;
-use puff::web::server::Router;
 use puff::web::client::{Client, PuffClientResponse, PuffRequestBuilder};
+use puff::web::server::Router;
 use std::time::Duration;
 
 fn main() {
@@ -21,5 +21,8 @@ fn main() {
 // Basic handler that responds with a static string
 fn root() -> Result<Text> {
     let client = Client::new();
-    client.get("http://google.com/").puff_response()?.puff_text()
+    client
+        .get("http://google.com/")
+        .puff_response()?
+        .puff_text()
 }

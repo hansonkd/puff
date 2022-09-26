@@ -21,8 +21,7 @@ use std::time::Duration;
 
 use crate::errors::Error;
 
-use crate::context::{PuffContext, with_puff_context};
-
+use crate::context::{with_puff_context, PuffContext};
 
 /// A Task representing a currently executing coroutine. Can be awaited on using `join`.
 ///
@@ -308,7 +307,8 @@ mod tests {
                 let ret = Task::spawn(move || {
                     println!("Inner Task Start");
                     Ok(59)
-                }).join();
+                })
+                .join();
                 println!("Outer Task End");
                 ret
             });

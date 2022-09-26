@@ -1,20 +1,20 @@
-use std::sync::{Arc, Mutex};
-use tokio::runtime::{Handle, Runtime};
-use tokio::sync::{broadcast, oneshot};
-use std::collections::HashMap;
-use std::sync::atomic::AtomicUsize;
-use pyo3::{Py, PyAny};
-use futures_util::future::BoxFuture;
-use tokio::task::LocalSet;
-use futures_util::FutureExt;
-use std::cell::RefCell;
 use crate::databases::redis::RedisClient;
 use crate::errors::Error;
 use crate::runtime::dispatcher::{Dispatcher, Stats};
-use crate::runtime::{run_with_config_on_local, RuntimeConfig, Strategy};
 use crate::runtime::runner::LocalSpawner;
 use crate::runtime::shutdown::Shutdown;
+use crate::runtime::{run_with_config_on_local, RuntimeConfig, Strategy};
 use crate::types::Puff;
+use futures_util::future::BoxFuture;
+use futures_util::FutureExt;
+use pyo3::{Py, PyAny};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::atomic::AtomicUsize;
+use std::sync::{Arc, Mutex};
+use tokio::runtime::{Handle, Runtime};
+use tokio::sync::{broadcast, oneshot};
+use tokio::task::LocalSet;
 
 /// The central control structure for dispatching tasks onto coroutine workers.
 /// All tasks in the same runtime will have access to the same dispatcher. The dispatcher contains
@@ -23,7 +23,7 @@ use crate::types::Puff;
 pub struct PuffContext {
     dispatcher: Arc<Dispatcher>,
     handle: Handle,
-    redis: Option<RedisClient>
+    redis: Option<RedisClient>,
 }
 
 thread_local! {
@@ -32,72 +32,72 @@ thread_local! {
 }
 
 pub fn set_puff_context(context: PuffContext) {
-    PUFF_CONTEXT.with(|mut d| {
-        *d.borrow_mut() = Some(context.puff())
-    });
+    PUFF_CONTEXT.with(|mut d| *d.borrow_mut() = Some(context.puff()));
 }
 
 pub fn set_puff_context_waiting(context: Arc<Mutex<Option<PuffContext>>>) {
-    PUFF_CONTEXT_WAITING.with(|mut d| {
-        *d.borrow_mut() = Some(context.clone())
-    });
+    PUFF_CONTEXT_WAITING.with(|mut d| *d.borrow_mut() = Some(context.clone()));
 }
 
 pub fn with_puff_context<F: FnOnce(PuffContext) -> R, R>(f: F) -> R {
-    let dispatcher = PUFF_CONTEXT.with(|d| {
-        match d.borrow().clone() {
-            Some(v) => v,
-            None => PUFF_CONTEXT_WAITING.with(|w| {
-                match w.borrow().clone() {
-                    Some(r) => {
-                        let locked = r.lock().unwrap();
-                        match &*locked {
-                            Some(v) => {
-                                set_puff_context(v.puff());
-                                v.puff()
-                            }
-                            None => {
-                                panic!("Accessed puff context before context was set.")
-                            }
-                        }
-                    },
+    let maybe_context = PUFF_CONTEXT.with(|d| d.borrow().clone());
+
+    let context = match maybe_context {
+        Some(v) => v,
+        None => PUFF_CONTEXT_WAITING.with(|w| match w.borrow().clone() {
+            Some(r) => {
+                let locked = r.lock().unwrap();
+                match &*locked {
+                    Some(v) => {
+                        set_puff_context(v.puff());
+                        v.puff()
+                    }
                     None => {
-                        panic!("Dispatcher can only be used from a puff context.")
+                        panic!("Accessed puff context before context was set.")
                     }
                 }
-            })
-        }
-    });
-    f(dispatcher)
+            }
+            None => {
+                panic!("Dispatcher can only be used from a puff context.")
+            }
+        }),
+    };
+    f(context)
 }
 
 pub fn with_context(context: PuffContext) {
-    PUFF_CONTEXT.with(|mut d| {
-        *d.borrow_mut() = Some(context.puff())
-    });
+    PUFF_CONTEXT.with(|mut d| *d.borrow_mut() = Some(context.puff()));
 }
 
 impl PuffContext {
     /// Creates an empty RuntimeDispatcher with no active threads for testing.
     pub fn empty(handle: Handle) -> PuffContext {
         let (notify_shutdown, _) = broadcast::channel(1);
-        Self{
+        Self {
             dispatcher: Arc::new(Dispatcher::empty(notify_shutdown)),
             handle: handle,
-            redis: None
+            redis: None,
         }
     }
 
     /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`. This function will start
     /// the number of `coroutine_threads` specified in your config.
     pub fn new(dispatcher: Arc<Dispatcher>, handle: Handle) -> PuffContext {
-        Self::new_with_options(handle, dispatcher,None)
+        Self::new_with_options(handle, dispatcher, None)
     }
 
     /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`. This function will start
     /// the number of `coroutine_threads` specified in your config. Includes options.
-    pub fn new_with_options(handle: Handle, dispatcher: Arc<Dispatcher>, redis: Option<RedisClient>) -> PuffContext {
-        let arc_dispatcher = Self{dispatcher, handle, redis};
+    pub fn new_with_options(
+        handle: Handle,
+        dispatcher: Arc<Dispatcher>,
+        redis: Option<RedisClient>,
+    ) -> PuffContext {
+        let arc_dispatcher = Self {
+            dispatcher,
+            handle,
+            redis,
+        };
 
         arc_dispatcher
     }
@@ -112,7 +112,9 @@ impl PuffContext {
 
     /// The configured redis client. Panics if not enabled.
     pub fn redis(&self) -> RedisClient {
-        self.redis.clone().expect("Redis is not configured for this runtime.")
+        self.redis
+            .clone()
+            .expect("Redis is not configured for this runtime.")
     }
 
     /// The coroutine dispatcher.
@@ -120,7 +122,7 @@ impl PuffContext {
         self.dispatcher.clone()
     }
 
-        /// Dispatch a task onto a blocking thread. This must be used if you use any type of non-async
+    /// Dispatch a task onto a blocking thread. This must be used if you use any type of non-async
     /// blocking functions (like from the std-lib). This is also useful if you have a task that takes
     /// a lot of computational power.
     ///
@@ -157,5 +159,3 @@ impl Default for PuffContext {
 }
 
 impl Puff for PuffContext {}
-
-

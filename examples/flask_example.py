@@ -12,7 +12,7 @@ SAMPLE = 1000
 app = Flask(__name__)
 r = redis.Redis(host='localhost')
 
-# puff_redis = puff.get_redis()
+puff_redis = puff.get_redis()
 
 @app.route("/puff/")
 def hello_world_puff():

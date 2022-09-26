@@ -3,16 +3,16 @@
 use crate::runtime::wormhole::{AsyncWormhole, AsyncYielder, YIELDER};
 use corosensei::stack::DefaultStack;
 
+use crate::context;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, oneshot};
-use crate::context;
 
+use crate::context::{PuffContext, PUFF_CONTEXT};
 use crate::errors::Result;
-use crate::types::Puff;
-use crate::context::{PUFF_CONTEXT, PuffContext};
 use crate::runtime::dispatcher::Dispatcher;
+use crate::types::Puff;
 
 pub mod dispatcher;
 pub mod runner;
@@ -20,7 +20,6 @@ pub mod shutdown;
 mod wormhole;
 
 type PuffWormhole = AsyncWormhole<'static, DefaultStack>;
-
 
 /// Suspend execution of the current coroutine and run the future. This function MUST be called from
 /// a Puff task. By default this function will run the future on the same single-threaded Tokio
@@ -32,9 +31,14 @@ pub fn yield_to_future<Fut, R>(future: Fut) -> R
 where
     Fut: Future<Output = R>,
 {
-    let m = YIELDER.try_with(|m| m.clone()).expect("async_suspend must be called from a Puff context");
+    let m = YIELDER
+        .try_with(|m| m.clone())
+        .expect("async_suspend must be called from a Puff context");
 
-    match unsafe { let x = m.borrow().as_mut(); x } {
+    match unsafe {
+        let x = m.borrow().as_mut();
+        x
+    } {
         Some(l) => l.async_suspend(future),
         None => panic!("async_suspend must be called from a Puff context"),
     }
@@ -163,7 +167,9 @@ impl RuntimeConfig {
         self.asyncio
     }
     /// Get if a global redis will be enabled.
-    pub fn redis(&self) -> bool { self.redis }
+    pub fn redis(&self) -> bool {
+        self.redis
+    }
 
     /// Set the tokio_worker_threads for coroutines.
     ///
@@ -287,8 +293,7 @@ where
     R: 'static + Send,
 {
     let stack_size = dispatcher.dispatcher().stack_size();
-    run_new_stack(dispatcher, stack_size, sender, f)
-        .await
+    run_new_stack(dispatcher, stack_size, sender, f).await
 }
 
 /// Start a default single-threaded runtime and run a closure in a Puff context.

@@ -1,9 +1,8 @@
-pub use reqwest::Client;
-use reqwest::{RequestBuilder, Response};
+use crate::errors::Result;
 use crate::runtime::{yield_to_future, yield_to_future_io};
 use crate::types::{Bytes, Puff, Text};
-use crate::errors::Result;
-
+pub use reqwest::Client;
+use reqwest::{RequestBuilder, Response};
 
 pub trait PuffRequestBuilder {
     fn puff_response(self) -> Result<Response>;
@@ -14,7 +13,6 @@ impl PuffRequestBuilder for RequestBuilder {
         Ok(yield_to_future_io(self.send())??)
     }
 }
-
 
 pub trait PuffClientResponse {
     fn puff_text(self) -> Result<Text>;
@@ -35,6 +33,5 @@ impl PuffClientResponse for Response {
         Ok(yield_to_future(self.chunk())?.map(|v| Bytes::from(v)))
     }
 }
-
 
 impl Puff for Client {}

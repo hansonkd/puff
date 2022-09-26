@@ -23,12 +23,12 @@ use std::task::{Context, Poll, Waker};
 
 use corosensei::{stack, CoroutineResult, ScopedCoroutine, Yielder};
 
+use crate::context::{PuffContext, PUFF_CONTEXT};
+use crate::types::Puff;
+use pyo3::{Py, Python};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Mutex;
-use pyo3::{Py, Python};
-use crate::context::{PUFF_CONTEXT, PuffContext};
-use crate::types::Puff;
 
 thread_local! {
     pub static YIELDER: RefCell<*mut AsyncYielder<'static>> = RefCell::new(std::ptr::null_mut());
@@ -45,7 +45,7 @@ where
 {
     generator: Option<Cell<ScopedCoroutine<'a, Waker, Option<()>, (), Stack>>>,
     ref_yielder: Rc<Mutex<*mut AsyncYielder<'static>>>,
-    puff_context: PuffContext
+    puff_context: PuffContext,
 }
 
 impl<'a, Stack> AsyncWormhole<'a, Stack>
@@ -74,7 +74,6 @@ where
             let _ = async_yielder;
             let finished = Some(f());
             yielder.suspend(finished);
-
         });
 
         Ok(Self {
@@ -89,9 +88,7 @@ where
             *y.borrow_mut() = self.ref_yielder.lock().unwrap().clone();
         });
 
-        PUFF_CONTEXT.with(|d| {
-            *d.borrow_mut() = Some(self.puff_context.puff())
-        });
+        PUFF_CONTEXT.with(|d| *d.borrow_mut() = Some(self.puff_context.puff()));
     }
 }
 
@@ -112,8 +109,6 @@ where
             .get_mut()
             .resume(cx.waker().clone());
 
-
-
         match result {
             // If we call the future after it completed it will always return Poll::Pending.
             // But polling a completed future is either way undefined behaviour.
@@ -122,7 +117,7 @@ where
                 // self.context.exit_context().unwrap_or(());
                 // println!("Exiting pycontext pending");
                 Poll::Pending
-            },
+            }
             CoroutineResult::Yield(Some(out)) => {
                 // Poll one last time to finish the generator
                 self.generator
@@ -138,10 +133,9 @@ where
     }
 }
 
-
 impl<'a, Stack> Drop for AsyncWormhole<'a, Stack>
 where
-    Stack: stack::Stack + Send
+    Stack: stack::Stack + Send,
 {
     fn drop(&mut self) {
         // Dropping a generator can cause an unwind and execute code inside of the separate context.
@@ -159,12 +153,20 @@ where
 pub struct AsyncYielder<'a> {
     yielder: &'a Yielder<Waker, Option<()>>,
     waker: Waker,
-    dispatcher: PuffContext
+    dispatcher: PuffContext,
 }
 
 impl<'a> AsyncYielder<'a> {
-    pub(crate) fn new(yielder: &'a Yielder<Waker, Option<()>>, waker: Waker, dispatcher: PuffContext) -> Self {
-        Self { yielder, waker, dispatcher }
+    pub(crate) fn new(
+        yielder: &'a Yielder<Waker, Option<()>>,
+        waker: Waker,
+        dispatcher: PuffContext,
+    ) -> Self {
+        Self {
+            yielder,
+            waker,
+            dispatcher,
+        }
     }
 
     /// Takes an `impl Future` and awaits it, returning the value from it once ready.
@@ -177,9 +179,7 @@ impl<'a> AsyncYielder<'a> {
             let mut cx = Context::from_waker(&mut self.waker);
             self.waker = match future.as_mut().poll(&mut cx) {
                 Poll::Pending => self.yielder.suspend(None),
-                Poll::Ready(result) => {
-                    return result
-                },
+                Poll::Ready(result) => return result,
             };
         }
     }

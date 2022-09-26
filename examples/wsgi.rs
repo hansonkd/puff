@@ -1,17 +1,17 @@
-use puff::program::commands::wsgi::WSGIServerCommand;
-use puff::program::Program;
-use puff::types::text::{Text, ToText};
-use puff::errors::{PuffResult, Result};
-use puff::web::server::Router;
-use puff::web::client::{Client, PuffClientResponse, PuffRequestBuilder};
-use std::time::Duration;
 use bb8_redis::redis::Cmd;
 use futures_util::future::join_all;
 use puff::databases::redis::with_redis;
-use puff::runtime::RuntimeConfig;
-use puff::types::{Bytes, BytesBuilder};
-use pyo3::prelude::*;
+use puff::errors::{PuffResult, Result};
+use puff::program::commands::wsgi::WSGIServerCommand;
+use puff::program::Program;
 use puff::python::greenlet::{greenlet_async, GreenletContext};
+use puff::runtime::RuntimeConfig;
+use puff::types::text::{Text, ToText};
+use puff::types::{Bytes, BytesBuilder};
+use puff::web::client::{Client, PuffClientResponse, PuffRequestBuilder};
+use puff::web::server::Router;
+use pyo3::prelude::*;
+use std::time::Duration;
 
 #[pyclass]
 #[derive(Clone)]
@@ -19,7 +19,14 @@ struct MyState;
 
 #[pymethods]
 impl MyState {
-    fn concat_redis_gets(&self, py: Python, ctx: &GreenletContext, return_fun: PyObject, key: &str, num: usize) -> PyResult<PyObject> {
+    fn concat_redis_gets(
+        &self,
+        py: Python,
+        ctx: &GreenletContext,
+        return_fun: PyObject,
+        key: &str,
+        num: usize,
+    ) -> PyResult<PyObject> {
         let mut vec = Vec::with_capacity(num);
         for _ in 0..num {
             vec.push(Cmd::get(key))
@@ -29,7 +36,13 @@ impl MyState {
 }
 
 impl MyState {
-    fn run_command_concat(&self, py: Python, ctx: &GreenletContext, return_fun: PyObject, commands: Vec<Cmd>) -> PyResult<PyObject> {
+    fn run_command_concat(
+        &self,
+        py: Python,
+        ctx: &GreenletContext,
+        return_fun: PyObject,
+        commands: Vec<Cmd>,
+    ) -> PyResult<PyObject> {
         let pool = ctx.dispatcher().redis().pool();
 
         greenlet_async(ctx, return_fun, async move {
@@ -58,7 +71,6 @@ impl MyState {
     }
 }
 
-
 fn main() {
     let router = Router::new().get("/rust/", || {
         let r = with_redis(|r| {
@@ -76,6 +88,11 @@ fn main() {
     Program::new("my_first_app")
         .about("This is my first app")
         .runtime_config(rc)
-        .command(WSGIServerCommand::with_global(router, "flask_example", "app", MyState))
+        .command(WSGIServerCommand::with_global(
+            router,
+            "flask_example",
+            "app",
+            MyState,
+        ))
         .run()
 }

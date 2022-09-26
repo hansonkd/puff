@@ -1,7 +1,7 @@
 //! Convert a `Router` into a `RunnableCommand`
+use crate::context::PuffContext;
 use crate::errors::Result;
 use crate::program::{Runnable, RunnableCommand};
-use crate::context::PuffContext;
 use crate::web::server::Router;
 use clap::{ArgMatches, Command};
 
@@ -24,11 +24,7 @@ impl RunnableCommand for ServerCommand {
         Command::new("server")
     }
 
-    fn runnable_from_args(
-        &self,
-        _args: &ArgMatches,
-        context: PuffContext,
-    ) -> Result<Runnable> {
+    fn runnable_from_args(&self, _args: &ArgMatches, context: PuffContext) -> Result<Runnable> {
         let this_self = self.clone();
         let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
         let fut = async move {

@@ -1,5 +1,5 @@
+use crate::context::{set_puff_context, PuffContext};
 use crate::errors::Error;
-use crate::context::{PuffContext, set_puff_context};
 use crate::runtime::run_with_config_on_local;
 
 use anyhow::anyhow;
@@ -7,6 +7,7 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 use std::any::Any;
 
+use crate::runtime::shutdown::Shutdown;
 use crate::types::Puff;
 use std::panic;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -16,7 +17,6 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::{spawn_local, LocalSet};
 use tracing::warn;
-use crate::runtime::shutdown::Shutdown;
 
 type PuffReturn = Box<dyn Any + Send + 'static>;
 
@@ -51,7 +51,10 @@ impl LocalSpawner {
         runner
     }
 
-    pub(crate) fn new(contgext_lazy: oneshot::Receiver<PuffContext>, mut shutdown: Shutdown) -> Self {
+    pub(crate) fn new(
+        contgext_lazy: oneshot::Receiver<PuffContext>,
+        mut shutdown: Shutdown,
+    ) -> Self {
         let (send, mut recv) = mpsc::unbounded_channel();
         let num_tasks = Arc::new(AtomicUsize::new(0));
         let num_tasks_completed = Arc::new(AtomicUsize::new(0));
@@ -59,32 +62,32 @@ impl LocalSpawner {
         let num_tasks_completed_loop = num_tasks_completed.clone();
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
         std::thread::spawn(move || {
-
             let context = rt.block_on(contgext_lazy).unwrap();
             set_puff_context(context.puff());
             let local = LocalSet::new();
             local.spawn_local(async move {
                 while !shutdown.is_shutdown() {
                     if let Some(SpawnerJob(new_sender, new_task)) = tokio::select! {
-                            res = recv.recv() => res,
-                            _ = shutdown.recv() => {
-                                return ();
-                            }
-                        } {
+                        res = recv.recv() => res,
+                        _ = shutdown.recv() => {
+                            return ();
+                        }
+                    } {
                         let task_context = context.clone();
                         let num_tasks_loop = num_tasks_loop.clone();
                         let num_tasks_completed_loop = num_tasks_completed_loop.clone();
                         let _ = num_tasks_loop.fetch_add(1, Ordering::SeqCst);
                         let fut = async move {
-                            let res = run_with_config_on_local(task_context, new_sender, new_task).await;
+                            let res =
+                                run_with_config_on_local(task_context, new_sender, new_task).await;
                             let _ = num_tasks_completed_loop.fetch_add(1, Ordering::SeqCst);
                             res
                         };
 
                         spawn_local(fut);
                     } else {
-                    break
-                }
+                        break;
+                    }
                     // If the while loop returns, then all the LocalSpawner
                     // objects have have been dropped.
                 }

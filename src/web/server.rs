@@ -65,7 +65,7 @@ use axum::response::{IntoResponse, Response as AxumResponse};
 use axum::{self, Extension};
 use std::net::SocketAddr;
 
-use crate::errors::{Result, Error};
+use crate::errors::{Error, Result};
 use axum::body::{Body, Bytes};
 use axum::handler::Handler;
 use axum::routing::{any_service, on, IntoMakeService, MethodFilter, MethodRouter};
@@ -103,19 +103,18 @@ where
     let res = dispatcher.dispatcher().dispatch(|| Ok(f())).await;
     match res {
         Ok(r) => r.unwrap_or_else(|e| handle_response_error(e)),
-        Err(r) => handle_response_error(r)
+        Err(r) => handle_response_error(r),
     }
 }
 
 fn handle_response_error(e: Error) -> AxumResponse<BoxBody> {
-        error!("Error processing request: {:?}", e);
-        AxumResponse::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Body::empty())
-            .unwrap()
-            .into_response()
+    error!("Error processing request: {:?}", e);
+    AxumResponse::builder()
+        .status(StatusCode::INTERNAL_SERVER_ERROR)
+        .body(Body::empty())
+        .unwrap()
+        .into_response()
 }
-
 
 pub trait PuffHandler<Inp, S, Res> {
     fn into_handler(self, filter: MethodFilter) -> MethodRouter<S>;
@@ -205,7 +204,9 @@ where
 {
     fn into_handler(self, filter: MethodFilter) -> MethodRouter<S> {
         on(filter, move |disp, parts, parts2, parts3, req| {
-            internal_handler(disp, || self(parts, parts2, parts3, req).map(|v| v.into_response()))
+            internal_handler(disp, || {
+                self(parts, parts2, parts3, req).map(|v| v.into_response())
+            })
         })
     }
 }
@@ -335,7 +336,10 @@ where
     }
 }
 
-pub fn body_iter_bytes<B: Into<Bytes> + 'static, I: IntoIterator<Item = std::result::Result<B, std::io::Error>>>(
+pub fn body_iter_bytes<
+    B: Into<Bytes> + 'static,
+    I: IntoIterator<Item = std::result::Result<B, std::io::Error>>,
+>(
     chunks: I,
 ) -> Body
 where

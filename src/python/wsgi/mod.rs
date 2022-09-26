@@ -1,12 +1,15 @@
 pub mod handler;
 
+use anyhow::{anyhow, Result};
+use axum::handler::HandlerWithoutStateExt;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use anyhow::anyhow;
-use anyhow::Result;
-use axum::handler::HandlerWithoutStateExt;
 
+use crate::context::PuffContext;
+use crate::python::greenlet::GreenletDispatcher;
+use crate::python::wsgi::handler::WsgiHandler;
+use crate::web::server::Router;
 use futures::future::BoxFuture;
 use futures_util::future::LocalBoxFuture;
 use futures_util::FutureExt;
@@ -14,15 +17,10 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString};
 use tokio::sync::{mpsc, oneshot, Mutex};
-use crate::python::greenlet::GreenletDispatcher;
-use crate::python::wsgi::handler::WsgiHandler;
-use crate::context::PuffContext;
-use crate::web::server::Router;
-
 
 #[pyclass]
 pub struct Sender {
-    tx: Option<oneshot::Sender<(String, Vec<(String, String)>)>>
+    tx: Option<oneshot::Sender<(String, Vec<(String, String)>)>>,
 }
 
 impl Sender {
@@ -34,17 +32,21 @@ impl Sender {
 
 #[pymethods]
 impl Sender {
-    fn __call__<'a>(&'a mut self, py: Python<'a>, status: String, list: Vec<(String, String)>) -> PyResult<PyObject> {
+    fn __call__<'a>(
+        &'a mut self,
+        py: Python<'a>,
+        status: String,
+        list: Vec<(String, String)>,
+    ) -> PyResult<PyObject> {
         match self.tx.take() {
-            Some(sender) => {
-                match sender.send((status, list)) {
-                    Ok(_) => Ok(py.None()),
-                    Err(_) => Err(PyErr::new::<PyRuntimeError, _>("response closed")),
-                }
-            }
-            None => Err(PyErr::new::<PyRuntimeError, _>("already sent start response"))
+            Some(sender) => match sender.send((status, list)) {
+                Ok(_) => Ok(py.None()),
+                Err(_) => Err(PyErr::new::<PyRuntimeError, _>("response closed")),
+            },
+            None => Err(PyErr::new::<PyRuntimeError, _>(
+                "already sent start response",
+            )),
         }
-
     }
 }
 
@@ -55,7 +57,7 @@ pub trait AsyncFn {
 impl<T, F> AsyncFn for T
 where
     T: FnOnce(WsgiHandler, oneshot::Receiver<()>) -> F,
-    F: Future<Output = ()>  + 'static,
+    F: Future<Output = ()> + 'static,
 {
     fn call(self, handler: WsgiHandler, rx: oneshot::Receiver<()>) -> LocalBoxFuture<'static, ()> {
         Box::pin(self(handler, rx))
@@ -70,9 +72,8 @@ pub struct ServerContext<T: AsyncFn> {
     app: Option<PyObject>,
     server: Option<T>,
     dispatcher: PuffContext,
-    greenlet: Option<GreenletDispatcher>
+    greenlet: Option<GreenletDispatcher>,
 }
-
 
 impl<T: AsyncFn> ServerContext<T> {
     fn shutdown<'a>(&'a mut self, py: Python<'a>) -> PyResult<&'a PyAny> {
@@ -106,10 +107,14 @@ impl<T: AsyncFn> ServerContext<T> {
             (Some(rx), Some(app), Some(server), Some(tx)) => {
                 let fut = async move {
                     // create wsgi service
-                    let wsgi_handler = WsgiHandler::new(app.clone(), self.dispatcher.clone(), self.greenlet.clone());
+                    let wsgi_handler = WsgiHandler::new(
+                        app.clone(),
+                        self.dispatcher.clone(),
+                        self.greenlet.clone(),
+                    );
 
                     server.call(wsgi_handler, rx).await;
-                    
+
                     Ok(())
                 };
 
@@ -124,7 +129,7 @@ pub fn create_server_context<T: AsyncFn>(
     app: PyObject,
     server: T,
     dispatcher: PuffContext,
-    greenlet: Option<GreenletDispatcher>
+    greenlet: Option<GreenletDispatcher>,
 ) -> ServerContext<T> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let (wait_shutdown_tx, wait_shutdown_rx) = tokio::sync::oneshot::channel();
@@ -136,6 +141,6 @@ pub fn create_server_context<T: AsyncFn>(
         app: Some(app),
         server: Some(server),
         greenlet,
-        dispatcher
+        dispatcher,
     }
 }

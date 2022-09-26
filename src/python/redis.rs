@@ -1,15 +1,14 @@
-use std::future::Future;
-use bb8_redis::redis::{FromRedisValue, Value};
-use futures_util::future::join_all;
-use pyo3::exceptions::{PyException, PyValueError};
-use crate::databases::redis::{Cmd, RedisClient, with_redis};
-use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyList};
+use crate::databases::redis::{with_redis, Cmd, RedisClient};
 use crate::errors::PuffResult;
 use crate::python::greenlet::{greenlet_async, GreenletContext};
 use crate::python::into_py_result;
 use crate::types::{Bytes, BytesBuilder};
-
+use bb8_redis::redis::{FromRedisValue, Value};
+use futures_util::future::join_all;
+use pyo3::exceptions::{PyException, PyValueError};
+use pyo3::prelude::*;
+use pyo3::types::{PyBytes, PyList};
+use std::future::Future;
 
 #[pyclass]
 pub struct RedisGlobal;
@@ -33,31 +32,41 @@ struct RedisOk;
 #[pyclass]
 pub struct PythonRedis(RedisClient);
 
-
 fn extract_redis_to_python(py: Python, val: Value) -> PyObject {
     match val {
         Value::Int(i) => i.into_py(py),
         Value::Data(v) => v.into_py(py),
         Value::Nil => py.None().into_py(py),
-        Value::Bulk(vec) => vec.into_iter().map(|v| extract_redis_to_python(py, v)).collect::<Vec<PyObject>>().into_py(py),
+        Value::Bulk(vec) => vec
+            .into_iter()
+            .map(|v| extract_redis_to_python(py, v))
+            .collect::<Vec<PyObject>>()
+            .into_py(py),
         Value::Status(s) => s.into_py(py),
         Value::Okay => RedisOk.into_py(py),
     }
 }
 
-async fn handle_it<F: Future<Output=PyResult<PyObject>>>(return_fun: PyObject, f: F) {
+async fn handle_it<F: Future<Output = PyResult<PyObject>>>(return_fun: PyObject, f: F) {
     let res = f.await;
     Python::with_gil(|py| match res {
-        Ok(r) => return_fun.call1(py, (r, py.None())).expect("Could not return value"),
-        Err(e) => {
-            return_fun.call1(py, (py.None(), e)).expect("Could not return exception")
-        }
+        Ok(r) => return_fun
+            .call1(py, (r, py.None()))
+            .expect("Could not return value"),
+        Err(e) => return_fun
+            .call1(py, (py.None(), e))
+            .expect("Could not return exception"),
     });
 }
 
-
 impl PythonRedis {
-    fn run_command<T: ToPyObject + FromRedisValue + 'static>(&self, py: Python, ctx: &GreenletContext, return_fun: PyObject, command: Cmd) -> PyResult<PyObject> {
+    fn run_command<T: ToPyObject + FromRedisValue + 'static>(
+        &self,
+        py: Python,
+        ctx: &GreenletContext,
+        return_fun: PyObject,
+        command: Cmd,
+    ) -> PyResult<PyObject> {
         let client = self.0.pool();
         greenlet_async(ctx, return_fun, async move {
             let mut conn = client.get().await?;
@@ -70,14 +79,26 @@ impl PythonRedis {
 
 #[pymethods]
 impl PythonRedis {
-    fn get(&self, py: Python, ctx: &GreenletContext, return_fun: PyObject, val: &str) -> PyResult<PyObject> {
+    fn get(
+        &self,
+        py: Python,
+        ctx: &GreenletContext,
+        return_fun: PyObject,
+        val: &str,
+    ) -> PyResult<PyObject> {
         self.run_command::<Bytes>(py, ctx, return_fun, Cmd::get(val))
     }
 
-    fn set(&self, py: Python, ctx: &GreenletContext, return_fun: PyObject, key: &str, val: &str) -> PyResult<PyObject> {
+    fn set(
+        &self,
+        py: Python,
+        ctx: &GreenletContext,
+        return_fun: PyObject,
+        key: &str,
+        val: &str,
+    ) -> PyResult<PyObject> {
         self.run_command::<()>(py, ctx, return_fun, Cmd::set(key, val))
     }
-
 
     fn command(&self, py: Python, command: &PyList) -> PyResult<PyObject> {
         let mut cmd = Cmd::new();
@@ -85,10 +106,17 @@ impl PythonRedis {
             if let Ok(v) = arg.downcast::<PyBytes>() {
                 cmd.arg(v.as_bytes());
             } else {
-                return Err(PyValueError::new_err("Redis command expected a list of bytes."));
+                return Err(PyValueError::new_err(
+                    "Redis command expected a list of bytes.",
+                ));
             }
         }
-       py.allow_threads(|| into_py_result(self.0.query(cmd).map(|v|
-           Python::with_gil(|inner_py| extract_redis_to_python(inner_py, v) ))))
+        py.allow_threads(|| {
+            into_py_result(
+                self.0
+                    .query(cmd)
+                    .map(|v| Python::with_gil(|inner_py| extract_redis_to_python(inner_py, v))),
+            )
+        })
     }
 }

@@ -39,31 +39,31 @@
 //!
 //! Run with `cargo run my_custom_command` or use `cargo run help`
 
-use std::borrow::BorrowMut;
 use clap::{ArgMatches, Command};
+use std::borrow::BorrowMut;
 
+use crate::databases::redis::{add_redis_command_arguments, new_client_async, RedisClient};
+use futures_util::future::BoxFuture;
+use futures_util::TryFutureExt;
+use pyo3::exceptions::PyRuntimeError;
+use pyo3::{PyErr, PyObject, Python};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
-use futures_util::future::BoxFuture;
-use futures_util::TryFutureExt;
-use pyo3::{PyErr, PyObject, Python};
-use pyo3::exceptions::PyRuntimeError;
 use tokio::runtime::{Builder, Handle, Runtime};
 use tokio::sync::broadcast;
-use crate::databases::redis::{add_redis_command_arguments, new_client_async, RedisClient};
 
+use crate::context::{set_puff_context, set_puff_context_waiting, PuffContext, PUFF_CONTEXT};
 use crate::errors::Result;
-use crate::context::{PUFF_CONTEXT, PuffContext, set_puff_context, set_puff_context_waiting};
+use crate::python::bootstrap_puff_globals;
 use crate::runtime::dispatcher::Dispatcher;
 use crate::runtime::RuntimeConfig;
 use crate::types::text::Text;
 use crate::types::Puff;
 
 pub mod commands;
-
 
 /// A wrapper for a boxed future that is able to be run by a Puff Program.
 pub struct Runnable(Pin<Box<dyn Future<Output = Result<()>> + 'static>>);
@@ -105,11 +105,7 @@ pub trait RunnableCommand: 'static {
     fn cli_parser(&self) -> Command;
 
     /// Converts parsed matches from the command line into a Runnable future.
-    fn runnable_from_args(
-        &self,
-        args: &ArgMatches,
-        dispatcher: PuffContext,
-    ) -> Result<Runnable>;
+    fn runnable_from_args(&self, args: &ArgMatches, dispatcher: PuffContext) -> Result<Runnable>;
 }
 
 #[derive(Clone)]
@@ -128,7 +124,6 @@ impl PackedCommand {
         self.0.runnable_from_args(args, dispatcher)
     }
 }
-
 
 /// A Puff Program that is responsible for parsing CLI arguments and starting the Runtime.
 #[derive(Clone)]
@@ -229,8 +224,7 @@ impl Program {
         } else {
             tokio::runtime::Builder::new_multi_thread()
         };
-        rt
-            .enable_all()
+        rt.enable_all()
             .worker_threads(self.runtime_config.tokio_worker_threads())
             .max_blocking_threads(self.runtime_config.max_blocking_threads())
             .thread_keep_alive(self.runtime_config.blocking_task_keep_alive())
@@ -275,6 +269,7 @@ impl Program {
                 let mut builder = self.runtime()?;
                 if self.runtime_config.python() {
                     pyo3::prepare_freethreaded_python();
+                    bootstrap_puff_globals();
                 }
 
                 if self.runtime_config.asyncio() {
@@ -300,7 +295,8 @@ impl Program {
                     //     });
                     // });
 
-                    let (dispatcher, waiting) = Dispatcher::new(notify_shutdown, self.runtime_config.clone());
+                    let (dispatcher, waiting) =
+                        Dispatcher::new(notify_shutdown, self.runtime_config.clone());
                     let arc_dispatcher = Arc::new(dispatcher);
                     let mutex_switcher = Arc::new(Mutex::new(None::<PuffContext>));
                     let thread_mutex = mutex_switcher.clone();
@@ -312,21 +308,24 @@ impl Program {
                     let rt = builder.build()?;
                     let mut redis = None;
                     if self.runtime_config.redis() {
-                        redis = Some(rt.block_on(new_client_async(arg_matches.value_of("redis_url").unwrap()))?);
+                        redis = Some(rt.block_on(new_client_async(
+                            arg_matches.value_of("redis_url").unwrap(),
+                        ))?);
                     }
 
                     let mut context =
                         PuffContext::new_with_options(rt.handle().clone(), arc_dispatcher, redis);
                     // dispatcher.monitor();
 
-                    // let mut borrowed = mutex_switcher.lock().unwrap();
-                    // *borrowed = Some(context.puff());
-                    // drop(borrowed);
-
                     for i in waiting {
                         i.send(context.puff()).unwrap_or(());
                     }
 
+                    let context_to_set = context.puff();
+                    {
+                        let mut borrowed = mutex_switcher.lock().unwrap();
+                        *borrowed = Some(context_to_set);
+                    }
                     //
                     // let (lock, cvar) = &*pair2;
                     // let mut started = lock.lock().unwrap();

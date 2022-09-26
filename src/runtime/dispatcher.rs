@@ -5,12 +5,14 @@
 //!
 //! The primary way to interact with the dispatcher is calling [crate::tasks::Task] or [crate::program::RunnableCommand]
 //!
-use std::cell::RefCell;
-use std::collections::HashMap;
+use crate::context::PuffContext;
+use crate::databases::redis::RedisClient;
 use futures::future::BoxFuture;
 use futures_util::FutureExt;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -19,13 +21,11 @@ use tokio::runtime::{Handle, Runtime};
 use tokio::sync::{broadcast, oneshot};
 use tokio::task::LocalSet;
 use tracing::info;
-use crate::context::PuffContext;
-use crate::databases::redis::RedisClient;
 
 use crate::errors::Error;
 use crate::runtime::runner::LocalSpawner;
-use crate::runtime::{run_with_config_on_local, RuntimeConfig, Strategy};
 use crate::runtime::shutdown::Shutdown;
+use crate::runtime::{run_with_config_on_local, RuntimeConfig, Strategy};
 use crate::types::Puff;
 
 /// Simple statistics about each worker.
@@ -43,7 +43,7 @@ pub struct Dispatcher {
     strategy: Strategy,
     config: RuntimeConfig,
     next: Arc<AtomicUsize>,
-    notify_shutdown: broadcast::Sender<()>
+    notify_shutdown: broadcast::Sender<()>,
 }
 
 impl Dispatcher {
@@ -67,14 +67,20 @@ impl Dispatcher {
         }
     }
 
-    pub fn new(notify_shutdown: broadcast::Sender<()>, config: RuntimeConfig) -> (Self, Vec<oneshot::Sender<PuffContext>>) {
+    pub fn new(
+        notify_shutdown: broadcast::Sender<()>,
+        config: RuntimeConfig,
+    ) -> (Self, Vec<oneshot::Sender<PuffContext>>) {
         let size = config.coroutine_threads();
         let mut spawners = Vec::with_capacity(size);
         let mut waiting = Vec::with_capacity(size);
         let strategy = config.strategy();
         for _ in 0..size {
             let (send, rec) = oneshot::channel();
-            spawners.push(LocalSpawner::new(rec, Shutdown::new(notify_shutdown.subscribe())));
+            spawners.push(LocalSpawner::new(
+                rec,
+                Shutdown::new(notify_shutdown.subscribe()),
+            ));
             waiting.push(send);
         }
         let disptcher = Self {
@@ -84,7 +90,7 @@ impl Dispatcher {
             notify_shutdown,
             next: Arc::new(AtomicUsize::new(0)),
         };
-        return (disptcher, waiting)
+        return (disptcher, waiting);
     }
 
     #[inline]
@@ -95,14 +101,15 @@ impl Dispatcher {
     /// Start a debugging monitor that prints stats.
     pub fn monitor(&self) -> () {
         let dispatcher = self.clone();
-        std::thread::spawn(move || {
-            loop {
-                let stats = dispatcher.stats();
-                for stat in stats {
-                    info!("Worker: {} | Total: {} | Completed: {}", stat.worker_id, stat.total_tasks, stat.total_tasks_completed);
-                }
-                std::thread::sleep(Duration::from_secs(1));
+        std::thread::spawn(move || loop {
+            let stats = dispatcher.stats();
+            for stat in stats {
+                info!(
+                    "Worker: {} | Total: {} | Completed: {}",
+                    stat.worker_id, stat.total_tasks, stat.total_tasks_completed
+                );
             }
+            std::thread::sleep(Duration::from_secs(1));
         });
     }
 

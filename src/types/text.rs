@@ -3,11 +3,11 @@
 use crate::types::Puff;
 use axum::body::Bytes as AxumBytes;
 use axum::response::{IntoResponse, Response};
+use bb8_redis::redis::{ErrorKind, FromRedisValue, RedisError, RedisResult, Value};
 use compact_str::{CompactString, ToCompactString};
 use serde::Serialize;
 use std::ops::{Add, Deref};
 use std::str::from_utf8;
-use bb8_redis::redis::{ErrorKind, FromRedisValue, RedisError, RedisResult, Value};
 
 /// Fast UTF8 data references.
 ///
@@ -161,10 +161,13 @@ impl FromRedisValue for Text {
             Value::Okay => Ok("OK".into()),
             Value::Status(ref val) => Ok(val.to_string().into()),
             val => Err(RedisError::from((
-                    ErrorKind::TypeError,
-                    "Response was of incompatible type",
-                    format!("Response type not string compatible. (response was {:?})", val),
-                ))),
+                ErrorKind::TypeError,
+                "Response was of incompatible type",
+                format!(
+                    "Response type not string compatible. (response was {:?})",
+                    val
+                ),
+            ))),
         }
     }
 }

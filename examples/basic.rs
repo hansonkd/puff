@@ -1,13 +1,12 @@
-use puff::program::Program;
+use puff::databases::redis::{Cmd, RedisClient};
 use puff::errors::Result;
 use puff::program::commands::BasicCommand;
-use puff::tasks::{join_all, Task};
-use puff::web::client::{Client, PuffClientResponse, PuffRequestBuilder};
-use puff::types::{Puff, Text};
-use puff::tracing::info;
-use puff::databases::redis::{Cmd, RedisClient};
+use puff::program::Program;
 use puff::runtime::RuntimeConfig;
-
+use puff::tasks::{join_all, Task};
+use puff::tracing::info;
+use puff::types::{Puff, Text};
+use puff::web::client::{Client, PuffClientResponse, PuffRequestBuilder};
 
 fn main() {
     let config = RuntimeConfig::default().set_redis(true);
@@ -28,9 +27,7 @@ fn my_command() -> Result<()> {
     //     background_task_1(client2)
     // });
 
-    let task2 = Task::spawn(|| {
-        background_task_2(redis)
-    });
+    let task2 = Task::spawn(|| background_task_2(redis));
 
     let texts = join_all(vec![task2]);
     for text in texts {
@@ -40,7 +37,10 @@ fn my_command() -> Result<()> {
 }
 
 fn background_task_1(client: Client) -> Result<Text> {
-    client.get("http://www.google.com/").puff_response()?.puff_text()
+    client
+        .get("http://www.google.com/")
+        .puff_response()?
+        .puff_text()
 }
 
 fn background_task_2(redis: RedisClient) -> Result<Text> {
