@@ -126,7 +126,7 @@ impl RuntimeDispatcher {
         self.0.handle()
     }
 
-    pub(crate) fn redis(&self) -> RedisClient {
+    pub fn redis(&self) -> RedisClient {
         self.0.redis().expect("Redis is not configured for this runtime.")
     }
 

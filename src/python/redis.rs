@@ -6,7 +6,7 @@ use crate::databases::redis::{Cmd, RedisClient, with_redis};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList};
 use crate::errors::PuffResult;
-use crate::python::greenlet::{greenlet_async, ThreadDispatcher};
+use crate::python::greenlet::{greenlet_async, GreenletContext};
 use crate::python::into_py_result;
 use crate::types::{Bytes, BytesBuilder};
 
@@ -57,38 +57,11 @@ async fn handle_it<F: Future<Output=PyResult<PyObject>>>(return_fun: PyObject, f
 
 
 impl PythonRedis {
-    fn run_command<T: ToPyObject + FromRedisValue + 'static>(&self, py: Python, ctx: &ThreadDispatcher, return_fun: PyObject, command: Cmd) -> PyResult<PyObject> {
-        let client = self.0.client();
+    fn run_command<T: ToPyObject + FromRedisValue + 'static>(&self, py: Python, ctx: &GreenletContext, return_fun: PyObject, command: Cmd) -> PyResult<PyObject> {
+        let client = self.0.pool();
         greenlet_async(ctx, return_fun, async move {
             let mut conn = client.get().await?;
             let res: T = command.query_async(&mut *conn).await?;
-            Ok(res)
-        });
-        Ok(py.None())
-    }
-
-    fn run_command_concat(&self, py: Python, ctx: &ThreadDispatcher, return_fun: PyObject, commands: Vec<Cmd>) -> PyResult<PyObject> {
-        let client = self.0.client();
-        greenlet_async(ctx, return_fun, async move {
-            let mut builder = BytesBuilder::new();
-            let mut queries = Vec::with_capacity(commands.len());
-
-            for cmd in commands {
-                let client = client.clone();
-                queries.push(async move {
-                    let mut conn = client.get().await?;
-                    PuffResult::Ok(cmd.query_async::<_, Vec<u8>>(&mut *conn).await?)
-                })
-            }
-
-            let results = join_all(queries).await;
-
-            for result in results {
-                let res: Vec<u8> = result?;
-                builder.put_slice(res.as_slice());
-            }
-
-            let res = builder.into_bytes();
             Ok(res)
         });
         Ok(py.None())
@@ -97,19 +70,11 @@ impl PythonRedis {
 
 #[pymethods]
 impl PythonRedis {
-    fn get(&self, py: Python, ctx: &ThreadDispatcher, return_fun: PyObject, val: &str) -> PyResult<PyObject> {
+    fn get(&self, py: Python, ctx: &GreenletContext, return_fun: PyObject, val: &str) -> PyResult<PyObject> {
         self.run_command::<Bytes>(py, ctx, return_fun, Cmd::get(val))
     }
 
-    fn get_ten(&self, py: Python, ctx: &ThreadDispatcher, return_fun: PyObject, val: &str) -> PyResult<PyObject> {
-        let mut vec = Vec::with_capacity(10);
-        for _ in 0..10 {
-            vec.push(Cmd::get(val))
-        }
-        self.run_command_concat(py, ctx, return_fun, vec)
-    }
-
-    fn set(&self, py: Python, ctx: &ThreadDispatcher, return_fun: PyObject, key: &str, val: &str) -> PyResult<PyObject> {
+    fn set(&self, py: Python, ctx: &GreenletContext, return_fun: PyObject, key: &str, val: &str) -> PyResult<PyObject> {
         self.run_command::<()>(py, ctx, return_fun, Cmd::set(key, val))
     }
 

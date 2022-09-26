@@ -7,7 +7,7 @@ from flask import Flask
 import puff
 import redis
 
-SAMPLE = 10
+SAMPLE = 1000
 
 app = Flask(__name__)
 r = redis.Redis(host='localhost')
@@ -26,7 +26,7 @@ def hello_world_puff():
 @app.route("/concat/")
 def hello_world_concat():
     redis_set("blam", "ok").join()
-    return redis_get_ten("blam").join()
+    return redis_get_many("blam", SAMPLE).join()
 
 
 
@@ -46,8 +46,8 @@ def redis_get(q):
     return wrap_async(lambda ctx, rr: puff_redis.get(ctx, rr, q), join=False)
 
 
-def redis_get_ten(q):
-    return wrap_async(lambda ctx, rr: puff_redis.get_ten(ctx, rr, q), join=False)
+def redis_get_many(q, l):
+    return wrap_async(lambda ctx, rr: puff.global_state().concat_redis_gets(ctx, rr, q, l), join=False)
 
 
 def redis_set(k, v):

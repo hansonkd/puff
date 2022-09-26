@@ -27,30 +27,37 @@ impl GreenletReturn {
 
 #[pyclass]
 #[derive(Clone)]
-pub struct ThreadDispatcher(RuntimeDispatcher);
+pub struct GreenletContext(RuntimeDispatcher, PyObject);
 
-impl ThreadDispatcher {
+impl GreenletContext {
     pub fn dispatcher(&self) -> RuntimeDispatcher {
         self.0.clone()
+    }
+}
+
+#[pymethods]
+impl GreenletContext {
+    pub fn global_state(&self) -> PyObject {
+        self.1.clone()
     }
 }
 
 #[derive(Clone)]
 pub struct GreenletDispatcher {
     thread_obj: PyObject,
-    thread_dispatcher: ThreadDispatcher
+    thread_dispatcher: GreenletContext
 }
 
 
 impl GreenletDispatcher {
-    pub fn new(dispatcher: RuntimeDispatcher) -> PyResult<Self> {
+    pub fn new(dispatcher: RuntimeDispatcher, global_state: PyObject) -> PyResult<Self> {
         let thread_obj = Python::with_gil(|py| {
             let puff = py.import("puff")?;
 
             let ret = puff.call_method0("start_event_loop")?;
             PyResult::Ok(ret.into_py(py))
         })?;
-        let thread_dispatcher = ThreadDispatcher(dispatcher);
+        let thread_dispatcher = GreenletContext(dispatcher, global_state);
         PyResult::Ok(Self { thread_obj, thread_dispatcher })
     }
 
@@ -77,7 +84,7 @@ async fn handle_return<F: Future<Output=PuffResult<R>> + Send + 'static, R: ToPy
     });
 }
 
-pub fn greenlet_async<F: Future<Output=PuffResult<R>> + Send + 'static, R: ToPyObject + 'static>(ctx: &ThreadDispatcher, return_fun: PyObject, f: F) {
+pub fn greenlet_async<F: Future<Output=PuffResult<R>> + Send + 'static, R: ToPyObject + 'static>(ctx: &GreenletContext, return_fun: PyObject, f: F) {
     let h = ctx.dispatcher().handle();
     h.spawn(handle_return(return_fun, f));
 }

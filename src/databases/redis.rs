@@ -29,7 +29,7 @@ impl RedisClient {
         })?)
     }
 
-    pub fn client(&self) -> Pool<RedisConnectionManager> {
+    pub fn pool(&self) -> Pool<RedisConnectionManager> {
         return self.client.clone()
     }
 }

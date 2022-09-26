@@ -193,3 +193,8 @@ def join_iter(greenlets):
 
 def get_redis():
     pass
+
+
+def global_state():
+    return greenlet_context.get().global_state()
+
