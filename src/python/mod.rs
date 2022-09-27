@@ -12,7 +12,7 @@ use pyo3::types::{PyDict, PyTuple};
 use rand::prelude::SliceRandom;
 use rand::thread_rng;
 use tokio::sync::oneshot;
-use crate::context::{PuffContext, set_puff_context, set_puff_context_waiting};
+use crate::context::{PuffContext, set_puff_context_waiting};
 use crate::python::greenlet::{GreenletContext, GreenletReturn};
 use crate::runtime::{RuntimeConfig, Strategy};
 

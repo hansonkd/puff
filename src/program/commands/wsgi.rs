@@ -11,7 +11,7 @@ use crate::types::Text;
 use futures_util::future::{LocalBoxFuture};
 use futures_util::{FutureExt};
 
-use pyo3::{IntoPy, Py, PyAny, PyObject, Python};
+use pyo3::{PyObject, Python};
 use std::net::SocketAddr;
 
 

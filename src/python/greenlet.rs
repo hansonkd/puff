@@ -2,12 +2,12 @@ use crate::context::{PuffContext, with_puff_context};
 use crate::errors::PuffResult;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
-use pyo3::{IntoPy, PyObject, PyResult, Python};
+use pyo3::{PyObject, PyResult, Python};
 use std::future::Future;
-use pyo3::types::{PyDict, PyTuple};
+
 use tokio::sync::oneshot;
-use crate::python::PythonDispatcher;
-use crate::runtime::RuntimeConfig;
+
+
 
 #[pyclass]
 pub struct GreenletReturn(Option<oneshot::Sender<PyResult<PyObject>>>);
