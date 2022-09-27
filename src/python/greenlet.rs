@@ -1,4 +1,4 @@
-use crate::context::{with_puff_context, PuffContext};
+use crate::context::PuffContext;
 use crate::errors::PuffResult;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
@@ -6,7 +6,9 @@ use pyo3::{PyObject, PyResult, Python};
 use std::future::Future;
 
 use tokio::sync::oneshot;
+use crate::python::log_traceback;
 
+/// Python return
 #[pyclass]
 pub struct GreenletReturn(Option<oneshot::Sender<PyResult<PyObject>>>);
 
@@ -45,16 +47,17 @@ async fn handle_return<
     Python::with_gil(|py| match res {
         Ok(r) => return_fun
             .call1(py, (r.to_object(py), py.None()))
-            .expect("Could not return value"),
+            .map_err(|e| log_traceback(e)),
         Err(e) => {
             let py_err = PyException::new_err(format!("Greenlet async exception: {e}"));
             return_fun
                 .call1(py, (py.None(), py_err))
-                .expect("Could not return exception")
+                .map_err(|e| log_traceback(e))
         }
-    });
+    }.unwrap_or(py.None()));
 }
 
+/// The the future in the Tokio and execute the return function when finished.
 pub fn greenlet_async<
     F: Future<Output = PuffResult<R>> + Send + 'static,
     R: ToPyObject + 'static,

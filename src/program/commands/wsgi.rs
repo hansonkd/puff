@@ -28,7 +28,7 @@ impl WsgiServerSpawner for WSGIConstructor {
     }
 }
 
-/// The ServerCommand.
+/// The WSGIServerCommand.
 ///
 /// Exposes options to the command line to set the port and host of the server.
 #[derive(Clone)]

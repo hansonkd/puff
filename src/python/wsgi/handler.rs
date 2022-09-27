@@ -1,4 +1,4 @@
-use crate::python::{wsgi, PythonDispatcher};
+use crate::python::{wsgi, PythonDispatcher, log_traceback};
 use anyhow::{anyhow, Error};
 use axum::body::{Body, BoxBody, Bytes, Full, HttpBody};
 use axum::handler::Handler;
@@ -73,11 +73,15 @@ impl IntoResponse for WsgiError {
         match self {
             WsgiError::InvalidHttpVersion => (StatusCode::BAD_REQUEST, "Unsupported HTTP version"),
             WsgiError::InvalidUtf8InPath => (StatusCode::BAD_REQUEST, "Invalid Utf8 in path"),
-            WsgiError::PyErr(_)
-            | WsgiError::ExpectedResponseStart
+            WsgiError::ExpectedResponseStart
             | WsgiError::ExpectedResponseBody
             | WsgiError::FailedToCreateResponse
             | WsgiError::InvalidHeader => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
+            }
+            WsgiError::PyErr(e) => {
+                error!("WsgiError: {e}");
+                log_traceback(e);
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
             }
         }

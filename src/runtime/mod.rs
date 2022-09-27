@@ -273,7 +273,7 @@ impl RuntimeConfig {
         new
     }
 
-    /// Run a function in a python context and set the result as the global state in python.
+    /// Run a function in a python context and set the result as the global state for Python.
     ///
     /// Default: true
     pub fn set_global_state_fn<F: Fn(Python) -> PyResult<PyObject> + Send + Sync + 'static>(
