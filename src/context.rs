@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::{broadcast, oneshot};
 use tokio::task::LocalSet;
+use crate::python::PythonDispatcher;
 
 /// The central control structure for dispatching tasks onto coroutine workers.
 /// All tasks in the same runtime will have access to the same dispatcher. The dispatcher contains
@@ -24,6 +25,7 @@ pub struct PuffContext {
     dispatcher: Arc<Dispatcher>,
     handle: Handle,
     redis: Option<RedisClient>,
+    python_dispatcher: Option<PythonDispatcher>,
 }
 
 // Context consists of a hierarchy of Contexts. PUFF_CONTEXT is the primary thread local that holds
@@ -65,7 +67,7 @@ pub fn with_puff_context<F: FnOnce(PuffContext) -> R, R>(f: F) -> R {
                 }
             }
             None => {
-                panic!("Dispatcher can only be used from a puff context.")
+                panic!("Context can only be used from a puff context.")
             }
         }),
     };
@@ -81,16 +83,17 @@ impl PuffContext {
     pub fn empty(handle: Handle) -> PuffContext {
         let (notify_shutdown, _) = broadcast::channel(1);
         Self {
+            handle,
             dispatcher: Arc::new(Dispatcher::empty(notify_shutdown)),
-            handle: handle,
             redis: None,
+            python_dispatcher: None
         }
     }
 
     /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`. This function will start
     /// the number of `coroutine_threads` specified in your config.
     pub fn new(dispatcher: Arc<Dispatcher>, handle: Handle) -> PuffContext {
-        Self::new_with_options(handle, dispatcher, None)
+        Self::new_with_options(handle, dispatcher, None, None)
     }
 
     /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`. This function will start
@@ -99,11 +102,13 @@ impl PuffContext {
         handle: Handle,
         dispatcher: Arc<Dispatcher>,
         redis: Option<RedisClient>,
+        python_dispatcher: Option<PythonDispatcher>,
     ) -> PuffContext {
         let arc_dispatcher = Self {
             dispatcher,
             handle,
             redis,
+            python_dispatcher
         };
 
         arc_dispatcher
@@ -112,6 +117,11 @@ impl PuffContext {
     /// A Handle into the multi-threaded async runtime
     pub fn handle(&self) -> Handle {
         self.handle.clone()
+    }
+
+    /// A Handle into the multi-threaded async runtime
+    pub fn python_dispatcher(&self) -> PythonDispatcher {
+        self.python_dispatcher.clone().expect("Python is not configured for this runtime.")
     }
 
     /// The configured redis client. Panics if not enabled.

@@ -106,7 +106,7 @@ fn root(req: Request) -> Response {
 
 ```
 
-Vising "/" will run Rust, Visting "/graphql" will run our python query functions and then offload the queries into the rust runtime, "/hello-world" will run in flask.
+Visiting "/" will run Rust, Visting "/graphql" will run our python query functions and then offload the queries into the rust runtime, "/hello-world" will run in flask.
 
 
 ## A Different Path to Python Performance

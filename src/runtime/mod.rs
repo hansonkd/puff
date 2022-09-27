@@ -7,6 +7,8 @@ use crate::context;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
+use pyo3::prelude::PyObject;
+use pyo3::{PyResult, Python};
 use tokio::sync::{broadcast, oneshot};
 
 use crate::context::{PuffContext};
@@ -115,8 +117,11 @@ pub struct RuntimeConfig {
     coroutine_threads: usize,
     python: bool,
     redis: bool,
+    monitor: Option<Duration>,
+    greenlets: bool,
+    global_state_fn: Option<Arc<dyn Fn(Python) -> PyResult<PyObject> + Send + Sync + 'static >>,
     blocking_task_keep_alive: Duration,
-    strategy: Strategy,
+    strategy: Strategy
 }
 
 impl RuntimeConfig {
@@ -163,6 +168,23 @@ impl RuntimeConfig {
     /// Get if a global redis will be enabled.
     pub fn redis(&self) -> bool {
         self.redis
+    }
+    /// Get if greenlets will be enabled.
+    pub fn greenlets(&self) -> bool {
+        self.greenlets
+    }
+    /// Get monitor interval
+    pub fn monitor(&self) -> Option<Duration> {
+        self.monitor
+    }
+    /// Get the global Python object
+    pub fn global_state(&self) -> PyResult<PyObject> {
+        Python::with_gil(|py| {
+            match self.global_state_fn.clone() {
+                Some(r) => r(py),
+                None => Ok(py.None())
+            }
+        })
     }
 
     /// Set the tokio_worker_threads for coroutines.
@@ -236,16 +258,46 @@ impl RuntimeConfig {
         new.redis = redis;
         new
     }
+
+    /// Sets whether to use greenlets when executing python.
+    ///
+    /// Default: true
+    pub fn set_greenlets(self, greenlets: bool) -> Self {
+        let mut new = self;
+        new.greenlets = greenlets;
+        new
+    }
+
+    /// If provided, will spawn a thread that will log information about the dispatcher.
+    ///
+    /// Default: true
+    pub fn set_monitor(self, monitor: Option<Duration>) -> Self {
+        let mut new = self;
+        new.monitor = monitor;
+        new
+    }
+
+    /// If provided, will spawn a thread that will log information about the dispatcher.
+    ///
+    /// Default: true
+    pub fn set_global_state_fn<F: Fn(Python) -> PyResult<PyObject> + Send + Sync + 'static >(self, f: F) -> Self {
+        let mut new = self;
+        new.global_state_fn = Some(Arc::new(f));
+        new
+    }
 }
 
 impl Default for RuntimeConfig {
     fn default() -> Self {
         RuntimeConfig {
+            monitor: None,
             stack_size: 1024 * 1024,
             max_blocking_threads: 1024,
             tokio_worker_threads: num_cpus::get(),
             coroutine_threads: num_cpus::get(),
             python: true,
+            global_state_fn: None,
+            greenlets: true,
             redis: false,
             blocking_task_keep_alive: Duration::from_secs(30),
             strategy: Strategy::RoundRobin,

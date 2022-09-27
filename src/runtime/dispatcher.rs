@@ -87,19 +87,21 @@ impl Dispatcher {
         self.config.stack_size()
     }
 
-    /// Start a debugging monitor that prints stats.
-    pub fn monitor(&self) -> () {
-        let dispatcher = self.clone();
-        std::thread::spawn(move || loop {
-            let stats = dispatcher.stats();
-            for stat in stats {
-                info!(
-                    "Worker: {} | Total: {} | Completed: {}",
-                    stat.worker_id, stat.total_tasks, stat.total_tasks_completed
-                );
-            }
-            std::thread::sleep(Duration::from_secs(1));
-        });
+    /// Start a debugging monitor that prints stats if configured.
+    pub fn start_monitor(&self) -> () {
+        if let Some(duration) = self.config.monitor() {
+            let dispatcher = self.clone();
+            std::thread::spawn(move || loop {
+                let stats = dispatcher.stats();
+                for stat in stats {
+                    info!(
+                        "Worker: {} | Total: {} | Completed: {}",
+                        stat.worker_id, stat.total_tasks, stat.total_tasks_completed
+                    );
+                }
+                std::thread::sleep(duration);
+            });
+        }
     }
 
     /// Information about the current threads controlled by this Dispatcher.

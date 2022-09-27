@@ -42,7 +42,7 @@ impl MyState {
         return_fun: PyObject,
         commands: Vec<Cmd>,
     ) -> PyResult<PyObject> {
-        let pool = ctx.dispatcher().redis().pool();
+        let pool = ctx.puff_context().redis().pool();
 
         greenlet_async(ctx, return_fun, async move {
             let mut builder = BytesBuilder::new();
@@ -82,16 +82,15 @@ fn main() {
         })?;
         Ok(r)
     });
-    let rc = RuntimeConfig::default().set_redis(true);
+    let rc = RuntimeConfig::default().set_redis(true).set_global_state_fn(|py| Ok(MyState.into_py(py)));
 
     Program::new("my_first_app")
         .about("This is my first app")
         .runtime_config(rc)
-        .command(WSGIServerCommand::with_global(
+        .command(WSGIServerCommand::new(
             router,
             "flask_example",
-            "app",
-            MyState,
+            "app"
         ))
         .run()
 }

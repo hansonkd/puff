@@ -6,7 +6,6 @@ use crate::python::wsgi::{create_server_context, WsgiServerSpawner};
 use crate::web::server::Router;
 use clap::{ArgMatches, Command};
 
-use crate::python::greenlet::GreenletDispatcher;
 use crate::python::wsgi::handler::WsgiHandler;
 use crate::types::Text;
 use futures_util::future::{LocalBoxFuture};
@@ -21,12 +20,12 @@ use tracing::{error, info};
 struct WSGIConstructor {
     addr: SocketAddr,
     router: Router,
-    dispatcher: PuffContext,
+    puff_context: PuffContext,
 }
 
 impl WsgiServerSpawner for WSGIConstructor {
     fn call(self, handler: WsgiHandler) -> LocalBoxFuture<'static, ()> {
-        start(self.addr, self.router, self.dispatcher, handler).boxed_local()
+        start(self.addr, self.router, self.puff_context, handler).boxed_local()
     }
 }
 
@@ -34,38 +33,23 @@ impl WsgiServerSpawner for WSGIConstructor {
 ///
 /// Exposes options to the command line to set the port and host of the server.
 #[derive(Clone)]
-pub struct WSGIServerCommand<R: IntoPy<Py<PyAny>> + Clone + 'static = ()> {
+pub struct WSGIServerCommand {
     router: Router,
     module: Text,
-    attr: Text,
-    global: Option<R>,
+    attr: Text
 }
 
-impl<G: IntoPy<Py<PyAny>> + Clone + 'static> WSGIServerCommand<G> {
+impl WSGIServerCommand {
     pub fn new<M: Into<Text>, A: Into<Text>>(router: Router, module: M, attr: A) -> Self {
         Self {
             router,
             module: module.into(),
-            attr: attr.into(),
-            global: None,
-        }
-    }
-    pub fn with_global<M: Into<Text>, A: Into<Text>>(
-        router: Router,
-        module: M,
-        attr: A,
-        global: G,
-    ) -> Self {
-        Self {
-            router,
-            module: module.into(),
-            attr: attr.into(),
-            global: Some(global),
+            attr: attr.into()
         }
     }
 }
 
-impl<R: IntoPy<Py<PyAny>> + Clone + 'static> RunnableCommand for WSGIServerCommand<R> {
+impl RunnableCommand for WSGIServerCommand {
     fn cli_parser(&self) -> Command {
         Command::new("wsgi")
     }
@@ -76,15 +60,7 @@ impl<R: IntoPy<Py<PyAny>> + Clone + 'static> RunnableCommand for WSGIServerComma
 
         let module_str = self.module.clone().into_string();
         let attr_str = self.attr.clone().into_string();
-        let g_obj = this_self.global.clone();
         let fut = async move {
-            let greenlet = Python::with_gil(|py| {
-                let global_obj = match g_obj {
-                    Some(v) => v.into_py(py),
-                    None => py.None(),
-                };
-                GreenletDispatcher::new(context.clone(), global_obj)
-            })?;
             let wsgi_app = tokio::task::spawn_blocking(move || {
                 Python::with_gil(|py| {
                     Result::Ok(PyObject::from(
@@ -98,10 +74,10 @@ impl<R: IntoPy<Py<PyAny>> + Clone + 'static> RunnableCommand for WSGIServerComma
                 wsgi_app,
                 WSGIConstructor {
                     addr,
-                    dispatcher: context.clone(),
+                    puff_context: context.clone(),
                     router: this_self.router.clone(),
                 },
-                Some(greenlet),
+                context.clone()
             );
             let shutdown = tokio::signal::ctrl_c();
             // let result = ctx.start()?.await;
@@ -132,10 +108,10 @@ impl<R: IntoPy<Py<PyAny>> + Clone + 'static> RunnableCommand for WSGIServerComma
 async fn start(
     addr: SocketAddr,
     router: Router,
-    dispatcher: PuffContext,
+    puff_context: PuffContext,
     wsgi: WsgiHandler,
 ) {
-    let app = router.into_axum_router(dispatcher).fallback(wsgi);
+    let app = router.into_axum_router(puff_context).fallback(wsgi);
     info!("Starting server on {:?}", addr);
     if let Err(err) = axum::Server::bind(&addr)
         .serve(app.into_make_service())

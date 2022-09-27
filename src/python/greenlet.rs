@@ -1,13 +1,23 @@
-use crate::context::PuffContext;
+use crate::context::{PuffContext, with_puff_context};
 use crate::errors::PuffResult;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::{IntoPy, PyObject, PyResult, Python};
 use std::future::Future;
+use pyo3::types::{PyDict, PyTuple};
 use tokio::sync::oneshot;
+use crate::python::PythonDispatcher;
+use crate::runtime::RuntimeConfig;
 
 #[pyclass]
 pub struct GreenletReturn(Option<oneshot::Sender<PyResult<PyObject>>>);
+
+
+impl GreenletReturn {
+    pub fn new(rec: Option<oneshot::Sender<PyResult<PyObject>>>) -> Self {
+        Self(rec)
+    }
+}
 
 #[pymethods]
 impl GreenletReturn {
@@ -29,72 +39,22 @@ impl GreenletReturn {
 
 #[pyclass]
 #[derive(Clone)]
-pub struct GreenletContext(PuffContext, PyObject);
+pub struct GreenletContext(PyObject);
 
 impl GreenletContext {
-    pub fn dispatcher(&self) -> PuffContext {
-        self.0.clone()
+    pub fn new(obj: PyObject) -> Self {
+        Self(obj)
+    }
+
+    pub fn puff_context(&self) -> PuffContext {
+        with_puff_context(|ctx| ctx.clone())
     }
 }
 
 #[pymethods]
 impl GreenletContext {
     pub fn global_state(&self) -> PyObject {
-        self.1.clone()
-    }
-}
-
-#[derive(Clone)]
-pub struct GreenletDispatcher {
-    thread_obj: PyObject,
-    thread_dispatcher: GreenletContext,
-}
-
-impl GreenletDispatcher {
-    pub fn new(dispatcher: PuffContext, global_state: PyObject) -> PyResult<Self> {
-        let thread_obj = Python::with_gil(|py| {
-            let puff = py.import("puff")?;
-
-            let ret = puff.call_method0("start_event_loop")?;
-            PyResult::Ok(ret.into_py(py))
-        })?;
-        let thread_dispatcher = GreenletContext(dispatcher, global_state);
-        PyResult::Ok(Self {
-            thread_obj,
-            thread_dispatcher,
-        })
-    }
-
-    pub fn dispatch(
-        &self,
-        function: PyObject,
-        args: PyObject,
-        kwargs: PyObject,
-    ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
-        Python::with_gil(|py| self.dispatch_py(py, function, args, kwargs))
-    }
-
-    pub fn dispatch_py(
-        &self,
-        py: Python,
-        function: PyObject,
-        args: PyObject,
-        kwargs: PyObject,
-    ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
-        let (sender, rec) = oneshot::channel();
-        let returner = GreenletReturn(Some(sender));
-        self.thread_obj.call_method1(
-            py,
-            "spawn",
-            (
-                function,
-                self.thread_dispatcher.clone(),
-                args,
-                kwargs,
-                returner,
-            ),
-        )?;
-        Ok(rec)
+        self.0.clone()
     }
 }
 
@@ -127,6 +87,6 @@ pub fn greenlet_async<
     return_fun: PyObject,
     f: F,
 ) {
-    let h = ctx.dispatcher().handle();
+    let h = ctx.puff_context().handle();
     h.spawn(handle_return(return_fun, f));
 }

@@ -6,7 +6,7 @@
 //!
 //! Sync Puff Handlers are run in a Puff context on a coroutine thread. Async Puff Handlers are not run
 //! inside of puff and behave as normal Axum Handlers. In an Async Puff Handler you must
-//! manually use the dispatcher if you want to renter the puff context.
+//! manually use the puff_context if you want to renter the puff context.
 //!
 //! All Puff handlers must return a type compatible with [axum::response::IntoResponse].
 //!
@@ -94,13 +94,13 @@ pub type ResponseBuilder = AxumResponse<()>;
 pub struct Router<S = ()>(axum::Router<S>);
 
 async fn internal_handler<F>(
-    Extension(dispatcher): Extension<PuffContext>,
+    Extension(puff_context): Extension<PuffContext>,
     f: F,
 ) -> AxumResponse<BoxBody>
 where
     F: FnOnce() -> Result<AxumResponse<BoxBody>> + Send + Sync + 'static,
 {
-    let res = dispatcher.dispatcher().dispatch(|| Ok(f())).await;
+    let res = puff_context.dispatcher().dispatch(|| Ok(f())).await;
     match res {
         Ok(r) => r.unwrap_or_else(|e| handle_response_error(e)),
         Err(r) => handle_response_error(r),
@@ -322,16 +322,16 @@ where
         Self(self.0.route(&path.into(), any_service(f)))
     }
 
-    pub(crate) fn into_axum_router(self, dispatcher: PuffContext) -> axum::Router<S> {
-        self.0.layer(Extension(dispatcher)).clone()
+    pub(crate) fn into_axum_router(self, puff_context: PuffContext) -> axum::Router<S> {
+        self.0.layer(Extension(puff_context)).clone()
     }
 
     pub fn into_hyper_server(
         self,
         addr: &SocketAddr,
-        dispatcher: PuffContext,
+        puff_context: PuffContext,
     ) -> axum::Server<AddrIncoming, IntoMakeService<axum::Router<S>>> {
-        let new_router = self.into_axum_router(dispatcher);
+        let new_router = self.into_axum_router(puff_context);
         axum::Server::bind(addr).serve(new_router.into_make_service())
     }
 }
@@ -376,9 +376,9 @@ mod tests {
         let router: Router<()> = Router::new().get("/", || Ok("ok".to_text()));
 
         let rt = Runtime::new().unwrap();
-        let dispatcher = PuffContext::default();
+        let puff_context = PuffContext::default();
 
-        let fut = router.into_axum_router(dispatcher.puff()).call(
+        let fut = router.into_axum_router(puff_context.puff()).call(
             AxumRequest::get("http://localhost/")
                 .body(Body::empty())
                 .unwrap(),

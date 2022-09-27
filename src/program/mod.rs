@@ -54,6 +54,7 @@ use tokio::sync::broadcast;
 use crate::context::{set_puff_context_waiting, PuffContext};
 use crate::errors::Result;
 use crate::python::bootstrap_puff_globals;
+use crate::python::setup_greenlet;
 use crate::runtime::dispatcher::Dispatcher;
 use crate::runtime::RuntimeConfig;
 use crate::types::text::Text;
@@ -263,15 +264,20 @@ impl Program {
         if let Some((command, args)) = arg_matches.subcommand() {
             if let Some(runner) = hm.remove(&command.to_string().into()) {
                 let mut builder = self.runtime()?;
-                if self.runtime_config.python() {
+                let mutex_switcher = Arc::new(Mutex::new(None::<PuffContext>));
+
+                let python_dispatcher = if self.runtime_config.python() {
                     pyo3::prepare_freethreaded_python();
                     bootstrap_puff_globals();
-                }
+                    Some(setup_greenlet(self.runtime_config.clone(), mutex_switcher.clone())?)
+                } else {
+                    None
+                };
 
                 let (dispatcher, waiting) =
                     Dispatcher::new(notify_shutdown, self.runtime_config.clone());
                 let arc_dispatcher = Arc::new(dispatcher);
-                let mutex_switcher = Arc::new(Mutex::new(None::<PuffContext>));
+
                 let thread_mutex = mutex_switcher.clone();
 
                 builder.on_thread_start(move || {
@@ -286,9 +292,10 @@ impl Program {
                     ))?);
                 }
 
+                arc_dispatcher.start_monitor();
+
                 let context =
-                    PuffContext::new_with_options(rt.handle().clone(), arc_dispatcher, redis);
-                // dispatcher.monitor();
+                    PuffContext::new_with_options(rt.handle().clone(), arc_dispatcher, redis, python_dispatcher);
 
                 for i in waiting {
                     i.send(context.puff()).unwrap_or(());

@@ -88,10 +88,10 @@ class MainThread(Thread):
         return res
 
 
-def start_event_loop():
+def start_event_loop(on_thread_start=None):
     q = queue.Queue()
 
-    loop_thread = MainThread(q)
+    loop_thread = MainThread(q, on_thread_start=on_thread_start)
     loop_thread.start()
 
     return loop_thread

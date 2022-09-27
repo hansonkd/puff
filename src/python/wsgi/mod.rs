@@ -7,7 +7,7 @@ use std::future::Future;
 
 
 
-use crate::python::greenlet::GreenletDispatcher;
+use crate::python::PythonDispatcher;
 use crate::python::wsgi::handler::WsgiHandler;
 
 
@@ -17,6 +17,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
 use tokio::sync::{oneshot};
+use crate::context::PuffContext;
 
 #[pyclass]
 pub struct Sender {
@@ -67,7 +68,7 @@ where
 pub struct ServerContext<T: WsgiServerSpawner> {
     app: Option<PyObject>,
     server: Option<T>,
-    greenlet: Option<GreenletDispatcher>,
+    python_dispatcher: PythonDispatcher,
 }
 
 impl<T: WsgiServerSpawner> ServerContext<T> {
@@ -81,7 +82,7 @@ impl<T: WsgiServerSpawner> ServerContext<T> {
                     // create wsgi service
                     let wsgi_handler = WsgiHandler::new(
                         app.clone(),
-                        self.greenlet.clone(),
+                        self.python_dispatcher.clone(),
                     );
 
                     server.call(wsgi_handler).await;
@@ -99,11 +100,11 @@ impl<T: WsgiServerSpawner> ServerContext<T> {
 pub fn create_server_context<T: WsgiServerSpawner>(
     app: PyObject,
     server: T,
-    greenlet: Option<GreenletDispatcher>,
+    context: PuffContext,
 ) -> ServerContext<T> {
     ServerContext {
         app: Some(app),
         server: Some(server),
-        greenlet
+        python_dispatcher: context.python_dispatcher()
     }
 }

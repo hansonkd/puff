@@ -1,5 +1,5 @@
 
-use crate::python::greenlet::GreenletDispatcher;
+use crate::python::PythonDispatcher;
 use crate::python::wsgi;
 use anyhow::{anyhow, Error};
 use axum::body::{Body, BoxBody, Bytes, Full, HttpBody};
@@ -30,24 +30,17 @@ const MAX_LIST_BODY_INLINE_CONCAT: u64 = 1024 * 4;
 #[derive(Clone)]
 pub struct WsgiHandler {
     app: PyObject,
-    greenlet: Option<GreenletDispatcher>,
+    python_dispatcher: PythonDispatcher,
 }
 
 impl WsgiHandler {
     pub fn new(
         app: PyObject,
-        greenlet: Option<GreenletDispatcher>,
+        python_dispatcher: PythonDispatcher,
     ) -> WsgiHandler {
         WsgiHandler {
             app,
-            greenlet,
-        }
-    }
-
-    pub fn blocking(app: PyObject) -> WsgiHandler {
-        WsgiHandler {
-            app,
-            greenlet: None,
+            python_dispatcher,
         }
     }
 }
@@ -255,29 +248,22 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                 Ok(Err(res)) => res.into_response(),
                 Ok(Ok(args)) => {
                     let calculate_value = async {
-                        match self.greenlet {
-                            Some(g) => {
-                                let r = {
-                                    let rec = Python::with_gil(|py| {
-                                        g.dispatch_py(
-                                            py,
-                                            app,
-                                            args.into_py(py),
-                                            PyDict::new(py).into_py(py),
-                                        )
-                                    })?;
-                                    rec.await.map_err(|_e| {
-                                        PyException::new_err(
-                                            "Could not await greenlet result in wsgi.",
-                                        )
-                                    })??
-                                };
-                                Ok(r)
-                            }
-                            None => {
-                                panic!("Blocking not implemented.")
-                            }
-                        }
+                        let r = {
+                            let rec = Python::with_gil(|py| {
+                                self.python_dispatcher.dispatch_py(
+                                    py,
+                                    app,
+                                    args,
+                                    PyDict::new(py),
+                                )
+                            })?;
+                            rec.await.map_err(|_e| {
+                                PyException::new_err(
+                                    "Could not await greenlet result in wsgi.",
+                                )
+                            })??
+                        };
+                        Ok(r)
                     };
                     let iterator_res = calculate_value.await;
                     let iterator = match iterator_res {
