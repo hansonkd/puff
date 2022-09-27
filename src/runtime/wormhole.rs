@@ -18,11 +18,11 @@ use std::io::Error;
 
 use std::pin::Pin;
 
-use std::task::{Context, Poll, Waker};
 use corosensei::{stack, CoroutineResult, ScopedCoroutine, Yielder};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Mutex;
+use std::task::{Context, Poll, Waker};
 
 thread_local! {
     pub static YIELDER: RefCell<*mut AsyncYielder<'static>> = RefCell::new(std::ptr::null_mut());
@@ -38,7 +38,7 @@ where
     Stack: stack::Stack + Send,
 {
     generator: Option<Cell<ScopedCoroutine<'a, Waker, Option<()>, (), Stack>>>,
-    ref_yielder: Rc<Mutex<*mut AsyncYielder<'static>>>
+    ref_yielder: Rc<Mutex<*mut AsyncYielder<'static>>>,
 }
 
 impl<'a, Stack> AsyncWormhole<'a, Stack>
@@ -142,18 +142,12 @@ where
 #[derive(Clone)]
 pub struct AsyncYielder<'a> {
     yielder: &'a Yielder<Waker, Option<()>>,
-    waker: Waker
+    waker: Waker,
 }
 
 impl<'a> AsyncYielder<'a> {
-    pub(crate) fn new(
-        yielder: &'a Yielder<Waker, Option<()>>,
-        waker: Waker
-    ) -> Self {
-        Self {
-            yielder,
-            waker
-        }
+    pub(crate) fn new(yielder: &'a Yielder<Waker, Option<()>>, waker: Waker) -> Self {
+        Self { yielder, waker }
     }
 
     /// Takes an `impl Future` and awaits it, returning the value from it once ready.

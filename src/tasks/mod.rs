@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use crate::errors::Error;
 
-use crate::context::{with_puff_context};
+use crate::context::with_puff_context;
 
 /// A Task representing a currently executing coroutine. Can be awaited on using `join`.
 ///

@@ -1,7 +1,6 @@
 use crate::databases::redis::RedisClient;
 use crate::errors::Error;
-use crate::runtime::dispatcher::{Dispatcher};
-
+use crate::runtime::dispatcher::Dispatcher;
 
 use crate::runtime::{run_with_config_on_local, RuntimeConfig};
 use crate::types::Puff;
@@ -10,12 +9,11 @@ use futures_util::FutureExt;
 
 use std::cell::RefCell;
 
-
+use crate::python::PythonDispatcher;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::{broadcast, oneshot};
 use tokio::task::LocalSet;
-use crate::python::PythonDispatcher;
 
 /// The central control structure for dispatching tasks onto coroutine workers.
 /// All tasks in the same runtime will have access to the same dispatcher. The dispatcher contains
@@ -86,7 +84,7 @@ impl PuffContext {
             handle,
             dispatcher: Arc::new(Dispatcher::empty(notify_shutdown)),
             redis: None,
-            python_dispatcher: None
+            python_dispatcher: None,
         }
     }
 
@@ -108,7 +106,7 @@ impl PuffContext {
             dispatcher,
             handle,
             redis,
-            python_dispatcher
+            python_dispatcher,
         };
 
         arc_dispatcher
@@ -121,7 +119,9 @@ impl PuffContext {
 
     /// A Handle into the multi-threaded async runtime
     pub fn python_dispatcher(&self) -> PythonDispatcher {
-        self.python_dispatcher.clone().expect("Python is not configured for this runtime.")
+        self.python_dispatcher
+            .clone()
+            .expect("Python is not configured for this runtime.")
     }
 
     /// The configured redis client. Panics if not enabled.

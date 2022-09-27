@@ -1,6 +1,4 @@
-
-use crate::python::PythonDispatcher;
-use crate::python::wsgi;
+use crate::python::{wsgi, PythonDispatcher};
 use anyhow::{anyhow, Error};
 use axum::body::{Body, BoxBody, Bytes, Full, HttpBody};
 use axum::handler::Handler;
@@ -8,8 +6,8 @@ use axum::headers::{HeaderMap, HeaderName};
 
 use axum::http::{HeaderValue, Request, StatusCode, Version};
 use axum::response::{IntoResponse, Response};
-use hyper::body::{SizeHint};
-use pyo3::exceptions::{PyException};
+use hyper::body::SizeHint;
+use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyString};
 use pyo3::PyDowncastError;
@@ -21,8 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-
-use tracing::{error};
+use tracing::error;
 use wsgi::Sender;
 
 const MAX_LIST_BODY_INLINE_CONCAT: u64 = 1024 * 4;
@@ -34,10 +31,7 @@ pub struct WsgiHandler {
 }
 
 impl WsgiHandler {
-    pub fn new(
-        app: PyObject,
-        python_dispatcher: PythonDispatcher,
-    ) -> WsgiHandler {
+    pub fn new(app: PyObject, python_dispatcher: PythonDispatcher) -> WsgiHandler {
         WsgiHandler {
             app,
             python_dispatcher,
@@ -162,7 +156,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                 body_bytes
             } else {
                 error!("Could not extract request body.");
-                return WsgiError::ExpectedResponseBody.into_response()
+                return WsgiError::ExpectedResponseBody.into_response();
             };
             let mut content_length: Option<u64> = None;
 
@@ -201,7 +195,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                             r
                         } else {
                             error!("Invalid path encoding");
-                            return Ok(Err(WsgiError::InvalidUtf8InPath.into_response()))
+                            return Ok(Err(WsgiError::InvalidUtf8InPath.into_response()));
                         };
 
                         environ.set_item("PATH_INFO", path)?;
@@ -250,17 +244,11 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                     let calculate_value = async {
                         let r = {
                             let rec = Python::with_gil(|py| {
-                                self.python_dispatcher.dispatch_py(
-                                    py,
-                                    app,
-                                    args,
-                                    PyDict::new(py),
-                                )
+                                self.python_dispatcher
+                                    .dispatch_py(py, app, args, PyDict::new(py))
                             })?;
                             rec.await.map_err(|_e| {
-                                PyException::new_err(
-                                    "Could not await greenlet result in wsgi.",
-                                )
+                                PyException::new_err("Could not await greenlet result in wsgi.")
                             })??
                         };
                         Ok(r)
@@ -278,29 +266,28 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                         return WsgiError::ExpectedResponseStart.into_response();
                     };
                     let (status_code_str, pyheaders) = responded;
-                        let status = status_code_str
-                            .split(" ")
-                            .next()
-                            .expect("Invalid wsgi status format");
-                        let status_code: u16 =
-                            status.parse().expect("Invalid wsgi status code format");
-                        let headers = response.headers_mut().unwrap();
-                        for (name, value) in pyheaders {
-                            let name = match HeaderName::from_bytes(name.as_bytes()) {
-                                Ok(name) => name,
-                                Err(_e) => {
-                                    return WsgiError::InvalidHeader.into_response();
-                                }
-                            };
-                            let value = match HeaderValue::from_bytes(value.as_bytes()) {
-                                Ok(value) => value,
-                                Err(_e) => {
-                                    return WsgiError::InvalidHeader.into_response();
-                                }
-                            };
-                            headers.append(name, value);
-                        }
-                        response = response.status(status_code);
+                    let status = status_code_str
+                        .split(" ")
+                        .next()
+                        .expect("Invalid wsgi status format");
+                    let status_code: u16 = status.parse().expect("Invalid wsgi status code format");
+                    let headers = response.headers_mut().unwrap();
+                    for (name, value) in pyheaders {
+                        let name = match HeaderName::from_bytes(name.as_bytes()) {
+                            Ok(name) => name,
+                            Err(_e) => {
+                                return WsgiError::InvalidHeader.into_response();
+                            }
+                        };
+                        let value = match HeaderValue::from_bytes(value.as_bytes()) {
+                            Ok(value) => value,
+                            Err(_e) => {
+                                return WsgiError::InvalidHeader.into_response();
+                            }
+                        };
+                        headers.append(name, value);
+                    }
+                    response = response.status(status_code);
                     Python::with_gil(|py| {
                         let iter_py = iterator.as_ref(py);
                         if content_length.unwrap_or(u64::MAX) < MAX_LIST_BODY_INLINE_CONCAT {

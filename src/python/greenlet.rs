@@ -1,4 +1,4 @@
-use crate::context::{PuffContext, with_puff_context};
+use crate::context::{with_puff_context, PuffContext};
 use crate::errors::PuffResult;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
@@ -7,11 +7,8 @@ use std::future::Future;
 
 use tokio::sync::oneshot;
 
-
-
 #[pyclass]
 pub struct GreenletReturn(Option<oneshot::Sender<PyResult<PyObject>>>);
-
 
 impl GreenletReturn {
     pub fn new(rec: Option<oneshot::Sender<PyResult<PyObject>>>) -> Self {
@@ -34,27 +31,6 @@ impl GreenletReturn {
             },
             None => Err(PyException::new_err("Already used GreenletReturn")),
         }
-    }
-}
-
-#[pyclass]
-#[derive(Clone)]
-pub struct GreenletContext(PyObject);
-
-impl GreenletContext {
-    pub fn new(obj: PyObject) -> Self {
-        Self(obj)
-    }
-
-    pub fn puff_context(&self) -> PuffContext {
-        with_puff_context(|ctx| ctx.clone())
-    }
-}
-
-#[pymethods]
-impl GreenletContext {
-    pub fn global_state(&self) -> PyObject {
-        self.0.clone()
     }
 }
 
@@ -83,10 +59,10 @@ pub fn greenlet_async<
     F: Future<Output = PuffResult<R>> + Send + 'static,
     R: ToPyObject + 'static,
 >(
-    ctx: &GreenletContext,
+    ctx: PuffContext,
     return_fun: PyObject,
     f: F,
 ) {
-    let h = ctx.puff_context().handle();
+    let h = ctx.handle();
     h.spawn(handle_return(return_fun, f));
 }

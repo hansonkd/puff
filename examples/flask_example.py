@@ -43,15 +43,15 @@ from puff import wrap_async
 
 
 def redis_get(q):
-    return wrap_async(lambda ctx, rr: puff_redis.get(ctx, rr, q), join=False)
+    return wrap_async(lambda rr: puff_redis.get(rr, q), join=False)
 
 
 def redis_get_many(q, l):
-    return wrap_async(lambda ctx, rr: puff.global_state().concat_redis_gets(ctx, rr, q, l), join=False)
+    return wrap_async(lambda rr: puff.global_state().concat_redis_gets(rr, q, l), join=False)
 
 
 def redis_set(k, v):
-    return wrap_async(lambda ctx, rr: puff_redis.set(ctx, rr, k, v), join=False)
+    return wrap_async(lambda rr: puff_redis.set(rr, k, v), join=False)
 
 
 # def app(environ, start_response):

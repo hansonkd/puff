@@ -11,11 +11,9 @@ use futures::future::BoxFuture;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
 
-
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc};
-
+use std::sync::Arc;
 
 use tokio::sync::{broadcast, oneshot};
 
@@ -25,7 +23,6 @@ use crate::errors::Error;
 use crate::runtime::runner::LocalSpawner;
 use crate::runtime::shutdown::Shutdown;
 use crate::runtime::{RuntimeConfig, Strategy};
-
 
 /// Simple statistics about each worker.
 #[derive(Clone, Debug)]

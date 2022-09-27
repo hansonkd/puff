@@ -5,8 +5,14 @@ from threading import Thread
 from typing import Any
 import queue
 
+
+class RustFunctions(object):
+    pass
+
+
+rust_functions = RustFunctions()
+
 parent_thread = contextvars.ContextVar("parent_thread")
-greenlet_context = contextvars.ContextVar("greenlet_context")
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -15,11 +21,10 @@ class Task:
     kwargs: dict
     ret_func: Any
     task_function: Any
-    context: Any
 
     def process(self):
         new_greenlet = greenlet(self.task_function)
-        new_greenlet.switch(self.args, self.kwargs, self.ret_func, self.context)
+        new_greenlet.switch(self.args, self.kwargs, self.ret_func)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -50,9 +55,9 @@ class MainThread(Thread):
         while True:
             self.read_from_queue_processor.switch()
 
-    def spawn(self, task_function, context, args, kwargs, ret_func):
+    def spawn(self, task_function, args, kwargs, ret_func):
         task_function_wrapped = self.generate_spawner(task_function)
-        task = Task(args=args, kwargs=kwargs, ret_func=ret_func, task_function=task_function_wrapped, context=context)
+        task = Task(args=args, kwargs=kwargs, ret_func=ret_func, task_function=task_function_wrapped)
         self.event_queue.put(task)
 
     def return_result(self, greenlet):
@@ -60,9 +65,8 @@ class MainThread(Thread):
         self.event_queue.put(result_event)
 
     def generate_spawner(self, func):
-        def override_spawner(args, kwargs, ret_func, context):
+        def override_spawner(args, kwargs, ret_func):
             parent_thread.set(self)
-            greenlet_context.set(context)
             try:
                 val = func(*args, **kwargs)
                 ret_func(val, None)
@@ -122,7 +126,6 @@ class Greenlet:
 def wrap_async(f, join=True):
     this_greenlet = greenlet.getcurrent()
     thread = parent_thread.get()
-    context = greenlet_context.get()
 
     greenlet_obj = Greenlet(thread=thread)
 
@@ -130,7 +133,7 @@ def wrap_async(f, join=True):
         greenlet_obj.set_result(r, e)
         thread.return_result(this_greenlet)
 
-    f(context, return_result)
+    f(return_result)
     if join:
         return greenlet_obj.join()
     else:
@@ -140,7 +143,6 @@ def wrap_async(f, join=True):
 def spawn(f, *args, **kwargs):
 
     thread = parent_thread.get()
-    context = greenlet_context.get()
     this_greenlet = greenlet.getcurrent()
 
     greenlet_obj = Greenlet(thread=thread)
@@ -156,7 +158,7 @@ def spawn(f, *args, **kwargs):
         except Exception as e:
             return None, e
 
-    thread.spawn(run_and_catch, context, [], {}, return_result)
+    thread.spawn(run_and_catch, [], {}, return_result)
 
     result, exception = thread.event_loop_processor.switch()
     if exception:
@@ -192,9 +194,9 @@ def join_iter(greenlets):
 
 
 def get_redis():
-    pass
+    return rust_functions.get_redis()
 
 
 def global_state():
-    return greenlet_context.get().global_state()
+    return rust_functions.global_state
 

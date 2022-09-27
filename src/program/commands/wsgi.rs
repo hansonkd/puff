@@ -8,12 +8,11 @@ use clap::{ArgMatches, Command};
 
 use crate::python::wsgi::handler::WsgiHandler;
 use crate::types::Text;
-use futures_util::future::{LocalBoxFuture};
-use futures_util::{FutureExt};
+use futures_util::future::LocalBoxFuture;
+use futures_util::FutureExt;
 
 use pyo3::{PyObject, Python};
 use std::net::SocketAddr;
-
 
 use tracing::{error, info};
 
@@ -36,7 +35,7 @@ impl WsgiServerSpawner for WSGIConstructor {
 pub struct WSGIServerCommand {
     router: Router,
     module: Text,
-    attr: Text
+    attr: Text,
 }
 
 impl WSGIServerCommand {
@@ -44,7 +43,7 @@ impl WSGIServerCommand {
         Self {
             router,
             module: module.into(),
-            attr: attr.into()
+            attr: attr.into(),
         }
     }
 }
@@ -77,7 +76,7 @@ impl RunnableCommand for WSGIServerCommand {
                     puff_context: context.clone(),
                     router: this_self.router.clone(),
                 },
-                context.clone()
+                context.clone(),
             );
             let shutdown = tokio::signal::ctrl_c();
             // let result = ctx.start()?.await;
@@ -105,12 +104,7 @@ impl RunnableCommand for WSGIServerCommand {
     }
 }
 
-async fn start(
-    addr: SocketAddr,
-    router: Router,
-    puff_context: PuffContext,
-    wsgi: WsgiHandler,
-) {
+async fn start(addr: SocketAddr, router: Router, puff_context: PuffContext, wsgi: WsgiHandler) {
     let app = router.into_axum_router(puff_context).fallback(wsgi);
     info!("Starting server on {:?}", addr);
     if let Err(err) = axum::Server::bind(&addr)

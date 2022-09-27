@@ -4,20 +4,16 @@ use anyhow::{anyhow, Result};
 
 use std::future::Future;
 
-
-
-
-use crate::python::PythonDispatcher;
 use crate::python::wsgi::handler::WsgiHandler;
-
+use crate::python::PythonDispatcher;
 
 use futures_util::future::LocalBoxFuture;
 use futures_util::FutureExt;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
-use tokio::sync::{oneshot};
 use crate::context::PuffContext;
+use tokio::sync::oneshot;
 
 #[pyclass]
 pub struct Sender {
@@ -73,17 +69,12 @@ pub struct ServerContext<T: WsgiServerSpawner> {
 
 impl<T: WsgiServerSpawner> ServerContext<T> {
     pub fn start(&mut self) -> Result<LocalBoxFuture<Result<()>>> {
-        match (
-            self.app.take(),
-            self.server.take(),
-        ) {
+        match (self.app.take(), self.server.take()) {
             (Some(app), Some(server)) => {
                 let fut = async move {
                     // create wsgi service
-                    let wsgi_handler = WsgiHandler::new(
-                        app.clone(),
-                        self.python_dispatcher.clone(),
-                    );
+                    let wsgi_handler =
+                        WsgiHandler::new(app.clone(), self.python_dispatcher.clone());
 
                     server.call(wsgi_handler).await;
 
@@ -105,6 +96,6 @@ pub fn create_server_context<T: WsgiServerSpawner>(
     ServerContext {
         app: Some(app),
         server: Some(server),
-        python_dispatcher: context.python_dispatcher()
+        python_dispatcher: context.python_dispatcher(),
     }
 }

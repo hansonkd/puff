@@ -48,13 +48,12 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use tokio::runtime::{Builder};
+use tokio::runtime::Builder;
 use tokio::sync::broadcast;
 
 use crate::context::{set_puff_context_waiting, PuffContext};
 use crate::errors::Result;
-use crate::python::bootstrap_puff_globals;
-use crate::python::setup_greenlet;
+use crate::python::{bootstrap_puff_globals, setup_greenlet};
 use crate::runtime::dispatcher::Dispatcher;
 use crate::runtime::RuntimeConfig;
 use crate::types::text::Text;
@@ -268,8 +267,12 @@ impl Program {
 
                 let python_dispatcher = if self.runtime_config.python() {
                     pyo3::prepare_freethreaded_python();
-                    bootstrap_puff_globals();
-                    Some(setup_greenlet(self.runtime_config.clone(), mutex_switcher.clone())?)
+                    let global_obj = self.runtime_config.global_state()?;
+                    bootstrap_puff_globals(global_obj);
+                    Some(setup_greenlet(
+                        self.runtime_config.clone(),
+                        mutex_switcher.clone(),
+                    )?)
                 } else {
                     None
                 };
@@ -287,15 +290,19 @@ impl Program {
                 let rt = builder.build()?;
                 let mut redis = None;
                 if self.runtime_config.redis() {
-                    redis = Some(rt.block_on(new_client_async(
-                        arg_matches.value_of("redis_url").unwrap(),
-                    ))?);
+                    redis = Some(
+                        rt.block_on(new_client_async(arg_matches.value_of("redis_url").unwrap()))?,
+                    );
                 }
 
                 arc_dispatcher.start_monitor();
 
-                let context =
-                    PuffContext::new_with_options(rt.handle().clone(), arc_dispatcher, redis, python_dispatcher);
+                let context = PuffContext::new_with_options(
+                    rt.handle().clone(),
+                    arc_dispatcher,
+                    redis,
+                    python_dispatcher,
+                );
 
                 for i in waiting {
                     i.send(context.puff()).unwrap_or(());

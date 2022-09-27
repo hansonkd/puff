@@ -62,7 +62,9 @@ mod tests {
     fn check_oneshot() {
         let dispatcher = PuffContext::default();
         let (sender, recv) = channel();
-        dispatcher.dispatcher().dispatch(|| Ok(sender.send(42).unwrap_or(())));
+        dispatcher
+            .dispatcher()
+            .dispatch(|| Ok(sender.send(42).unwrap_or(())));
         let r = start_runtime_and_run(|| Ok(recv.recv().unwrap_or(0))).unwrap();
         assert_eq!(r, 42)
     }

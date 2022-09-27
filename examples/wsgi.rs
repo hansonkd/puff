@@ -1,16 +1,16 @@
 use bb8_redis::redis::Cmd;
 use futures_util::future::join_all;
 use puff::databases::redis::with_redis;
-use puff::errors::{PuffResult};
+use puff::errors::PuffResult;
 use puff::program::commands::wsgi::WSGIServerCommand;
 use puff::program::Program;
-use puff::python::greenlet::{greenlet_async, GreenletContext};
+use puff::python::greenlet::greenlet_async;
 use puff::runtime::RuntimeConfig;
 
+use puff::context::with_puff_context;
 use puff::types::{Bytes, BytesBuilder};
 use puff::web::server::Router;
 use pyo3::prelude::*;
-
 
 #[pyclass]
 #[derive(Clone)]
@@ -21,7 +21,6 @@ impl MyState {
     fn concat_redis_gets(
         &self,
         py: Python,
-        ctx: &GreenletContext,
         return_fun: PyObject,
         key: &str,
         num: usize,
@@ -30,7 +29,7 @@ impl MyState {
         for _ in 0..num {
             vec.push(Cmd::get(key))
         }
-        self.run_command_concat(py, ctx, return_fun, vec)
+        self.run_command_concat(py, return_fun, vec)
     }
 }
 
@@ -38,11 +37,11 @@ impl MyState {
     fn run_command_concat(
         &self,
         py: Python,
-        ctx: &GreenletContext,
         return_fun: PyObject,
         commands: Vec<Cmd>,
     ) -> PyResult<PyObject> {
-        let pool = ctx.puff_context().redis().pool();
+        let ctx = with_puff_context(|ctx| ctx);
+        let pool = ctx.redis().pool();
 
         greenlet_async(ctx, return_fun, async move {
             let mut builder = BytesBuilder::new();
@@ -82,15 +81,13 @@ fn main() {
         })?;
         Ok(r)
     });
-    let rc = RuntimeConfig::default().set_redis(true).set_global_state_fn(|py| Ok(MyState.into_py(py)));
+    let rc = RuntimeConfig::default()
+        .set_redis(true)
+        .set_global_state_fn(|py| Ok(MyState.into_py(py)));
 
     Program::new("my_first_app")
         .about("This is my first app")
         .runtime_config(rc)
-        .command(WSGIServerCommand::new(
-            router,
-            "flask_example",
-            "app"
-        ))
+        .command(WSGIServerCommand::new(router, "flask_example", "app"))
         .run()
 }

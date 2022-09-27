@@ -4,14 +4,14 @@ use crate::runtime::wormhole::{AsyncWormhole, YIELDER};
 use corosensei::stack::DefaultStack;
 
 use crate::context;
+use pyo3::prelude::PyObject;
+use pyo3::{PyResult, Python};
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
-use pyo3::prelude::PyObject;
-use pyo3::{PyResult, Python};
 use tokio::sync::{broadcast, oneshot};
 
-use crate::context::{PuffContext};
+use crate::context::PuffContext;
 use crate::errors::Result;
 use crate::runtime::dispatcher::Dispatcher;
 use crate::types::Puff;
@@ -68,15 +68,13 @@ where
     F: FnOnce() -> Result<R> + 'static + Send,
     R: 'static + Send,
 {
-    Ok(
-        tokio::task::spawn_local(PuffWormhole::new(s, move || {
-            // let r = DISPATCHER.sync_scope(dispatcher, || YIELDER.sync_scope(inner, f));
-            let r = f();
-            // If we can't send, the future wasn't awaited
-            sender.send(r).unwrap_or(())
-        })?)
-        .await?,
-    )
+    Ok(tokio::task::spawn_local(PuffWormhole::new(s, move || {
+        // let r = DISPATCHER.sync_scope(dispatcher, || YIELDER.sync_scope(inner, f));
+        let r = f();
+        // If we can't send, the future wasn't awaited
+        sender.send(r).unwrap_or(())
+    })?)
+    .await?)
 }
 
 /// Strategies for distributing tasks onto a coroutine worker thread.
@@ -119,9 +117,9 @@ pub struct RuntimeConfig {
     redis: bool,
     monitor: Option<Duration>,
     greenlets: bool,
-    global_state_fn: Option<Arc<dyn Fn(Python) -> PyResult<PyObject> + Send + Sync + 'static >>,
+    global_state_fn: Option<Arc<dyn Fn(Python) -> PyResult<PyObject> + Send + Sync + 'static>>,
     blocking_task_keep_alive: Duration,
-    strategy: Strategy
+    strategy: Strategy,
 }
 
 impl RuntimeConfig {
@@ -179,11 +177,9 @@ impl RuntimeConfig {
     }
     /// Get the global Python object
     pub fn global_state(&self) -> PyResult<PyObject> {
-        Python::with_gil(|py| {
-            match self.global_state_fn.clone() {
-                Some(r) => r(py),
-                None => Ok(py.None())
-            }
+        Python::with_gil(|py| match self.global_state_fn.clone() {
+            Some(r) => r(py),
+            None => Ok(py.None()),
         })
     }
 
@@ -277,10 +273,13 @@ impl RuntimeConfig {
         new
     }
 
-    /// If provided, will spawn a thread that will log information about the dispatcher.
+    /// Run a function in a python context and set the result as the global state in python.
     ///
     /// Default: true
-    pub fn set_global_state_fn<F: Fn(Python) -> PyResult<PyObject> + Send + Sync + 'static >(self, f: F) -> Self {
+    pub fn set_global_state_fn<F: Fn(Python) -> PyResult<PyObject> + Send + Sync + 'static>(
+        self,
+        f: F,
+    ) -> Self {
         let mut new = self;
         new.global_state_fn = Some(Arc::new(f));
         new
@@ -315,7 +314,7 @@ where
     R: 'static + Send,
 {
     let stack = DefaultStack::new(stack_size)?;
-    run_local_wormhole_with_stack( stack, sender, f).await
+    run_local_wormhole_with_stack(stack, sender, f).await
 }
 
 pub(crate) async fn run_with_config_on_local<F, R>(
@@ -357,11 +356,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    
-    
-    
-    
 
     #[test]
     fn check_wormhole() {

@@ -1,20 +1,19 @@
-
 use crate::errors::PuffResult;
 use crate::python::redis::RedisGlobal;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
-use pyo3::{PyResult, Python};
-use std::os::raw::c_int;
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use crate::context::{set_puff_context_waiting, with_puff_context, PuffContext};
+use crate::python::greenlet::GreenletReturn;
+use crate::runtime::{RuntimeConfig, Strategy};
 use pyo3::types::{PyDict, PyTuple};
+use pyo3::{PyResult, Python};
 use rand::prelude::SliceRandom;
 use rand::thread_rng;
+use std::os::raw::c_int;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
-use crate::context::{PuffContext, set_puff_context_waiting};
-use crate::python::greenlet::{GreenletContext, GreenletReturn};
-use crate::runtime::{RuntimeConfig, Strategy};
 
 pub mod greenlet;
 pub mod redis;
@@ -24,11 +23,37 @@ fn into_py_result<T>(r: PuffResult<T>) -> PyResult<T> {
     r.map_err(|err| PyRuntimeError::new_err(format!("PuffError: {:?}", err)))
 }
 
-pub(crate) fn bootstrap_puff_globals() {
+#[pyclass]
+struct SpawnBlocking;
+
+#[pymethods]
+impl SpawnBlocking {
+    pub fn __call__(
+        &self,
+        py: Python,
+        function: PyObject,
+        args: Py<PyTuple>,
+        kwargs: Py<PyDict>,
+    ) -> PyResult<()> {
+        let ctx = with_puff_context(|ctx| ctx);
+        ctx.python_dispatcher().dispatch_blocking(
+            py,
+            function,
+            args.as_ref(py),
+            kwargs.as_ref(py),
+        )?;
+        Ok(())
+    }
+}
+
+pub(crate) fn bootstrap_puff_globals(global_state: PyObject) {
     Python::with_gil(|py| {
         println!("Adding puff....");
         let puff_mod = py.import("puff")?;
-        puff_mod.setattr("get_redis", RedisGlobal)
+        let puff_rust_functions = puff_mod.getattr("rust_functions")?;
+        puff_rust_functions.setattr("get_redis", RedisGlobal)?;
+        puff_rust_functions.setattr("global_state", global_state)?;
+        puff_rust_functions.setattr("spawn_blocking_internal", SpawnBlocking.into_py(py))
     })
     .expect("Could not set python globals");
 }
@@ -54,60 +79,66 @@ impl PythonPuffContextSetter {
 
 #[derive(Clone)]
 pub struct PythonDispatcher {
-    thread_objs: Vec<PyObject>,
-    greenlet_context: GreenletContext,
-    next: Arc<AtomicUsize>,
+    thread_obj: PyObject,
     blocking: bool,
-    strategy: Strategy
 }
 
 impl PythonDispatcher {
-    pub fn new(global_state: PyObject, threads: usize, context_waiting: Arc<Mutex<Option<PuffContext>>>) -> PyResult<Self> {
-        let thread_objs = Python::with_gil(|py| {
+    pub fn new(context_waiting: Arc<Mutex<Option<PuffContext>>>) -> PyResult<Self> {
+        let thread_obj = Python::with_gil(|py| {
             let puff = py.import("puff")?;
-            let mut vec = Vec::with_capacity(threads);
-            for _ in 0..threads {
-                let ret = puff.call_method1("start_event_loop", (PythonPuffContextSetter(context_waiting.clone()), ))?;
-                vec.push(ret.into_py(py))
-            }
-            PyResult::Ok(vec)
+            let ret = puff.call_method1(
+                "start_event_loop",
+                (PythonPuffContextSetter(context_waiting.clone()),),
+            )?;
+            PyResult::Ok(ret.into_py(py))
         })?;
-        let greenlet_context = GreenletContext::new(global_state);
-        let strategy = Strategy::RoundRobin;
 
         PyResult::Ok(Self {
-            thread_objs,
-            greenlet_context,
-            strategy,
-            next: Arc::new(AtomicUsize::new(0)),
-            blocking: false
+            thread_obj,
+            blocking: false,
         })
     }
 
-    pub fn blocking(global_state: PyObject) -> PyResult<Self> {
-        let greenlet_context = GreenletContext::new(global_state);
-        let strategy = Strategy::Random;
+    pub fn blocking() -> PyResult<Self> {
         PyResult::Ok(Self {
-            thread_objs: Vec::new(),
-            greenlet_context,
-            strategy,
-            next: Arc::new(AtomicUsize::new(0)),
-            blocking: true
+            thread_obj: Python::with_gil(|py| py.None()),
+            blocking: true,
         })
     }
 
-    pub fn dispatch<A: IntoPy<Py<PyTuple>> + Send + 'static, K: IntoPy<Py<PyDict>> + Send + 'static>(
+    pub fn dispatch_blocking<A: IntoPy<Py<PyTuple>>, K: IntoPy<Py<PyDict>>>(
+        &self,
+        py: Python,
+        function: PyObject,
+        args: A,
+        kwargs: K,
+    ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
+        let (sender, rec) = oneshot::channel();
+        let args_py = args.into_py(py);
+        let kwargs_py = kwargs.into_py(py);
+        let ctx = with_puff_context(|ctx| ctx);
+        ctx.handle().spawn_blocking(move || {
+            Python::with_gil(|py| {
+                sender
+                    .send(function.call(py, args_py.as_ref(py), Some(kwargs_py.as_ref(py))))
+                    .unwrap_or(())
+            })
+        });
+        Ok(rec)
+    }
+
+    pub fn dispatch<
+        A: IntoPy<Py<PyTuple>> + Send + 'static,
+        K: IntoPy<Py<PyDict>> + Send + 'static,
+    >(
         &self,
         function: PyObject,
         args: A,
         kwargs: K,
     ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
         if self.blocking {
-            let (sender, rec) = oneshot::channel();
-            self.greenlet_context.puff_context().handle().spawn_blocking(move || {
-                Python::with_gil(|py| sender.send(function.call(py, args, Some(kwargs.into_py(py).as_ref(py)))).unwrap_or(()))
-            });
-            Ok(rec)
+            Python::with_gil(|py| self.dispatch_blocking(py, function, args, kwargs))
         } else {
             Python::with_gil(|py| self.dispatch_py(py, function, args, kwargs))
         }
@@ -122,12 +153,11 @@ impl PythonDispatcher {
     ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
         let (sender, rec) = oneshot::channel();
         let returner = GreenletReturn::new(Some(sender));
-        self.find_thread_obj().call_method1(
+        self.thread_obj.call_method1(
             py,
             "spawn",
             (
                 function,
-                self.greenlet_context.clone(),
                 args.into_py(py).to_object(py),
                 kwargs.into_py(py).to_object(py),
                 returner,
@@ -135,46 +165,15 @@ impl PythonDispatcher {
         )?;
         Ok(rec)
     }
-
-    fn find_thread_obj(&self) -> PyObject {
-        if self.thread_objs.len() == 1 {
-            return self
-                .thread_objs
-                .first()
-                .expect("Expected at least one Spawner")
-                .clone();
-        }
-        match self.strategy {
-            Strategy::LeastBusy => panic!("Least busy not supported in python dispatcher."),
-            Strategy::RoundRobin => self.find_thread_obj_round_robin(),
-            Strategy::Random => self.find_thread_obj_random(),
-        }
-    }
-
-    fn find_thread_obj_round_robin(&self) -> PyObject {
-        let next_count = self.next.fetch_add(1, Ordering::SeqCst);
-        let l = self.thread_objs.len();
-        let next_ix = next_count % l;
-        let r: &PyObject = unsafe { self.thread_objs.get_unchecked(next_ix) };
-        r.clone()
-    }
-
-    fn find_thread_obj_random(&self) -> PyObject {
-        let mut rng = thread_rng();
-        self.thread_objs
-            .as_slice()
-            .choose(&mut rng)
-            .expect("Expected at least one Spawner")
-            .clone()
-    }
 }
 
-
-pub fn setup_greenlet(config: RuntimeConfig, context_waiting: Arc<Mutex<Option<PuffContext>>>) -> PyResult<PythonDispatcher> {
-    let global_obj = config.global_state()?;
+pub fn setup_greenlet(
+    config: RuntimeConfig,
+    context_waiting: Arc<Mutex<Option<PuffContext>>>,
+) -> PyResult<PythonDispatcher> {
     if config.greenlets() {
-        PythonDispatcher::new(global_obj, 1, context_waiting)
+        PythonDispatcher::new(context_waiting)
     } else {
-        PythonDispatcher::blocking(global_obj)
+        PythonDispatcher::blocking()
     }
 }

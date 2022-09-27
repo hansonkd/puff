@@ -1,14 +1,14 @@
 use crate::databases::redis::{with_redis, Cmd, RedisClient};
 
-use crate::python::greenlet::{greenlet_async, GreenletContext};
+use crate::python::greenlet::greenlet_async;
 use crate::python::into_py_result;
-use crate::types::{Bytes};
+use crate::types::Bytes;
 use bb8_redis::redis::{FromRedisValue, Value};
 
-use pyo3::exceptions::{PyValueError};
+use crate::context::with_puff_context;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList};
-
 
 #[pyclass]
 pub struct RedisGlobal;
@@ -51,11 +51,11 @@ impl PythonRedis {
     fn run_command<T: ToPyObject + FromRedisValue + 'static>(
         &self,
         py: Python,
-        ctx: &GreenletContext,
         return_fun: PyObject,
         command: Cmd,
     ) -> PyResult<PyObject> {
         let client = self.0.pool();
+        let ctx = with_puff_context(|ctx| ctx);
         greenlet_async(ctx, return_fun, async move {
             let mut conn = client.get().await?;
             let res: T = command.query_async(&mut *conn).await?;
@@ -67,25 +67,12 @@ impl PythonRedis {
 
 #[pymethods]
 impl PythonRedis {
-    fn get(
-        &self,
-        py: Python,
-        ctx: &GreenletContext,
-        return_fun: PyObject,
-        val: &str,
-    ) -> PyResult<PyObject> {
-        self.run_command::<Bytes>(py, ctx, return_fun, Cmd::get(val))
+    fn get(&self, py: Python, return_fun: PyObject, val: &str) -> PyResult<PyObject> {
+        self.run_command::<Bytes>(py, return_fun, Cmd::get(val))
     }
 
-    fn set(
-        &self,
-        py: Python,
-        ctx: &GreenletContext,
-        return_fun: PyObject,
-        key: &str,
-        val: &str,
-    ) -> PyResult<PyObject> {
-        self.run_command::<()>(py, ctx, return_fun, Cmd::set(key, val))
+    fn set(&self, py: Python, return_fun: PyObject, key: &str, val: &str) -> PyResult<PyObject> {
+        self.run_command::<()>(py, return_fun, Cmd::set(key, val))
     }
 
     fn command(&self, py: Python, command: &PyList) -> PyResult<PyObject> {
