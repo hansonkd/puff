@@ -2,8 +2,9 @@ use crate::errors::PuffResult;
 use crate::python::redis::RedisGlobal;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use std::collections::HashMap;
 
-use crate::context::{set_puff_context_waiting, with_puff_context, PuffContext, set_puff_context};
+use crate::context::{set_puff_context, set_puff_context_waiting, with_puff_context, PuffContext};
 use crate::python::greenlet::GreenletReturn;
 use crate::runtime::RuntimeConfig;
 use pyo3::types::{PyDict, PyTuple};
@@ -50,7 +51,9 @@ pub fn log_traceback(e: PyErr) {
     Python::with_gil(|py| {
         let t = e.traceback(py);
         t.map(|f| {
-            let res = f.format().unwrap_or_else(|e| format!("Error formatting traceback\n: {e}"));
+            let res = f
+                .format()
+                .unwrap_or_else(|e| format!("Error formatting traceback\n: {e}"));
             error!("Python Error: {e}");
             eprintln!("{}", res);
         })
@@ -130,9 +133,8 @@ impl PythonDispatcher {
     }
 
     pub fn blocking() -> PyResult<Self> {
-        let (thread_obj, spawn_blocking_fn) = Python::with_gil(|py| {
-            PyResult::Ok((py.None(), spawn_blocking_fn(py)?))
-        })?;
+        let (thread_obj, spawn_blocking_fn) =
+            Python::with_gil(|py| PyResult::Ok((py.None(), spawn_blocking_fn(py)?)))?;
         PyResult::Ok(Self {
             thread_obj,
             spawn_blocking_fn,
@@ -151,30 +153,51 @@ impl PythonDispatcher {
         let (sender, rec) = oneshot::channel();
         let ret = GreenletReturn::new(Some(sender));
         let on_thread_start = with_puff_context(PythonPuffContextSetter);
-        self.spawn_blocking_fn.call1(py, (on_thread_start, function, ret, args.into_py(py), kwargs.into_py(py)))?;
+        self.spawn_blocking_fn.call1(
+            py,
+            (
+                on_thread_start,
+                function,
+                args.into_py(py),
+                kwargs.into_py(py),
+                ret,
+            ),
+        )?;
         Ok(rec)
     }
 
     /// Acquires the GIL and Executes the python function on the greenlet thread or a new thread
-    /// depending if greenlets were enabled.
-    pub fn dispatch<
-        A: IntoPy<Py<PyTuple>> + Send + 'static,
-        K: IntoPy<Py<PyDict>> + Send + 'static,
-    >(
+    /// depending if greenlets were enabled. Takes no keyword arguments
+    pub fn dispatch1<A: IntoPy<Py<PyTuple>> + Send + 'static>(
         &self,
         function: PyObject,
         args: A,
-        kwargs: K,
     ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
-        if self.blocking {
-            Python::with_gil(|py| self.dispatch_blocking(py, function, args, kwargs))
-        } else {
-            Python::with_gil(|py| self.dispatch_py(py, function, args, kwargs))
-        }
+        self.dispatch(function, args, None::<&PyDict>)
+    }
+
+    /// Acquires the GIL and Executes the python function on the greenlet thread or a new thread
+    /// depending if greenlets were enabled.
+    pub fn dispatch<A: IntoPy<Py<PyTuple>>, K: IntoPy<Py<PyDict>>>(
+        &self,
+        function: PyObject,
+        args: A,
+        kwargs: Option<K>,
+    ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
+        Python::with_gil(|py| {
+            let kwargs = kwargs
+                .map(|f| f.into_py(py))
+                .unwrap_or(PyDict::new(py).into_py(py));
+            if self.blocking {
+                self.dispatch_blocking(py, function, args, kwargs.as_ref(py))
+            } else {
+                self.dispatch_greenlet(py, function, args, kwargs.as_ref(py))
+            }
+        })
     }
 
     /// Executes the python function on the greenlet thread.
-    pub fn dispatch_py<A: IntoPy<Py<PyTuple>>, K: IntoPy<Py<PyDict>>>(
+    pub fn dispatch_greenlet<A: IntoPy<Py<PyTuple>>, K: IntoPy<Py<PyDict>>>(
         &self,
         py: Python,
         function: PyObject,

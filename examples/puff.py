@@ -1,3 +1,6 @@
+import sys
+from importlib import import_module
+
 from greenlet import greenlet
 import dataclasses
 import contextvars
@@ -44,6 +47,14 @@ class Kill:
 
     def process(self):
         self.thread.kill_now()
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class StartShutdown:
+    thread: Any
+
+    def process(self):
+        self.thread.do_shutdown()
 
 
 class MainThread(Thread):
@@ -122,14 +133,16 @@ class MainThread(Thread):
         self.main_greenlet.switch(False)
 
     def start_shutdown(self):
+        self.event_queue.put(StartShutdown(thread=self))
+
+    def do_shutdown(self):
         self.shutdown_started = True
 
     def has_shutdown(self):
         return self.shutdown_started and not self.greenlets
 
     def read_next_event(self):
-        res = self.main_greenlet.switch(True)
-        return res
+        return self.main_greenlet.switch(True)
 
 
 def start_event_loop(on_thread_start=None):
@@ -248,7 +261,7 @@ def spawn_blocking(f, *args, **kwargs):
     return greenlet_obj
 
 
-def spawn_blocking_from_rust(on_thread_start, f, return_result, args, kwargs):
+def spawn_blocking_from_rust(on_thread_start, f, args, kwargs, return_result):
     child_thread = start_event_loop(on_thread_start=on_thread_start)
 
     def wrap_return_result(val, e):
@@ -256,3 +269,33 @@ def spawn_blocking_from_rust(on_thread_start, f, return_result, args, kwargs):
         child_thread.start_shutdown()
 
     child_thread.spawn(f, args, kwargs, wrap_return_result)
+
+
+def cached_import(module_path, class_name):
+    # Check whether module is loaded and fully initialized.
+    if not (
+        (module := sys.modules.get(module_path))
+        and (spec := getattr(module, "__spec__", None))
+        and getattr(spec, "_initializing", False) is False
+    ):
+        module = import_module(module_path)
+    return getattr(module, class_name)
+
+
+def import_string(dotted_path):
+    """
+    Import a dotted module path and return the attribute/class designated by the
+    last name in the path. Raise ImportError if the import failed.
+    """
+    try:
+        module_path, class_name = dotted_path.rsplit(".", 1)
+    except ValueError as err:
+        raise ImportError("%s doesn't look like a module path" % dotted_path) from err
+
+    try:
+        return cached_import(module_path, class_name)
+    except AttributeError as err:
+        raise ImportError(
+            'Module "%s" does not define a "%s" attribute/class'
+            % (module_path, class_name)
+        ) from err

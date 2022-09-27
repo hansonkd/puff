@@ -1,4 +1,4 @@
-use crate::python::{wsgi, PythonDispatcher, log_traceback};
+use crate::python::{log_traceback, wsgi, PythonDispatcher};
 use anyhow::{anyhow, Error};
 use axum::body::{Body, BoxBody, Bytes, Full, HttpBody};
 use axum::handler::Handler;
@@ -247,10 +247,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                 Ok(Ok(args)) => {
                     let calculate_value = async {
                         let r = {
-                            let rec = Python::with_gil(|py| {
-                                self.python_dispatcher
-                                    .dispatch_py(py, app, args, PyDict::new(py))
-                            })?;
+                            let rec = self.python_dispatcher.dispatch1(app, args)?;
                             rec.await.map_err(|_e| {
                                 PyException::new_err("Could not await greenlet result in wsgi.")
                             })??

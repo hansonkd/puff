@@ -51,13 +51,14 @@ use std::sync::{Arc, Mutex};
 use tokio::runtime::Builder;
 use tokio::sync::broadcast;
 
-use crate::context::{set_puff_context_waiting, PuffContext};
+use crate::context::{set_puff_context, set_puff_context_waiting, PuffContext};
 use crate::errors::Result;
 use crate::python::{bootstrap_puff_globals, setup_greenlet};
 use crate::runtime::dispatcher::Dispatcher;
 use crate::runtime::RuntimeConfig;
 use crate::types::text::Text;
 use crate::types::Puff;
+use tracing::{error, info};
 
 pub mod commands;
 
@@ -209,7 +210,7 @@ impl Program {
             tl = tl.after_help(after_help.as_str());
         }
 
-        tl
+        tl.allow_invalid_utf8_for_external_subcommands(true)
     }
 
     fn runtime(&self) -> Result<Builder> {
@@ -233,7 +234,12 @@ impl Program {
     ///
     /// See [Self::try_run] for more information.
     pub fn run(&self) -> () {
-        self.try_run().unwrap()
+        match self.try_run() {
+            Ok(()) => (),
+            Err(e) => {
+                error!("Error running command: {e}")
+            }
+        }
     }
 
     /// Tries to run the program and returns an Error if it fails.
@@ -277,9 +283,6 @@ impl Program {
                     None
                 };
 
-                let (dispatcher, waiting) =
-                    Dispatcher::new(notify_shutdown, self.runtime_config.clone());
-                let arc_dispatcher = Arc::new(dispatcher);
 
                 let thread_mutex = mutex_switcher.clone();
 
@@ -291,9 +294,14 @@ impl Program {
                 let mut redis = None;
                 if self.runtime_config.redis() {
                     redis = Some(
-                        rt.block_on(new_client_async(arg_matches.value_of("redis_url").unwrap()))?,
+                        rt.block_on(new_client_async(arg_matches.value_of("redis_url").unwrap(), true))?,
                     );
                 }
+
+                let (dispatcher, waiting) =
+                    Dispatcher::new(notify_shutdown, self.runtime_config.clone());
+                let arc_dispatcher = Arc::new(dispatcher);
+
 
                 arc_dispatcher.start_monitor();
 
@@ -308,6 +316,8 @@ impl Program {
                     i.send(context.puff()).unwrap_or(());
                 }
 
+                set_puff_context(context.puff());
+
                 let context_to_set = context.puff();
                 {
                     let mut borrowed = mutex_switcher.lock().unwrap();
@@ -315,7 +325,29 @@ impl Program {
                 }
 
                 let runnable = runner.runnable_from_args(args, context)?;
-                rt.block_on(runnable.0)?;
+
+                let main_fut = async {
+                    let shutdown = tokio::signal::ctrl_c();
+                    // let result = ctx.start()?.await;
+                    tokio::select! {
+                        res = runnable.0 => {
+                            // If an error is received here, accepting connections from the TCP
+                            // listener failed multiple times and the server is giving up and
+                            // shutting down.
+                            //
+                            // Errors encountered when handling individual connections do not
+                            // bubble up to this point.
+                            if let Err(err) = res {
+                                error!(cause = %err, "failed to start command");
+                            }
+                        }
+                        _ = shutdown => {
+                            // The shutdown signal has been received.
+                            info!("shutting down");
+                        }
+                    }
+                };
+                rt.block_on(main_fut);
             }
         }
 

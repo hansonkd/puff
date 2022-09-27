@@ -3,10 +3,12 @@ use crate::errors::Result;
 use crate::program::{Runnable, RunnableCommand};
 use crate::types::Text;
 use anyhow::anyhow;
-use clap::{ArgMatches, Command};
+use clap::{Arg, ArgMatches, Command};
+use std::net::SocketAddr;
 use std::sync::Mutex;
 
 pub mod http;
+pub mod python;
 pub mod wsgi;
 
 pub struct BasicCommand<F: FnOnce() -> Result<()> + Send + 'static> {
@@ -37,5 +39,43 @@ impl<F: FnOnce() -> Result<()> + Send + Sync + 'static> RunnableCommand for Basi
             .ok_or(anyhow!("Already ran command."))?;
         let fut = context.dispatcher().dispatch(this_self_func);
         Ok(Runnable::new(fut))
+    }
+}
+
+pub struct HttpServerConfig {
+    socket_addr: SocketAddr,
+    reuse_port: bool,
+}
+
+
+impl HttpServerConfig {
+    pub fn add_command_options(mut cmd: Command) -> Command {
+        cmd.arg(
+            Arg::new("bind")
+                .long("bind")
+                .value_parser(clap::value_parser!(SocketAddr))
+                .env("PUFF_BIND")
+                .takes_value(true)
+                .default_value("127.0.0.1:7777")
+                .help("The host and port the HTTP server will bind to."),
+        )
+        .arg(
+            Arg::new("reuse-port")
+                .long("reuse-port")
+                .value_parser(clap::value_parser!(bool))
+                .env("PUFF_REUSE_PORT")
+                .default_value("false")
+                .help("Let multiple servers bind on the same port."),
+        )
+    }
+
+    pub fn new_from_args(args: &ArgMatches) -> Self {
+        let socket_addr = args.get_one::<SocketAddr>("bind").unwrap();
+        let reuse_port = args.get_one::<bool>("reuse-port").unwrap();
+
+        Self {
+            socket_addr: socket_addr.clone(),
+            reuse_port: reuse_port.clone(),
+        }
     }
 }

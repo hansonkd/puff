@@ -5,8 +5,8 @@ use pyo3::prelude::*;
 use pyo3::{PyObject, PyResult, Python};
 use std::future::Future;
 
-use tokio::sync::oneshot;
 use crate::python::log_traceback;
+use tokio::sync::oneshot;
 
 /// Python return
 #[pyclass]
@@ -44,17 +44,20 @@ async fn handle_return<
     f: F,
 ) {
     let res = f.await;
-    Python::with_gil(|py| match res {
-        Ok(r) => return_fun
-            .call1(py, (r.to_object(py), py.None()))
-            .map_err(|e| log_traceback(e)),
-        Err(e) => {
-            let py_err = PyException::new_err(format!("Greenlet async exception: {e}"));
-            return_fun
-                .call1(py, (py.None(), py_err))
-                .map_err(|e| log_traceback(e))
+    Python::with_gil(|py| {
+        match res {
+            Ok(r) => return_fun
+                .call1(py, (r.to_object(py), py.None()))
+                .map_err(|e| log_traceback(e)),
+            Err(e) => {
+                let py_err = PyException::new_err(format!("Greenlet async exception: {e}"));
+                return_fun
+                    .call1(py, (py.None(), py_err))
+                    .map_err(|e| log_traceback(e))
+            }
         }
-    }.unwrap_or(py.None()));
+        .unwrap_or(py.None())
+    });
 }
 
 /// The the future in the Tokio and execute the return function when finished.

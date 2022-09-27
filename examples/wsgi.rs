@@ -1,3 +1,5 @@
+extern crate core;
+
 use bb8_redis::redis::Cmd;
 use futures_util::future::join_all;
 use puff::databases::redis::with_redis;
@@ -8,6 +10,7 @@ use puff::python::greenlet::greenlet_async;
 use puff::runtime::RuntimeConfig;
 
 use puff::context::with_puff_context;
+use puff::tasks::Task;
 use puff::types::{Bytes, BytesBuilder};
 use puff::web::server::Router;
 use pyo3::prelude::*;
@@ -73,10 +76,18 @@ fn main() {
     let router = Router::new().get("/rust/", || {
         let r = with_redis(|r| {
             let mut builder = BytesBuilder::new();
+            let mut tasks = Vec::new();
             for _ in 0..1000 {
-                let res = r.query::<Bytes>(Cmd::get("blam"))?;
-                builder.put(res)
+                let r = r.clone();
+                tasks.push(Task::spawn(move || r.query::<Bytes>(Cmd::get("blam"))))
             }
+
+            let results = puff::tasks::join_all(tasks);
+
+            for res in results {
+                builder.put_slice(res?.as_ref())
+            }
+
             PuffResult::Ok(builder.into_bytes())
         })?;
         Ok(r)
@@ -88,6 +99,6 @@ fn main() {
     Program::new("my_first_app")
         .about("This is my first app")
         .runtime_config(rc)
-        .command(WSGIServerCommand::new(router, "flask_example", "app"))
+        .command(WSGIServerCommand::new(router, "flask_example.app"))
         .run()
 }

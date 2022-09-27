@@ -156,7 +156,7 @@ where
     R: 'static,
 {
     yield_to_future(futures::future::join_all(
-        iter.into_iter().map(|i| async { Ok(i.handle.await?) }),
+        iter.into_iter().map(|i| i.handle),
     ))
 }
 
