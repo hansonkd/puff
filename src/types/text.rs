@@ -1,13 +1,16 @@
 //! Fast UTF8 data references.
 
+use std::borrow::Cow;
+use std::fmt::{Display, Formatter, Pointer};
 use crate::types::Puff;
 use axum::body::Bytes as AxumBytes;
 use axum::response::{IntoResponse, Response};
-use bb8_redis::redis::{ErrorKind, FromRedisValue, RedisError, RedisResult, Value};
+use bb8_redis::redis::{ErrorKind, FromRedisValue, RedisError, RedisResult, RedisWrite, ToRedisArgs, Value};
 use compact_str::{CompactString, ToCompactString};
-use serde::Serialize;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::ops::{Add, Deref};
-use std::str::from_utf8;
+use std::str::{from_utf8, FromStr};
+use crate::errors::PuffResult;
 
 /// Fast UTF8 data references.
 ///
@@ -32,12 +35,22 @@ use std::str::from_utf8;
 /// buff.push_str("world");
 /// let t: Text = buff.into_text();
 /// ```
-#[derive(Hash, PartialEq, Eq, Debug, Clone, Serialize)]
+#[derive(Hash, PartialEq, Eq, Debug, Clone, Serialize, Deserialize)]
 pub struct Text(CompactString);
+
+impl Display for Text {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 impl Text {
     pub fn new() -> Text {
         Text(CompactString::from(""))
+    }
+
+    pub fn from_utf8(s: &[u8]) -> Option<Text> {
+        from_utf8(s).ok().map(|f| Text::from(f))
     }
 
     pub fn into_string(self) -> String {
@@ -48,6 +61,8 @@ impl Text {
         self.0.as_str()
     }
 }
+
+
 //
 // impl<'source> FromPyObject<'source> for Text {
 //     fn extract(ob: &'source PyAny) -> PyResult<Self> {
@@ -114,17 +129,51 @@ impl<T: ToCompactString> ToText for T {
     }
 }
 
-impl<T: ToCompactString> From<T> for Text {
-    fn from(x: T) -> Self {
-        Text(x.to_compact_string())
+
+impl<'a> From<&'a str> for Text {
+    fn from(s: &'a str) -> Self {
+        Text(CompactString::from(s))
+    }
+}
+
+impl From<String> for Text {
+    fn from(s: String) -> Self {
+        Text(CompactString::from(s))
+    }
+}
+
+impl<'a> From<&'a String> for Text {
+    fn from(s: &'a String) -> Self {
+        Text(CompactString::from(s))
+    }
+}
+
+impl<'a> From<Cow<'a, str>> for Text {
+    fn from(cow: Cow<'a, str>) -> Self {
+        Text(CompactString::from(cow))
+    }
+}
+
+impl From<Box<str>> for Text {
+    fn from(b: Box<str>) -> Self {
+        Text(CompactString::from(b))
     }
 }
 
 impl From<Text> for String {
-    fn from(x: Text) -> Self {
-        x.to_string()
+    fn from(s: Text) -> Self {
+        s.0.into()
     }
 }
+
+impl FromStr for Text {
+    type Err = core::convert::Infallible;
+    fn from_str(s: &str) -> Result<Text, Self::Err> {
+        Ok(Text(CompactString::from_str(s)?))
+    }
+}
+
+
 
 impl IntoResponse for Text {
     fn into_response(self) -> Response {
@@ -151,6 +200,30 @@ impl Deref for Text {
 
     fn deref(&self) -> &Self::Target {
         self.0.as_str()
+    }
+}
+
+
+// impl Serialize for Text {
+//     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
+//         self.0.serialize(serializer)
+//     }
+// }
+
+//
+// impl<'de> Deserialize<'de> for Text {
+//     fn deserialize<D>(deserializer: D) -> Result<Text, D::Error>
+//     where
+//         D: Deserializer<'de>,
+//     {
+//         let cs = CompactString::deserialize(deserializer)?;
+//         Ok(Text(cs))
+//     }
+// }
+
+impl ToRedisArgs for Text {
+    fn write_redis_args<W>(&self, out: &mut W) where W: ?Sized + RedisWrite {
+        out.write_arg(self.as_bytes())
     }
 }
 

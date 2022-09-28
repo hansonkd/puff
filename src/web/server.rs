@@ -120,7 +120,7 @@ pub trait PuffHandler<Inp, S, Res> {
     fn into_handler(self, filter: MethodFilter) -> MethodRouter<S>;
 }
 
-struct AxumHandlerArgs<T>(T);
+pub struct AxumHandlerArgs<T>(T);
 
 impl<F, S, T1, Res> PuffHandler<AxumHandlerArgs<T1>, S, Res> for F
 where

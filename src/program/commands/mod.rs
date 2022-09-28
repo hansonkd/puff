@@ -49,7 +49,7 @@ pub struct HttpServerConfig {
 
 
 impl HttpServerConfig {
-    pub fn add_command_options(mut cmd: Command) -> Command {
+    pub fn add_command_options(cmd: Command) -> Command {
         cmd.arg(
             Arg::new("bind")
                 .long("bind")

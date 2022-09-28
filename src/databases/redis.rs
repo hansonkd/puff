@@ -20,7 +20,7 @@ impl Puff for RedisClient {}
 
 impl RedisClient {
     pub fn new<T: IntoConnectionInfo + Send + 'static>(conn: T) -> PuffResult<Self> {
-        yield_to_future_io(new_client_async(conn, false))?
+        yield_to_future_io(new_redis_async(conn, false))?
     }
 
     pub fn query<T: FromRedisValue + Send + 'static>(&self, command: Cmd) -> PuffResult<T> {
@@ -36,7 +36,7 @@ impl RedisClient {
     }
 }
 
-pub async fn new_client_async<T: IntoConnectionInfo>(conn: T, check: bool) -> PuffResult<RedisClient> {
+pub async fn new_redis_async<T: IntoConnectionInfo>(conn: T, check: bool) -> PuffResult<RedisClient> {
     let manager = RedisConnectionManager::new(conn)?;
     let pool = Pool::builder().build(manager).await?;
     let local_pool = pool.clone();

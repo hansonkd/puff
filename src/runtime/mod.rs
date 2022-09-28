@@ -115,6 +115,7 @@ pub struct RuntimeConfig {
     coroutine_threads: usize,
     python: bool,
     redis: bool,
+    pubsub: bool,
     monitor: Option<Duration>,
     greenlets: bool,
     global_state_fn: Option<Arc<dyn Fn(Python) -> PyResult<PyObject> + Send + Sync + 'static>>,
@@ -166,6 +167,10 @@ impl RuntimeConfig {
     /// Get if a global redis will be enabled.
     pub fn redis(&self) -> bool {
         self.redis
+    }
+    /// Get if a global pubsub will be enabled.
+    pub fn pubsub(&self) -> bool {
+        self.pubsub
     }
     /// Get if greenlets will be enabled.
     pub fn greenlets(&self) -> bool {
@@ -248,12 +253,22 @@ impl RuntimeConfig {
 
     /// Sets whether to start with a global Redis pool.
     ///
-    /// Default: true
+    /// Default: false
     pub fn set_redis(self, redis: bool) -> Self {
         let mut new = self;
         new.redis = redis;
         new
     }
+
+    /// Sets whether to start with a global PubSubClient.
+    ///
+    /// Default: false
+    pub fn set_pubsub(self, pubsub: bool) -> Self {
+        let mut new = self;
+        new.pubsub = pubsub;
+        new
+    }
+
 
     /// Sets whether to use greenlets when executing python.
     ///
@@ -298,6 +313,7 @@ impl Default for RuntimeConfig {
             global_state_fn: None,
             greenlets: true,
             redis: false,
+            pubsub: false,
             blocking_task_keep_alive: Duration::from_secs(30),
             strategy: Strategy::RoundRobin,
         }

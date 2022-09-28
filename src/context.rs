@@ -1,19 +1,23 @@
 use crate::databases::redis::RedisClient;
-use crate::errors::Error;
+use crate::errors::{Error, PuffResult};
 use crate::runtime::dispatcher::Dispatcher;
 
 use crate::runtime::{run_with_config_on_local, RuntimeConfig};
-use crate::types::Puff;
+use crate::types::{Puff, Text};
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
 
 use std::cell::RefCell;
+use std::future::Future;
 
 use crate::python::PythonDispatcher;
 use std::sync::{Arc, Mutex};
+use futures_util::task::SpawnExt;
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::{broadcast, oneshot};
 use tokio::task::LocalSet;
+use tracing::{error, info};
+use crate::databases::pubsub::PubSubClient;
 
 /// The central control structure for dispatching tasks onto coroutine workers.
 /// All tasks in the same runtime will have access to the same dispatcher. The dispatcher contains
@@ -24,6 +28,7 @@ pub struct PuffContext {
     handle: Handle,
     redis: Option<RedisClient>,
     python_dispatcher: Option<PythonDispatcher>,
+    pubsub_client: Option<PubSubClient>,
 }
 
 // Context consists of a hierarchy of Contexts. PUFF_CONTEXT is the primary thread local that holds
@@ -85,13 +90,14 @@ impl PuffContext {
             dispatcher: Arc::new(Dispatcher::empty(notify_shutdown)),
             redis: None,
             python_dispatcher: None,
+            pubsub_client: None
         }
     }
 
     /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`. This function will start
     /// the number of `coroutine_threads` specified in your config.
     pub fn new(dispatcher: Arc<Dispatcher>, handle: Handle) -> PuffContext {
-        Self::new_with_options(handle, dispatcher, None, None)
+        Self::new_with_options(handle, dispatcher, None, None, None)
     }
 
     /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`. This function will start
@@ -101,12 +107,14 @@ impl PuffContext {
         dispatcher: Arc<Dispatcher>,
         redis: Option<RedisClient>,
         python_dispatcher: Option<PythonDispatcher>,
+        pubsub_client: Option<PubSubClient>,
     ) -> PuffContext {
         let arc_dispatcher = Self {
             dispatcher,
             handle,
             redis,
             python_dispatcher,
+            pubsub_client
         };
 
         arc_dispatcher
@@ -115,6 +123,13 @@ impl PuffContext {
     /// A Handle into the multi-threaded async runtime
     pub fn handle(&self) -> Handle {
         self.handle.clone()
+    }
+
+    /// The global configured PubSubClient
+    pub fn pubsub(&self) -> PubSubClient {
+        self.pubsub_client
+            .clone()
+            .expect("PubSub is not configured for this runtime.")
     }
 
     /// A Handle into the multi-threaded async runtime
@@ -179,3 +194,29 @@ impl Default for PuffContext {
 }
 
 impl Puff for PuffContext {}
+
+pub fn supervised_task<F: Fn() -> BoxFuture<'static, PuffResult<()>> + Send + Sync + 'static>(context: PuffContext, _task_name: Text, f: F) {
+    let handle = context.handle();
+    let inner_handle = handle.clone();
+    handle.spawn(async move {
+         loop {
+            info!("Starting task {_task_name}");
+            let result = inner_handle.spawn(f()).await;
+            match result {
+                Ok(r) => {
+                    match r {
+                        Ok(_r) => {
+                            info!("Task completed.")
+                        },
+                        Err(_e) => {
+                            error!("Task {_task_name} error {_task_name}: {_e}")
+                        }
+                    }
+                },
+                Err(_e) => {
+                    error!("Task {_task_name} unexpected error : {_e}")
+                }
+            }
+        }
+    });
+}

@@ -41,7 +41,7 @@
 
 use clap::{ArgMatches, Command};
 
-use crate::databases::redis::{add_redis_command_arguments, new_client_async};
+use crate::databases::redis::{add_redis_command_arguments, new_redis_async};
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -59,6 +59,7 @@ use crate::runtime::RuntimeConfig;
 use crate::types::text::Text;
 use crate::types::Puff;
 use tracing::{error, info};
+use crate::databases::pubsub::{add_pubsub_command_arguments, new_pubsub_async};
 
 pub mod commands;
 
@@ -256,6 +257,10 @@ impl Program {
             top_level = add_redis_command_arguments(top_level)
         }
 
+        if self.runtime_config.pubsub() {
+            top_level = add_pubsub_command_arguments(top_level)
+        }
+
         let mut hm: HashMap<Text, PackedCommand> = HashMap::with_capacity(self.commands.len());
         for packed_command in &self.commands {
             let parser = packed_command.cli_parser();
@@ -283,7 +288,6 @@ impl Program {
                     None
                 };
 
-
                 let thread_mutex = mutex_switcher.clone();
 
                 builder.on_thread_start(move || {
@@ -294,7 +298,14 @@ impl Program {
                 let mut redis = None;
                 if self.runtime_config.redis() {
                     redis = Some(
-                        rt.block_on(new_client_async(arg_matches.value_of("redis_url").unwrap(), true))?,
+                        rt.block_on(new_redis_async(arg_matches.value_of("redis_url").unwrap(), true))?,
+                    );
+                }
+
+                let mut pubsub_client = None;
+                if self.runtime_config.pubsub() {
+                    pubsub_client = Some(
+                        rt.block_on(new_pubsub_async(arg_matches.value_of("pubsub_url").unwrap(), true))?,
                     );
                 }
 
@@ -310,6 +321,7 @@ impl Program {
                     arc_dispatcher,
                     redis,
                     python_dispatcher,
+                    pubsub_client.clone()
                 );
 
                 for i in waiting {
@@ -317,6 +329,8 @@ impl Program {
                 }
 
                 set_puff_context(context.puff());
+
+                pubsub_client.map(|c| c.start_supervised_listener());
 
                 let context_to_set = context.puff();
                 {
