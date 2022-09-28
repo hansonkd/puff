@@ -14,7 +14,7 @@ use futures_util::FutureExt;
 use pyo3::prelude::*;
 
 use crate::program::commands::HttpServerConfig;
-use tracing::{error, info};
+use tracing::{info};
 
 struct WSGIConstructor {
     config: HttpServerConfig,

@@ -7,10 +7,10 @@ use axum::body::Bytes as AxumBytes;
 use axum::response::{IntoResponse, Response};
 use bb8_redis::redis::{ErrorKind, FromRedisValue, RedisError, RedisResult, RedisWrite, ToRedisArgs, Value};
 use compact_str::{CompactString, ToCompactString};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use std::ops::{Add, Deref};
 use std::str::{from_utf8, FromStr};
-use crate::errors::PuffResult;
+
 
 /// Fast UTF8 data references.
 ///

@@ -1,12 +1,12 @@
 use std::collections::HashMap;
-use std::future::Future;
+
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use anyhow::anyhow;
 use crate::errors::PuffResult;
-use crate::runtime::{yield_to_future, yield_to_future_io};
+use crate::runtime::{yield_to_future_io};
 use bb8_redis::bb8::Pool;
-use bb8_redis::redis::{AsyncCommands, Connection, FromRedisValue, IntoConnectionInfo, Msg};
+use bb8_redis::redis::{AsyncCommands, IntoConnectionInfo, Msg};
 use bb8_redis::redis::aio::PubSub;
 use bb8_redis::RedisConnectionManager;
 use futures::StreamExt;
@@ -14,10 +14,10 @@ use crate::context::{supervised_task, with_puff_context};
 use crate::types::{Bytes, Puff, Text};
 pub use bb8_redis::redis::Cmd;
 use clap::{Arg, Command};
-use futures_util::stream::{BoxStream, Next};
-use tokio::runtime::Handle;
+
+
 use tracing::{error, info, warn};
-use tracing::instrument::WithSubscriber;
+
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Sender, UnboundedSender, UnboundedReceiver};
 use tokio::task::JoinHandle;
@@ -141,7 +141,7 @@ impl PubSubClient {
                     let mut pubsub = client.into_pubsub();
                     {
                         let vec: Vec<Text> = {
-                            let mut mutex_guard = inner_client.channels.lock().unwrap();
+                            let mutex_guard = inner_client.channels.lock().unwrap();
                             mutex_guard.keys().map(|c| c.clone()).collect()
                         };
 
@@ -186,7 +186,7 @@ impl PubSubClient {
             Ok(pubsub_msg) => {
                 let mut hm = self.channels.lock().unwrap();
                 if let Some(new_hm) = hm.get_mut(&pubsub_msg.channel) {
-                    new_hm.retain(|conn, sender| {
+                    new_hm.retain(|_conn, sender| {
                         sender.send(pubsub_msg.puff()).is_ok()
                     })
                 };

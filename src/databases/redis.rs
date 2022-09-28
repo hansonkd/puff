@@ -1,6 +1,6 @@
 use std::time::Duration;
 use crate::errors::PuffResult;
-use crate::runtime::{yield_to_future, yield_to_future_io};
+use crate::runtime::{yield_to_future_io};
 use bb8_redis::bb8::Pool;
 use bb8_redis::redis::{FromRedisValue, IntoConnectionInfo};
 use bb8_redis::RedisConnectionManager;
