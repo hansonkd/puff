@@ -52,6 +52,7 @@ use tokio::runtime::Builder;
 use tokio::sync::broadcast;
 
 use crate::context::{set_puff_context, set_puff_context_waiting, PuffContext};
+use crate::databases::pubsub::{add_pubsub_command_arguments, new_pubsub_async};
 use crate::errors::Result;
 use crate::python::{bootstrap_puff_globals, setup_greenlet};
 use crate::runtime::dispatcher::Dispatcher;
@@ -59,7 +60,6 @@ use crate::runtime::RuntimeConfig;
 use crate::types::text::Text;
 use crate::types::Puff;
 use tracing::{error, info};
-use crate::databases::pubsub::{add_pubsub_command_arguments, new_pubsub_async};
 
 pub mod commands;
 
@@ -297,22 +297,23 @@ impl Program {
                 let rt = builder.build()?;
                 let mut redis = None;
                 if self.runtime_config.redis() {
-                    redis = Some(
-                        rt.block_on(new_redis_async(arg_matches.value_of("redis_url").unwrap(), true))?,
-                    );
+                    redis = Some(rt.block_on(new_redis_async(
+                        arg_matches.value_of("redis_url").unwrap(),
+                        true,
+                    ))?);
                 }
 
                 let mut pubsub_client = None;
                 if self.runtime_config.pubsub() {
-                    pubsub_client = Some(
-                        rt.block_on(new_pubsub_async(arg_matches.value_of("pubsub_url").unwrap(), true))?,
-                    );
+                    pubsub_client = Some(rt.block_on(new_pubsub_async(
+                        arg_matches.value_of("pubsub_url").unwrap(),
+                        true,
+                    ))?);
                 }
 
                 let (dispatcher, waiting) =
                     Dispatcher::new(notify_shutdown, self.runtime_config.clone());
                 let arc_dispatcher = Arc::new(dispatcher);
-
 
                 arc_dispatcher.start_monitor();
 
@@ -321,7 +322,7 @@ impl Program {
                     arc_dispatcher,
                     redis,
                     python_dispatcher,
-                    pubsub_client.clone()
+                    pubsub_client.clone(),
                 );
 
                 for i in waiting {

@@ -47,7 +47,6 @@ pub struct HttpServerConfig {
     reuse_port: bool,
 }
 
-
 impl HttpServerConfig {
     pub fn add_command_options(cmd: Command) -> Command {
         cmd.arg(

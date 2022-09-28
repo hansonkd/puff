@@ -1,7 +1,7 @@
 extern crate core;
 
-use axum::extract::WebSocketUpgrade;
 use axum::extract::ws::{Message, WebSocket};
+use axum::extract::WebSocketUpgrade;
 
 use axum::response::Response;
 use bb8_redis::redis::Cmd;
@@ -19,7 +19,6 @@ use puff::tasks::Task;
 use puff::types::{Bytes, BytesBuilder};
 use puff::web::server::Router;
 use pyo3::prelude::*;
-
 
 #[pyclass]
 #[derive(Clone)]
@@ -110,25 +109,27 @@ async fn on_upgrade(mut socket: WebSocket) {
 }
 
 fn main() {
-    let router = Router::new().get("/rust/", || {
-        let r = with_redis(|r| {
-            let mut builder = BytesBuilder::new();
-            let mut tasks = Vec::new();
-            for _ in 0..1000 {
-                let r = r.clone();
-                tasks.push(Task::spawn(move || r.query::<Bytes>(Cmd::get("blam"))))
-            }
+    let router = Router::new()
+        .get("/rust/", || {
+            let r = with_redis(|r| {
+                let mut builder = BytesBuilder::new();
+                let mut tasks = Vec::new();
+                for _ in 0..1000 {
+                    let r = r.clone();
+                    tasks.push(Task::spawn(move || r.query::<Bytes>(Cmd::get("blam"))))
+                }
 
-            let results = puff::tasks::join_all(tasks);
+                let results = puff::tasks::join_all(tasks);
 
-            for res in results {
-                builder.put_slice(res?.as_ref())
-            }
+                for res in results {
+                    builder.put_slice(res?.as_ref())
+                }
 
-            PuffResult::Ok(builder.into_bytes())
-        })?;
-        Ok(r)
-    }).get::<_, _, _, Response>("/ws/", ws_handler);
+                PuffResult::Ok(builder.into_bytes())
+            })?;
+            Ok(r)
+        })
+        .get::<_, _, _, Response>("/ws/", ws_handler);
 
     let rc = RuntimeConfig::default()
         .set_redis(true)

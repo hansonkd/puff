@@ -1,28 +1,27 @@
 use std::collections::HashMap;
 
+use crate::context::{supervised_task, with_puff_context};
+use crate::errors::PuffResult;
+use crate::runtime::yield_to_future_io;
+use crate::types::{Bytes, Puff, Text};
+use anyhow::anyhow;
+use bb8_redis::bb8::Pool;
+use bb8_redis::redis::aio::PubSub;
+pub use bb8_redis::redis::Cmd;
+use bb8_redis::redis::{AsyncCommands, IntoConnectionInfo, Msg};
+use bb8_redis::RedisConnectionManager;
+use clap::{Arg, Command};
+use futures::StreamExt;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use anyhow::anyhow;
-use crate::errors::PuffResult;
-use crate::runtime::{yield_to_future_io};
-use bb8_redis::bb8::Pool;
-use bb8_redis::redis::{AsyncCommands, IntoConnectionInfo, Msg};
-use bb8_redis::redis::aio::PubSub;
-use bb8_redis::RedisConnectionManager;
-use futures::StreamExt;
-use crate::context::{supervised_task, with_puff_context};
-use crate::types::{Bytes, Puff, Text};
-pub use bb8_redis::redis::Cmd;
-use clap::{Arg, Command};
-
 
 use tracing::{error, info, warn};
 
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::{Sender, UnboundedSender, UnboundedReceiver};
-use tokio::task::JoinHandle;
-use serde::{Serialize, Deserialize};
 use futures_util::FutureExt;
+use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::{Sender, UnboundedReceiver, UnboundedSender};
+use tokio::task::JoinHandle;
 
 type ConnectionId = uuid::Uuid;
 
@@ -31,12 +30,12 @@ enum PubSubEvent {
     UnSub(Text, ConnectionId),
 }
 
-///
+/// A message received from a pubsub channel.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PubSubMessage {
     channel: Text,
     from: ConnectionId,
-    body: Bytes
+    body: Bytes,
 }
 
 impl Puff for PubSubMessage {}
@@ -44,20 +43,31 @@ impl Puff for PubSubMessage {}
 impl PubSubMessage {
     fn new(channel: Text, from: ConnectionId, body: Bytes) -> Self {
         Self {
-            channel, from, body
+            channel,
+            from,
+            body,
         }
     }
 
     /// Body of the message
-    pub fn body(&self) -> Bytes { self.body.clone() }
+    pub fn body(&self) -> Bytes {
+        self.body.clone()
+    }
 
-    /// Body as Text
-    pub fn text(&self) -> Option<Text> { Text::from_utf8(self.body.as_ref())}
+    /// Body as Text, None if invalid.
+    pub fn text(&self) -> Option<Text> {
+        Text::from_utf8(self.body.as_ref())
+    }
 
     /// What channel the message was sent on.
-    pub fn channel(&self) -> Text { self.channel.clone() }
+    pub fn channel(&self) -> Text {
+        self.channel.clone()
+    }
+
     /// What PubSubConnection sent the message.
-    pub fn from(&self) -> ConnectionId { self.from.clone() }
+    pub fn from(&self) -> ConnectionId {
+        self.from.clone()
+    }
 }
 
 /// A client to work with PubSub. A pubsub client currently is assumed to be alive for the lifetime
@@ -71,25 +81,27 @@ pub struct PubSubClient {
     task_name: Text,
     /// Note event sender should be bounded so we don't lose messages.
     events_sender: Arc<Mutex<Option<Sender<PubSubEvent>>>>,
-    channels: Arc<Mutex<HashMap<Text, HashMap<ConnectionId, UnboundedSender<PubSubMessage>>>>>
+    channels: Arc<Mutex<HashMap<Text, HashMap<ConnectionId, UnboundedSender<PubSubMessage>>>>>,
 }
-
 
 impl Puff for PubSubClient {}
 
-
-async fn handle_event(client: &PubSubClient, event: PubSubEvent, pubsub: &mut PubSub) -> PuffResult<()> {
+async fn handle_event(
+    client: &PubSubClient,
+    event: PubSubEvent,
+    pubsub: &mut PubSub,
+) -> PuffResult<()> {
     match event {
         PubSubEvent::Sub(chan, conn, sender) => {
             let maybe_sub = {
                 let mut mutex_guard = client.channels.lock().unwrap();
-                    match mutex_guard.get_mut(&chan) {
+                match mutex_guard.get_mut(&chan) {
                     Some(v) => {
                         v.insert(conn, sender);
                         None
                     }
                     None => {
-                        mutex_guard.insert(chan.clone(),HashMap::from([(conn, sender)]));
+                        mutex_guard.insert(chan.clone(), HashMap::from([(conn, sender)]));
                         Some(chan)
                     }
                 }
@@ -98,7 +110,6 @@ async fn handle_event(client: &PubSubClient, event: PubSubEvent, pubsub: &mut Pu
                 Some(chan) => pubsub.subscribe(chan).await?,
                 None => (),
             }
-
         }
         PubSubEvent::UnSub(chan, conn) => {
             let maybe_unsub = {
@@ -186,9 +197,7 @@ impl PubSubClient {
             Ok(pubsub_msg) => {
                 let mut hm = self.channels.lock().unwrap();
                 if let Some(new_hm) = hm.get_mut(&pubsub_msg.channel) {
-                    new_hm.retain(|_conn, sender| {
-                        sender.send(pubsub_msg.puff()).is_ok()
-                    })
+                    new_hm.retain(|_conn, sender| sender.send(pubsub_msg.puff()).is_ok())
                 };
             }
             Err(_e) => {
@@ -200,16 +209,15 @@ impl PubSubClient {
     /// Create a connection that can subscribe to channels.
     pub fn connection(&self) -> PuffResult<(PubSubConnection, UnboundedReceiver<PubSubMessage>)> {
         let (sender, receiver) = mpsc::unbounded_channel();
-        let conn = PubSubConnection{
+        let conn = PubSubConnection {
             connection_id: uuid::Uuid::new_v4(),
             sender,
             client: self.client.clone(),
-            events_sender: self.events_sender.clone()
+            events_sender: self.events_sender.clone(),
         };
         Ok((conn, receiver))
     }
 }
-
 
 /// A connection that can subscribe to new messages.
 pub struct PubSubConnection {
@@ -260,9 +268,17 @@ impl PubSubConnection {
     }
 
     /// Try to broadcast. Will run whether you await result or not.
-    pub fn publish<T: Into<Text>, M: Into<Bytes>>(&self, channel: T, body: M) -> JoinHandle<PuffResult<()>> {
+    pub fn publish<T: Into<Text>, M: Into<Bytes>>(
+        &self,
+        channel: T,
+        body: M,
+    ) -> JoinHandle<PuffResult<()>> {
         let channel_text = channel.into();
-        let message = PubSubMessage::new(channel_text.clone(), self.connection_id.clone(), body.into());
+        let message = PubSubMessage::new(
+            channel_text.clone(),
+            self.connection_id.clone(),
+            body.into(),
+        );
 
         with_puff_context(|ctx| {
             let inner_client = self.client.clone();
@@ -280,7 +296,10 @@ impl PubSubConnection {
 }
 
 /// Build a new PubSubClient with the provided connection information.
-pub async fn new_pubsub_async<T: IntoConnectionInfo>(conn: T, check: bool) -> PuffResult<PubSubClient> {
+pub async fn new_pubsub_async<T: IntoConnectionInfo>(
+    conn: T,
+    check: bool,
+) -> PuffResult<PubSubClient> {
     let conn_info = conn.into_connection_info()?;
     let manager = RedisConnectionManager::new(conn_info.clone())?;
     let pool = Pool::builder().build(manager).await?;
@@ -298,10 +317,14 @@ pub async fn new_pubsub_async<T: IntoConnectionInfo>(conn: T, check: bool) -> Pu
     let task_name = format!("pubsub-listener-{}", conn_info.addr).into();
     let channels = Arc::new(Mutex::new(HashMap::new()));
     let events_sender = Arc::new(Mutex::new(None));
-    let client = PubSubClient { task_name, channels, events_sender, client: pool };
+    let client = PubSubClient {
+        task_name,
+        channels,
+        events_sender,
+        client: pool,
+    };
     Ok(client)
 }
-
 
 pub(crate) fn add_pubsub_command_arguments(command: Command) -> Command {
     command.arg(

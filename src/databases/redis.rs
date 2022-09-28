@@ -1,9 +1,9 @@
-use std::time::Duration;
 use crate::errors::PuffResult;
-use crate::runtime::{yield_to_future_io};
+use crate::runtime::yield_to_future_io;
 use bb8_redis::bb8::Pool;
 use bb8_redis::redis::{FromRedisValue, IntoConnectionInfo};
 use bb8_redis::RedisConnectionManager;
+use std::time::Duration;
 
 use crate::context::with_puff_context;
 use crate::types::Puff;
@@ -36,7 +36,10 @@ impl RedisClient {
     }
 }
 
-pub async fn new_redis_async<T: IntoConnectionInfo>(conn: T, check: bool) -> PuffResult<RedisClient> {
+pub async fn new_redis_async<T: IntoConnectionInfo>(
+    conn: T,
+    check: bool,
+) -> PuffResult<RedisClient> {
     let manager = RedisConnectionManager::new(conn)?;
     let pool = Pool::builder().build(manager).await?;
     let local_pool = pool.clone();

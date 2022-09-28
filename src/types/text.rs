@@ -1,16 +1,17 @@
 //! Fast UTF8 data references.
 
-use std::borrow::Cow;
-use std::fmt::{Display, Formatter, Pointer};
 use crate::types::Puff;
 use axum::body::Bytes as AxumBytes;
 use axum::response::{IntoResponse, Response};
-use bb8_redis::redis::{ErrorKind, FromRedisValue, RedisError, RedisResult, RedisWrite, ToRedisArgs, Value};
+use bb8_redis::redis::{
+    ErrorKind, FromRedisValue, RedisError, RedisResult, RedisWrite, ToRedisArgs, Value,
+};
 use compact_str::{CompactString, ToCompactString};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+use std::fmt::{Display, Formatter, Pointer};
 use std::ops::{Add, Deref};
 use std::str::{from_utf8, FromStr};
-
 
 /// Fast UTF8 data references.
 ///
@@ -61,7 +62,6 @@ impl Text {
         self.0.as_str()
     }
 }
-
 
 //
 // impl<'source> FromPyObject<'source> for Text {
@@ -129,7 +129,6 @@ impl<T: ToCompactString> ToText for T {
     }
 }
 
-
 impl<'a> From<&'a str> for Text {
     fn from(s: &'a str) -> Self {
         Text(CompactString::from(s))
@@ -173,8 +172,6 @@ impl FromStr for Text {
     }
 }
 
-
-
 impl IntoResponse for Text {
     fn into_response(self) -> Response {
         AxumBytes::copy_from_slice(self.0.as_bytes()).into_response()
@@ -203,7 +200,6 @@ impl Deref for Text {
     }
 }
 
-
 // impl Serialize for Text {
 //     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
 //         self.0.serialize(serializer)
@@ -222,7 +218,10 @@ impl Deref for Text {
 // }
 
 impl ToRedisArgs for Text {
-    fn write_redis_args<W>(&self, out: &mut W) where W: ?Sized + RedisWrite {
+    fn write_redis_args<W>(&self, out: &mut W)
+    where
+        W: ?Sized + RedisWrite,
+    {
         out.write_arg(self.as_bytes())
     }
 }

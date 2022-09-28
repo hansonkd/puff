@@ -9,15 +9,14 @@ use futures_util::FutureExt;
 
 use std::cell::RefCell;
 
-
+use crate::databases::pubsub::PubSubClient;
 use crate::python::PythonDispatcher;
-use std::sync::{Arc, Mutex};
 use futures_util::task::SpawnExt;
+use std::sync::{Arc, Mutex};
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::{broadcast, oneshot};
 use tokio::task::LocalSet;
 use tracing::{error, info};
-use crate::databases::pubsub::PubSubClient;
 
 /// The central control structure for dispatching tasks onto coroutine workers.
 /// All tasks in the same runtime will have access to the same dispatcher. The dispatcher contains
@@ -90,7 +89,7 @@ impl PuffContext {
             dispatcher: Arc::new(Dispatcher::empty(notify_shutdown)),
             redis: None,
             python_dispatcher: None,
-            pubsub_client: None
+            pubsub_client: None,
         }
     }
 
@@ -114,7 +113,7 @@ impl PuffContext {
             handle,
             redis,
             python_dispatcher,
-            pubsub_client
+            pubsub_client,
         };
 
         arc_dispatcher
@@ -195,22 +194,24 @@ impl Default for PuffContext {
 
 impl Puff for PuffContext {}
 
-pub fn supervised_task<F: Fn() -> BoxFuture<'static, PuffResult<()>> + Send + Sync + 'static>(context: PuffContext, _task_name: Text, f: F) {
+pub fn supervised_task<F: Fn() -> BoxFuture<'static, PuffResult<()>> + Send + Sync + 'static>(
+    context: PuffContext,
+    _task_name: Text,
+    f: F,
+) {
     let handle = context.handle();
     let inner_handle = handle.clone();
     handle.spawn(async move {
-         loop {
+        loop {
             info!("Starting task {_task_name}");
             let result = inner_handle.spawn(f()).await;
             match result {
-                Ok(r) => {
-                    match r {
-                        Ok(_r) => {
-                            info!("Task completed.")
-                        },
-                        Err(_e) => {
-                            error!("Task {_task_name} error {_task_name}: {_e}")
-                        }
+                Ok(r) => match r {
+                    Ok(_r) => {
+                        info!("Task completed.")
+                    }
+                    Err(_e) => {
+                        error!("Task {_task_name} error {_task_name}: {_e}")
                     }
                 },
                 Err(_e) => {

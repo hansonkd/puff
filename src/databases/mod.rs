@@ -1,2 +1,2 @@
-pub mod redis;
 pub mod pubsub;
+pub mod redis;

@@ -45,7 +45,9 @@ pub mod vector_builder;
 
 use axum::body::Bytes as AxumBytes;
 use axum::response::{IntoResponse, Response};
-use bb8_redis::redis::{ErrorKind, FromRedisValue, RedisError, RedisResult, RedisWrite, ToRedisArgs, Value};
+use bb8_redis::redis::{
+    ErrorKind, FromRedisValue, RedisError, RedisResult, RedisWrite, ToRedisArgs, Value,
+};
 pub use bytes_builder::BytesBuilder;
 use chrono::{Date, DateTime, Utc};
 use pyo3::types::PyBytes;
@@ -103,7 +105,10 @@ impl FromRedisValue for Bytes {
 }
 
 impl ToRedisArgs for Bytes {
-    fn write_redis_args<W>(&self, out: &mut W) where W: ?Sized + RedisWrite {
+    fn write_redis_args<W>(&self, out: &mut W)
+    where
+        W: ?Sized + RedisWrite,
+    {
         out.write_arg(self.0.as_ref())
     }
 }

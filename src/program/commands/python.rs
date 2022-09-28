@@ -5,7 +5,6 @@ use crate::types::{Puff, Text};
 use clap::{ArgMatches, Command};
 use pyo3::prelude::*;
 
-
 /// The WSGIServerCommand.
 ///
 /// Exposes options to the command line to set the port and host of the server.

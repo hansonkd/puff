@@ -269,7 +269,6 @@ impl RuntimeConfig {
         new
     }
 
-
     /// Sets whether to use greenlets when executing python.
     ///
     /// Default: true
