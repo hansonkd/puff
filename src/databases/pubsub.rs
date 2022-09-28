@@ -150,8 +150,6 @@ impl PubSubClient {
                         }
                     }
 
-
-
                     let (events, mut new_events) = mpsc::channel(1);
 
                     {

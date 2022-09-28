@@ -86,7 +86,6 @@ async fn on_upgrade(mut socket: WebSocket) {
     loop {
         tokio::select! {
             Some(v) = rec.recv() => {
-                info!("Sending pubsub");
                 let text = v.text().unwrap_or("invalid utf8".into());
                 let msg = format!("{} said {}", v.from(), text);
                 if socket.send(Message::Text(msg)).await.is_err() {
@@ -96,7 +95,6 @@ async fn on_upgrade(mut socket: WebSocket) {
             },
             Some(msg) = socket.recv() => {
                 if let Ok(msg) = msg {
-                    info!("Got Message");
                     conn.publish("hello", msg.into_data()).await.unwrap().unwrap();
                 } else {
                     // client disconnected
@@ -104,23 +102,11 @@ async fn on_upgrade(mut socket: WebSocket) {
                 };
             },
             else => {
+                // client disconnected
                 break
             }
         }
     }
-    // while let Some(msg) = socket.recv().await {
-    //     let msg = if let Ok(msg) = msg {
-    //         msg
-    //     } else {
-    //         // client disconnected
-    //         return;
-    //     };
-    //
-    //     if socket.send(msg).await.is_err() {
-    //         // client disconnected
-    //         return;
-    //     }
-    // }
 }
 
 fn main() {
