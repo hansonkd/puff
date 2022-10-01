@@ -1,13 +1,11 @@
 use crate::errors::PuffResult;
 use crate::python::redis::RedisGlobal;
 use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
 
 use crate::context::{set_puff_context, set_puff_context_waiting, with_puff_context, PuffContext};
 use crate::python::greenlet::GreenletReturn;
 use crate::runtime::RuntimeConfig;
 use pyo3::types::{PyDict, PyTuple};
-use pyo3::{PyResult, Python};
 
 use std::os::raw::c_int;
 
@@ -15,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 use tracing::error;
 
+pub use pyo3::prelude::*;
 pub mod greenlet;
 pub mod redis;
 pub mod wsgi;
@@ -64,6 +63,7 @@ pub(crate) fn bootstrap_puff_globals(global_state: PyObject) {
         println!("Adding puff....");
         let puff_mod = py.import("puff")?;
         let puff_rust_functions = puff_mod.getattr("rust_objects")?;
+        puff_rust_functions.setattr("is_puff", true)?;
         puff_rust_functions.setattr("global_redis_getter", RedisGlobal)?;
         puff_rust_functions.setattr("global_state", global_state)?;
         puff_rust_functions.setattr("blocking_spawner", SpawnBlocking.into_py(py))

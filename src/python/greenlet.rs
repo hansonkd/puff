@@ -60,7 +60,7 @@ async fn handle_return<
     });
 }
 
-/// The the future in the Tokio and execute the return function when finished.
+/// The the future in the Tokio and execute the return function when finished. Does not block.
 pub fn greenlet_async<
     F: Future<Output = PuffResult<R>> + Send + 'static,
     R: ToPyObject + 'static,

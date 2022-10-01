@@ -14,7 +14,7 @@ r = redis.Redis(host='localhost')
 
 puff_redis = puff.global_redis()
 
-@app.route("/puff/")
+@app.route("/deep/")
 def hello_world_puff():
     redis_set("blam", "ok").join()
     gets = []
@@ -23,14 +23,14 @@ def hello_world_puff():
     return b"".join(puff.join_all(gets))
 
 
-@app.route("/concat/")
+@app.route("/deeper/")
 def hello_world_concat():
     redis_set("blam", "ok").join()
     return redis_get_many("blam", SAMPLE).join()
 
 
-
-@app.route("/")
+@puff.blocking
+@app.route("/shallow/")
 def hello_world():
     r.set("blam", "ok")
     gets = []

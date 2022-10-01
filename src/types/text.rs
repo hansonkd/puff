@@ -12,6 +12,8 @@ use std::borrow::Cow;
 use std::fmt::{Display, Formatter, Pointer};
 use std::ops::{Add, Deref};
 use std::str::{from_utf8, FromStr};
+use pyo3::{FromPyObject, PyAny, PyResult};
+use pyo3::types::PyString;
 
 /// Fast UTF8 data references.
 ///
@@ -169,6 +171,13 @@ impl FromStr for Text {
     type Err = core::convert::Infallible;
     fn from_str(s: &str) -> Result<Text, Self::Err> {
         Ok(Text(CompactString::from_str(s)?))
+    }
+}
+
+impl<'source> FromPyObject<'source> for Text {
+    fn extract(ob: &'source PyAny) -> PyResult<Self> {
+        let s = ob.downcast::<PyString>()?;
+        Ok(Text::from(s.to_str()?))
     }
 }
 

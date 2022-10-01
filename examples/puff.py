@@ -7,18 +7,32 @@ import contextvars
 from threading import Thread
 from typing import Any
 import queue
+import functools
 
 
 class RustObjects(object):
     """A class that holds functions and objects from Rust."""
+    is_puff: bool = False
     global_state: Any
-    global_redis_setter: Any
+
+    def global_redis_getter(self):
+        return None
 
 
 rust_objects = RustObjects()
 
 #  A global context var which holds information about the current executing thread.
 parent_thread = contextvars.ContextVar("parent_thread")
+
+
+def blocking(func):
+    if rust_objects.is_puff:
+        @functools.wraps(func)
+        def wrapper_blocking(*args, **kwargs):
+            return spawn_blocking(func, *args, **kwargs).join()
+        return wrapper_blocking
+    else:
+        return func
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
