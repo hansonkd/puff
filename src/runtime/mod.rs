@@ -115,6 +115,7 @@ pub struct RuntimeConfig {
     coroutine_threads: usize,
     python: bool,
     redis: bool,
+    postgres: bool,
     pubsub: bool,
     monitor: Option<Duration>,
     greenlets: bool,
@@ -167,6 +168,10 @@ impl RuntimeConfig {
     /// Get if a global redis will be enabled.
     pub fn redis(&self) -> bool {
         self.redis
+    }
+    /// Get if a global postgres will be enabled.
+    pub fn postgres(&self) -> bool {
+        self.postgres
     }
     /// Get if a global pubsub will be enabled.
     pub fn pubsub(&self) -> bool {
@@ -260,6 +265,15 @@ impl RuntimeConfig {
         new
     }
 
+    /// Sets whether to start with a global Postgres pool.
+    ///
+    /// Default: false
+    pub fn set_postgres(self, postgres: bool) -> Self {
+        let mut new = self;
+        new.postgres = postgres;
+        new
+    }
+
     /// Sets whether to start with a global PubSubClient.
     ///
     /// Default: false
@@ -312,6 +326,7 @@ impl Default for RuntimeConfig {
             global_state_fn: None,
             greenlets: true,
             redis: false,
+            postgres: false,
             pubsub: false,
             blocking_task_keep_alive: Duration::from_secs(30),
             strategy: Strategy::RoundRobin,

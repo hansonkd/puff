@@ -12,11 +12,11 @@ use puff::errors::PuffResult;
 use puff::program::commands::wsgi::WSGIServerCommand;
 use puff::program::Program;
 use puff::python::greenlet::greenlet_async;
-use puff::runtime::{RuntimeConfig, yield_to_future};
+use puff::runtime::{yield_to_future, RuntimeConfig};
 
 use puff::context::with_puff_context;
 use puff::tasks::Task;
-use puff::types::{Bytes, BytesBuilder, Text};
+use puff::types::{Bytes, BytesBuilder, Puff, Text};
 use puff::web::server::Router;
 use pyo3::prelude::*;
 
@@ -71,11 +71,12 @@ async fn on_upgrade(mut socket: WebSocket) {
 }
 
 async fn get_many(key: Text, num: usize) -> PuffResult<Bytes> {
-    let pool = with_redis(|r| { r.pool() });
+    let pool = with_redis(|r| r.pool());
     let mut builder = BytesBuilder::new();
     let mut queries = Vec::with_capacity(num);
 
     for _ in 0..num {
+        let key = key.puff();
         let pool = pool.clone();
         queries.push(async move {
             let mut conn = pool.get().await?;
@@ -95,10 +96,13 @@ async fn get_many(key: Text, num: usize) -> PuffResult<Bytes> {
 
 fn main() {
     let router = Router::new()
-        .get("/deepest/", || yield_to_future(get_many("blam".into(), 1000)))
+        .get("/deepest/", || {
+            yield_to_future(get_many("blam".into(), 1000))
+        })
         .get::<_, _, _, Response>("/ws/", ws_handler);
 
     let rc = RuntimeConfig::default()
+        .set_postgres(true)
         .set_redis(true)
         .set_pubsub(true)
         .set_global_state_fn(|py| Ok(MyState.into_py(py)));

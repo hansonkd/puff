@@ -7,13 +7,13 @@ use bb8_redis::redis::{
     ErrorKind, FromRedisValue, RedisError, RedisResult, RedisWrite, ToRedisArgs, Value,
 };
 use compact_str::{CompactString, ToCompactString};
+use pyo3::types::PyString;
+use pyo3::{FromPyObject, PyAny, PyResult};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fmt::{Display, Formatter, Pointer};
 use std::ops::{Add, Deref};
 use std::str::{from_utf8, FromStr};
-use pyo3::{FromPyObject, PyAny, PyResult};
-use pyo3::types::PyString;
 
 /// Fast UTF8 data references.
 ///

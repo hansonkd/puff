@@ -52,6 +52,7 @@ use tokio::runtime::Builder;
 use tokio::sync::broadcast;
 
 use crate::context::{set_puff_context, set_puff_context_waiting, PuffContext};
+use crate::databases::postgres::{add_postgres_command_arguments, new_postgres_async};
 use crate::databases::pubsub::{add_pubsub_command_arguments, new_pubsub_async};
 use crate::errors::Result;
 use crate::python::{bootstrap_puff_globals, setup_greenlet};
@@ -253,6 +254,10 @@ impl Program {
 
         let mut top_level = self.clap_command();
 
+        if self.runtime_config.postgres() {
+            top_level = add_postgres_command_arguments(top_level)
+        }
+
         if self.runtime_config.redis() {
             top_level = add_redis_command_arguments(top_level)
         }
@@ -311,6 +316,13 @@ impl Program {
                     ))?);
                 }
 
+                let mut postgres = None;
+                if self.runtime_config.postgres() {
+                    postgres = Some(rt.block_on(new_postgres_async(
+                        arg_matches.value_of("postgres_url").unwrap(),
+                        true,
+                    ))?);
+                }
                 let (dispatcher, waiting) =
                     Dispatcher::new(notify_shutdown, self.runtime_config.clone());
                 let arc_dispatcher = Arc::new(dispatcher);
@@ -321,6 +333,7 @@ impl Program {
                     rt.handle().clone(),
                     arc_dispatcher,
                     redis,
+                    postgres,
                     python_dispatcher,
                     pubsub_client.clone(),
                 );

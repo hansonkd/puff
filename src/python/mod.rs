@@ -14,7 +14,10 @@ use tokio::sync::oneshot;
 use tracing::error;
 
 pub use pyo3::prelude::*;
+use crate::python::postgres::PostgresGlobal;
+
 pub mod greenlet;
+pub mod postgres;
 pub mod redis;
 pub mod wsgi;
 
@@ -65,6 +68,7 @@ pub(crate) fn bootstrap_puff_globals(global_state: PyObject) {
         let puff_rust_functions = puff_mod.getattr("rust_objects")?;
         puff_rust_functions.setattr("is_puff", true)?;
         puff_rust_functions.setattr("global_redis_getter", RedisGlobal)?;
+        puff_rust_functions.setattr("global_postgres_getter", PostgresGlobal)?;
         puff_rust_functions.setattr("global_state", global_state)?;
         puff_rust_functions.setattr("blocking_spawner", SpawnBlocking.into_py(py))
     })

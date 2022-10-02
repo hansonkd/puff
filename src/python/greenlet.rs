@@ -36,9 +36,9 @@ impl GreenletReturn {
     }
 }
 
-async fn handle_return<
-    F: Future<Output = PuffResult<R>> + Send + 'static,
-    R: ToPyObject + 'static,
+pub async fn handle_return<
+    F: Future<Output = PuffResult<R>>,
+    R: ToPyObject,
 >(
     return_fun: PyObject,
     f: F,

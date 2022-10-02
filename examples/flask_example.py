@@ -14,6 +14,17 @@ r = redis.Redis(host='localhost')
 
 puff_redis = puff.global_redis()
 
+
+@app.route("/pg/")
+def hello_world_pg():
+    postgres_conn = puff.PostgresConnection()
+    cursor = postgres_conn.cursor()
+    cursor.execute("SELECT 42")
+    results = cursor.fetchall()
+    print(results)
+    return str(results)
+
+
 @app.route("/deep/")
 def hello_world_puff():
     redis_set("blam", "ok").join()

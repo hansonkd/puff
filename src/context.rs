@@ -9,6 +9,7 @@ use futures_util::FutureExt;
 
 use std::cell::RefCell;
 
+use crate::databases::postgres::PostgresClient;
 use crate::databases::pubsub::PubSubClient;
 use crate::python::PythonDispatcher;
 use futures_util::task::SpawnExt;
@@ -26,6 +27,7 @@ pub struct PuffContext {
     dispatcher: Arc<Dispatcher>,
     handle: Handle,
     redis: Option<RedisClient>,
+    postgres: Option<PostgresClient>,
     python_dispatcher: Option<PythonDispatcher>,
     pubsub_client: Option<PubSubClient>,
 }
@@ -88,6 +90,7 @@ impl PuffContext {
             handle,
             dispatcher: Arc::new(Dispatcher::empty(notify_shutdown)),
             redis: None,
+            postgres: None,
             python_dispatcher: None,
             pubsub_client: None,
         }
@@ -96,7 +99,7 @@ impl PuffContext {
     /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`. This function will start
     /// the number of `coroutine_threads` specified in your config.
     pub fn new(dispatcher: Arc<Dispatcher>, handle: Handle) -> PuffContext {
-        Self::new_with_options(handle, dispatcher, None, None, None)
+        Self::new_with_options(handle, dispatcher, None, None, None, None)
     }
 
     /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`. This function will start
@@ -105,6 +108,7 @@ impl PuffContext {
         handle: Handle,
         dispatcher: Arc<Dispatcher>,
         redis: Option<RedisClient>,
+        postgres: Option<PostgresClient>,
         python_dispatcher: Option<PythonDispatcher>,
         pubsub_client: Option<PubSubClient>,
     ) -> PuffContext {
@@ -112,6 +116,7 @@ impl PuffContext {
             dispatcher,
             handle,
             redis,
+            postgres,
             python_dispatcher,
             pubsub_client,
         };
@@ -143,6 +148,13 @@ impl PuffContext {
         self.redis
             .clone()
             .expect("Redis is not configured for this runtime.")
+    }
+
+    /// The configured postgres client. Panics if not enabled.
+    pub fn postgres(&self) -> PostgresClient {
+        self.postgres
+            .clone()
+            .expect("Postgres is not configured for this runtime.")
     }
 
     /// The coroutine dispatcher.
