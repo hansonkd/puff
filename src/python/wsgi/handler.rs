@@ -1,4 +1,4 @@
-use crate::python::{log_traceback, wsgi, PythonDispatcher};
+use crate::python::{log_traceback, log_traceback_with_label, wsgi, PythonDispatcher};
 use anyhow::{anyhow, Error};
 use axum::body::{Body, BoxBody, Bytes, Full, HttpBody};
 use axum::handler::Handler;
@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::errors::handle_puff_error;
 use tracing::error;
 use wsgi::Sender;
 
@@ -80,8 +81,7 @@ impl IntoResponse for WsgiError {
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
             }
             WsgiError::PyErr(e) => {
-                error!("WsgiError: {e}");
-                log_traceback(e);
+                log_traceback_with_label("Wsgi", e);
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
             }
         }
@@ -311,9 +311,8 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                             .unwrap_or(WsgiError::FailedToCreateResponse.into_response())
                     })
                 }
-                Err(_e) => {
-                    #[cfg(feature = "tracing")]
-                    tracing::error!("Error preparing request scope: {e:?}");
+                Err(e) => {
+                    handle_puff_error("Wsgi Request Scope", e);
                     Response::builder()
                         .status(StatusCode::INTERNAL_SERVER_ERROR)
                         .body(Body::empty())

@@ -1,24 +1,39 @@
 use crate::context::with_puff_context;
-use crate::errors::PuffResult;
+use crate::errors::{handle_puff_error, handle_puff_result, PuffResult};
 use crate::python::greenlet::{greenlet_async, handle_return};
 use crate::python::postgres::TxnCommand::ExecuteMany;
 use anyhow::anyhow;
+use bb8_postgres::bb8::Pool;
 use bb8_postgres::tokio_postgres::Client;
+use bb8_postgres::PostgresConnectionManager;
 use futures_util::{FutureExt, StreamExt};
+use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyFloat, PyList, PyLong, PyString, PyType};
 use pythonize::depythonize;
 use std::error::Error;
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use bb8_postgres::bb8::Pool;
-use bb8_postgres::PostgresConnectionManager;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type};
 use tokio_postgres::{NoTls, Row, RowStream, Transaction};
+use tokio_postgres::error::SqlState;
 use tracing::{error, info};
+use crate::python::log_traceback_with_label;
+
+create_exception!(module, PgError, pyo3::exceptions::PyException);
+create_exception!(module, Warning, pyo3::exceptions::PyException);
+create_exception!(module, InterfaceError, PgError);
+create_exception!(module, DatabaseError, PgError);
+create_exception!(module, InternalError, DatabaseError);
+create_exception!(module, OperationalError, DatabaseError);
+create_exception!(module, ProgrammingError, DatabaseError);
+create_exception!(module, IntegrityError, DatabaseError);
+create_exception!(module, DataError, DatabaseError);
+create_exception!(module, NotSupportedError, DatabaseError);
 
 #[pyclass]
 pub struct PostgresGlobal;
@@ -47,7 +62,7 @@ impl Connection {
     pub fn new(pool: Pool<PostgresConnectionManager<NoTls>>) -> Self {
         Self {
             pool,
-            transaction_loop: Arc::new(Mutex::new(None))
+            transaction_loop: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -60,13 +75,44 @@ impl Connection {
             *m = None;
         });
     }
-    fn commit(&self) {}
-    fn rollback(&self) {}
+    fn commit(&self, return_fun: PyObject) {
+        let ctx = with_puff_context(|ctx| ctx);
+        let transaction_loop_inner = self.transaction_loop.clone();
+        ctx.handle().spawn(async move {
+            let sender = {
+                let job_sender = transaction_loop_inner.lock().unwrap();
+                job_sender.clone()
+            };
+            if let Some(s) = sender {
+                s.send(TxnCommand::Commit(return_fun)).await
+            } else {
+                handle_return(return_fun, async { Ok(()) }).await;
+                return Ok(());
+            }
+        });
+    }
+    fn rollback(&self, return_fun: PyObject) {
+        let ctx = with_puff_context(|ctx| ctx);
+        let transaction_loop_inner = self.transaction_loop.clone();
+        ctx.handle().spawn(async move {
+            let sender = {
+                let job_sender = transaction_loop_inner.lock().unwrap();
+                job_sender.clone()
+            };
+
+            if let Some(s) = sender {
+                s.send(TxnCommand::Rollback(return_fun)).await
+            } else {
+                handle_return(return_fun, async { Ok(()) }).await;
+                return Ok(());
+            }
+        });
+    }
     fn cursor(&self, py: Python) -> PyObject {
         let cursor = Cursor {
             pool: self.pool.clone(),
             transaction_loop: self.transaction_loop.clone(),
-            arraysize: 1
+            arraysize: 1,
         };
         cursor.into_py(py)
     }
@@ -92,7 +138,34 @@ impl Cursor {
             sender
         }
     }
+
+    fn spawn_and_recover<F: Future<Output = PuffResult<()>> + Send + Sync + 'static>(
+        &self,
+        return_fun: PyObject,
+        f: F,
+    ) {
+        let ctx = with_puff_context(|ctx| ctx);
+        ctx.handle().spawn(async move {
+            let res = f.await;
+            if let Err(e) = res {
+                Python::with_gil(|py| {
+                    return_fun
+                        .call1(
+                            py,
+                            (
+                                py.None(),
+                                InternalError::new_err("Error sending cursor command"),
+                            ),
+                        )
+                        .map_err(|e| log_traceback_with_label("Postgres return", e))
+                        .unwrap()
+                });
+                handle_puff_error("Postgres", e);
+            }
+        });
+    }
 }
+
 #[pymethods]
 impl Cursor {
     #[getter]
@@ -128,68 +201,65 @@ impl Cursor {
 
     fn executemany(
         &self,
+        py: Python,
         return_func: PyObject,
         operation: String,
         seq_of_parameters: Option<PyObject>,
     ) {
-        let ctx = with_puff_context(|ctx| ctx);
-        let job_sender = self.get_sender();
-        ctx.handle().spawn(async move {
-            job_sender
+        let job_sender = py.allow_threads(|| self.get_sender());
+        self.spawn_and_recover(return_func.clone(), async move {
+            Ok(job_sender
                 .send(ExecuteMany(
                     return_func,
                     operation,
                     seq_of_parameters
                         .unwrap_or(Python::with_gil(|py| PyList::empty(py).into_py(py))),
                 ))
-                .await
-        });
+                .await?)
+        })
     }
 
-    fn execute(&self, return_func: PyObject, operation: String, parameters: Option<Vec<PyObject>>) {
-        let ctx = with_puff_context(|ctx| ctx);
-        let job_sender = self.get_sender();
-        ctx.handle().spawn(async move {
+    fn execute(
+        &self,
+        py: Python,
+        return_func: PyObject,
+        operation: String,
+        parameters: Option<Vec<PyObject>>,
+    ) {
+        let job_sender = py.allow_threads(|| self.get_sender());
+        self.spawn_and_recover(return_func.clone(), async move {
             let p = parameters.unwrap_or_default();
             let sql_p = p.into_iter().map(PythonSqlValue).collect();
-            job_sender
+            Ok(job_sender
                 .send(TxnCommand::Execute(return_func, operation, sql_p))
-                .await
+                .await?)
         });
     }
 
     fn callproc(&self, procname: &PyString, parameters: Option<&PyList>) {}
 
-    fn fetchone(&mut self, return_func: PyObject) {
-        let ctx = with_puff_context(|ctx| ctx);
-        let job_sender = self.get_sender();
-        ctx.handle()
-            .spawn(async move {
-                if job_sender.send(TxnCommand::FetchOne(return_func)).await.is_err() {
-                    error!("Could not send fetchone.")
-                } });
-    }
-
-    fn fetchmany(&mut self, return_func: PyObject, rowcount: Option<usize>) {
-        let real_row_count = rowcount.unwrap_or(self.arraysize);
-        let ctx = with_puff_context(|ctx| ctx);
-        let job_sender = self.get_sender();
-        ctx.handle().spawn(async move {
-            if job_sender
-                .send(TxnCommand::FetchMany(return_func, real_row_count))
-                .await.is_err() {
-                error!("Could not send fetchmany.")
-            }
+    fn fetchone(&mut self, py: Python, return_func: PyObject) {
+        let job_sender = py.allow_threads(|| self.get_sender());
+        self.spawn_and_recover(return_func.clone(), async move {
+            Ok(job_sender.send(TxnCommand::FetchOne(return_func)).await?)
         });
     }
 
-    fn fetchall(&mut self, return_func: PyObject) {
-        let ctx = with_puff_context(|ctx| ctx);
-        let job_sender = self.get_sender();
-        ctx.handle()
-            .spawn(async move { if job_sender.send(TxnCommand::FetchAll(return_func)).await.is_err() {
-                error!("Could not send fetchall.")
-            } });
+    fn fetchmany(&mut self, py: Python, return_func: PyObject, rowcount: Option<usize>) {
+        let real_row_count = rowcount.unwrap_or(self.arraysize);
+        let job_sender = py.allow_threads(|| self.get_sender());
+        self.spawn_and_recover(return_func.clone(), async move {
+            Ok(job_sender
+                .send(TxnCommand::FetchMany(return_func, real_row_count))
+                .await?)
+        });
+    }
+
+    fn fetchall(&mut self, py: Python, return_func: PyObject) {
+        let job_sender = py.allow_threads(|| self.get_sender());
+        self.spawn_and_recover(return_func.clone(), async move {
+            Ok(job_sender.send(TxnCommand::FetchAll(return_func)).await?)
+        });
     }
 }
 
@@ -212,6 +282,7 @@ fn row_to_pyton(py: Python, row: Row) -> PyResult<Py<PyList>> {
             Type::OID => row.get::<_, u32>(ix).into_py(py),
             Type::BYTEA => row.get::<_, &[u8]>(ix).into_py(py),
             Type::JSON => pythonize::pythonize(py, &row.get::<_, serde_json::Value>(ix))?,
+            Type::JSONB => pythonize::pythonize(py, &row.get::<_, serde_json::Value>(ix))?,
             Type::BOOL_ARRAY => row.get::<_, Vec<bool>>(ix).into_py(py),
             Type::TEXT_ARRAY => row.get::<_, Vec<&str>>(ix).into_py(py),
             Type::VARCHAR_ARRAY => row.get::<_, Vec<&str>>(ix).into_py(py),
@@ -226,7 +297,7 @@ fn row_to_pyton(py: Python, row: Row) -> PyResult<Py<PyList>> {
             Type::BYTEA_ARRAY => row.get::<_, Vec<&[u8]>>(ix).into_py(py),
 
             t => {
-                return Err(PyException::new_err(format!(
+                return Err(NotSupportedError::new_err(format!(
                     "Unsupported postgres type {:?}",
                     t
                 )))
@@ -237,12 +308,15 @@ fn row_to_pyton(py: Python, row: Row) -> PyResult<Py<PyList>> {
     Ok(PyList::new(py, row_vec).into_py(py))
 }
 
+#[derive(Debug)]
 enum TxnCommand {
     Execute(PyObject, String, Vec<PythonSqlValue>),
     ExecuteMany(PyObject, String, PyObject),
     FetchOne(PyObject),
     FetchMany(PyObject, usize),
     FetchAll(PyObject),
+    Commit(PyObject),
+    Rollback(PyObject),
 }
 
 #[derive(Debug, Clone)]
@@ -351,7 +425,10 @@ impl ToSql for PythonSqlValue {
     to_sql_checked!();
 }
 
-async fn run_loop(client_pool: Pool<PostgresConnectionManager<NoTls>>, mut rec: Receiver<TxnCommand>) -> PuffResult<()> {
+async fn run_loop(
+    client_pool: Pool<PostgresConnectionManager<NoTls>>,
+    mut rec: Receiver<TxnCommand>,
+) -> PuffResult<()> {
     let mut running = true;
     while running {
         let mut client_conn = client_pool.get().await?;
@@ -361,35 +438,108 @@ async fn run_loop(client_pool: Pool<PostgresConnectionManager<NoTls>>, mut rec: 
     Ok(())
 }
 
+fn postgres_to_python_exception(e: tokio_postgres::Error) -> PyErr {
+    if e.is_closed() {
+        return InternalError::new_err(format!(
+                "Error occurred because connection is closed: {:?}",
+                e
+            ))
+    }
+    match e.as_db_error() {
+        Some(db_err) => {
+            let hint = db_err.hint().map(|f| format!(" Hint: {}", f)).unwrap_or_default();
+            let severity = db_err.severity();
+            let pos = db_err.hint().map(|f| format!(" Position: {}", f)).unwrap_or_default();
+            let schema = db_err.schema().map(|f| format!(" Schema: {}", f)).unwrap_or_default();
+            let table = db_err.table().map(|f| format!(" Table: {}", f)).unwrap_or_default();
+            let column = db_err.column().map(|f| format!(" Column: {}", f)).unwrap_or_default();
+            let constraint = db_err.constraint().map(|f| format!(" Constraint: {}", f)).unwrap_or_default();
+            let formatted = format!("Message: {}, Severity: {}{}{}{}{}{}", hint, severity, pos, schema, table, column, constraint);
+            match db_err.code().clone() {
+                SqlState::WARNING => Warning::new_err(formatted),
+                SqlState::SYNTAX_ERROR => ProgrammingError::new_err(formatted),
+                SqlState::INVALID_TABLE_DEFINITION => ProgrammingError::new_err(formatted),
+                SqlState::INTEGRITY_CONSTRAINT_VIOLATION => IntegrityError::new_err(formatted),
+                SqlState::FOREIGN_KEY_VIOLATION => IntegrityError::new_err(formatted),
+                SqlState::UNDEFINED_TABLE => IntegrityError::new_err(formatted),
+                SqlState::INVALID_FOREIGN_KEY => IntegrityError::new_err(formatted),
+                SqlState::NOT_NULL_VIOLATION => IntegrityError::new_err(formatted),
+                SqlState::DISK_FULL => OperationalError::new_err(formatted),
+                SqlState::DATA_CORRUPTED => OperationalError::new_err(formatted),
+                SqlState::FEATURE_NOT_SUPPORTED => NotSupportedError::new_err(formatted),
+                SqlState::NO_ACTIVE_SQL_TRANSACTION => NotSupportedError::new_err(formatted),
+                SqlState::INVALID_DATETIME_FORMAT => DataError::new_err(formatted),
+                SqlState::INVALID_ARGUMENT_FOR_LOG => DataError::new_err(formatted),
+                SqlState::INVALID_ARGUMENT_FOR_NTH_VALUE=> DataError::new_err(formatted),
+                SqlState::INVALID_ARGUMENT_FOR_SQL_JSON_DATETIME_FUNCTION=> DataError::new_err(formatted),
+                SqlState::INVALID_ARGUMENT_FOR_NTILE=> DataError::new_err(formatted),
+                SqlState::INVALID_ARGUMENT_FOR_POWER_FUNCTION=> DataError::new_err(formatted),
+                SqlState::INVALID_ARGUMENT_FOR_WIDTH_BUCKET_FUNCTION => DataError::new_err(formatted),
+                SqlState::NUMERIC_VALUE_OUT_OF_RANGE => DataError::new_err(formatted),
+                SqlState::DATETIME_FIELD_OVERFLOW => DataError::new_err(formatted),
+                SqlState::DATETIME_VALUE_OUT_OF_RANGE => DataError::new_err(formatted),
+                SqlState::NULL_VALUE_NOT_ALLOWED => DataError::new_err(formatted),
+                _ => InternalError::new_err(formatted),
+            }
+        }
+        None => {
+            InternalError::new_err(format!(
+                "{:?}",
+                e
+            ))
+        }
+    }
+}
 
-async fn run_txn_loop<'a>(mut txn: Transaction<'a>, mut rec: &'a mut Receiver<TxnCommand>) -> PuffResult<bool> {
+async fn run_txn_loop<'a>(
+    mut txn: Transaction<'a>,
+    mut rec: &'a mut Receiver<TxnCommand>,
+) -> PuffResult<bool> {
     let mut current_stream: Option<Pin<Box<RowStream>>> = None;
     while let Some(x) = rec.recv().await {
         match x {
+            TxnCommand::Commit(ret) => {
+                txn.commit().await?;
+                handle_return(ret, async { Ok(0) }).await;
+                return Ok(true);
+            }
+            TxnCommand::Rollback(ret) => {
+                txn.rollback().await?;
+                handle_return(ret, async { Ok(0) }).await;
+                return Ok(true);
+            }
             TxnCommand::Execute(ret, q, params) => {
                 let res = txn.query_raw(&q, &params[..]).await?;
                 current_stream = Some(Box::pin(res));
                 handle_return(ret, async { Ok(0) }).await
             }
             TxnCommand::ExecuteMany(ret, q, param_seq) => {
-                    handle_return(ret, async {
-                        let param_groups = Python::with_gil(|py| {
-                            let mut v = Vec::new();
-                            for params in param_seq.into_ref(py).iter()? {
-                                v.push(params?.into_py(py))
-                            }
-                            PuffResult::Ok(v)
-                        })?;
+                handle_return(ret, async {
+                    let param_groups = Python::with_gil(|py| {
                         let mut v = Vec::new();
-                        for params in param_groups {
-                            let ps: Vec<PythonSqlValue> = Python::with_gil(|py| PuffResult::Ok(params.extract::<Vec<PyObject>>(py)?.into_iter().map(PythonSqlValue).collect()))?;
-
-                            let res = txn.execute_raw(&q, ps).await?;
-                            v.push(res)
+                        for params in param_seq.into_ref(py).iter()? {
+                            v.push(params?.into_py(py))
                         }
                         PuffResult::Ok(v)
-                    })
-                    .await
+                    })?;
+                    let mut v = Vec::new();
+                    for params in param_groups {
+                        let ps: Vec<PythonSqlValue> = Python::with_gil(|py| {
+                            PuffResult::Ok(
+                                params
+                                    .extract::<Vec<PyObject>>(py)?
+                                    .into_iter()
+                                    .map(PythonSqlValue)
+                                    .collect(),
+                            )
+                        })?;
+
+                        let res = txn.execute_raw(&q, ps).await?;
+                        v.push(res)
+                    }
+                    PuffResult::Ok(v)
+                })
+                .await
             }
             TxnCommand::FetchOne(ret) => {
                 handle_return(ret, async {
@@ -399,14 +549,11 @@ async fn run_txn_loop<'a>(mut txn: Transaction<'a>, mut rec: &'a mut Receiver<Tx
                             Some(Ok(r)) => {
                                 Python::with_gil(|py| Ok(row_to_pyton(py, r)?.into_py(py)))
                             }
-                            Some(Err(e)) => Err(PyException::new_err(format!(
-                                "Error getting postgres row {:?}",
-                                e
-                            )))?,
+                            Some(Err(e)) => Err(postgres_to_python_exception(e))?,
                             None => Ok(Python::with_gil(|py| py.None())).into(),
                         }
                     } else {
-                        Err(PyException::new_err(format!("Cursor not ready.")))?
+                        Err(InternalError::new_err(format!("Cursor not ready.")))?
                     }
                 })
                 .await
@@ -422,10 +569,7 @@ async fn run_txn_loop<'a>(mut txn: Transaction<'a>, mut rec: &'a mut Receiver<Tx
                                         let new_r = Python::with_gil(|py| row_to_pyton(py, r))?;
                                         new_r
                                     }
-                                    Err(e) => Err(PyException::new_err(format!(
-                                        "Error getting postgres row {:?}",
-                                        e
-                                    )))?,
+                                    Err(e) => Err(postgres_to_python_exception(e))?,
                                 };
                                 real_result.push(value)
                             } else {
@@ -447,10 +591,7 @@ async fn run_txn_loop<'a>(mut txn: Transaction<'a>, mut rec: &'a mut Receiver<Tx
                                     let new_r = Python::with_gil(|py| row_to_pyton(py, r))?;
                                     new_r
                                 }
-                                Err(e) => Err(PyException::new_err(format!(
-                                    "Error getting postgres row {:?}",
-                                    e
-                                )))?,
+                                Err(e) => Err(postgres_to_python_exception(e))?,
                             };
                             real_result.push(value)
                         }
@@ -462,4 +603,17 @@ async fn run_txn_loop<'a>(mut txn: Transaction<'a>, mut rec: &'a mut Receiver<Tx
         }
     }
     Ok(false)
+}
+
+pub fn add_pg_puff_exceptions(py: Python) -> PyResult<()> {
+    let puff_pg = py.import("puff.postgres")?;
+    puff_pg.add("Error", py.get_type::<PgError>())?;
+    puff_pg.add("Warning", py.get_type::<Warning>())?;
+    puff_pg.add("InterfaceError", py.get_type::<InterfaceError>())?;
+    puff_pg.add("DatabaseError", py.get_type::<DatabaseError>())?;
+    puff_pg.add("OperationalError", py.get_type::<OperationalError>())?;
+    puff_pg.add("ProgrammingError", py.get_type::<ProgrammingError>())?;
+    puff_pg.add("IntegrityError", py.get_type::<IntegrityError>())?;
+    puff_pg.add("DataError", py.get_type::<DataError>())?;
+    puff_pg.add("NotSupportedError", py.get_type::<NotSupportedError>())
 }

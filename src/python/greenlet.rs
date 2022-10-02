@@ -36,10 +36,7 @@ impl GreenletReturn {
     }
 }
 
-pub async fn handle_return<
-    F: Future<Output = PuffResult<R>>,
-    R: ToPyObject,
->(
+pub async fn handle_return<F: Future<Output = PuffResult<R>>, R: ToPyObject>(
     return_fun: PyObject,
     f: F,
 ) {
@@ -50,10 +47,21 @@ pub async fn handle_return<
                 .call1(py, (r.to_object(py), py.None()))
                 .map_err(|e| log_traceback(e)),
             Err(e) => {
-                let py_err = PyException::new_err(format!("Greenlet async exception: {e}"));
-                return_fun
-                    .call1(py, (py.None(), py_err))
-                    .map_err(|e| log_traceback(e))
+                match e.downcast::<PyErr>() {
+                    Ok(py_err) => {
+                        return_fun
+                        .call1(py, (py.None(), py_err))
+                        .map_err(|e| log_traceback(e))
+                    }
+                    Err(e) => {
+                        let py_err = PyException::new_err(format!("Greenlet async exception: {e}"));
+                        return_fun
+                        .call1(py, (py.None(), py_err))
+                        .map_err(|e| log_traceback(e))
+                    }
+                }
+
+
             }
         }
         .unwrap_or(py.None())

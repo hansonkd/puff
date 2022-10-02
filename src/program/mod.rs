@@ -43,6 +43,7 @@ use clap::{ArgMatches, Command};
 
 use crate::databases::redis::{add_redis_command_arguments, new_redis_async};
 
+use pyo3::{PyErr, Python};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -54,8 +55,8 @@ use tokio::sync::broadcast;
 use crate::context::{set_puff_context, set_puff_context_waiting, PuffContext};
 use crate::databases::postgres::{add_postgres_command_arguments, new_postgres_async};
 use crate::databases::pubsub::{add_pubsub_command_arguments, new_pubsub_async};
-use crate::errors::Result;
-use crate::python::{bootstrap_puff_globals, setup_greenlet};
+use crate::errors::{handle_puff_error, handle_puff_result, Result};
+use crate::python::{bootstrap_puff_globals, log_traceback, setup_greenlet};
 use crate::runtime::dispatcher::Dispatcher;
 use crate::runtime::RuntimeConfig;
 use crate::types::text::Text;
@@ -236,12 +237,7 @@ impl Program {
     ///
     /// See [Self::try_run] for more information.
     pub fn run(&self) -> () {
-        match self.try_run() {
-            Ok(()) => (),
-            Err(e) => {
-                error!("Error running command: {e}")
-            }
-        }
+        handle_puff_result("Program", self.try_run())
     }
 
     /// Tries to run the program and returns an Error if it fails.
@@ -359,14 +355,8 @@ impl Program {
                     // let result = ctx.start()?.await;
                     tokio::select! {
                         res = runnable.0 => {
-                            // If an error is received here, accepting connections from the TCP
-                            // listener failed multiple times and the server is giving up and
-                            // shutting down.
-                            //
-                            // Errors encountered when handling individual connections do not
-                            // bubble up to this point.
                             if let Err(err) = res {
-                                error!(cause = %err, "failed to start command");
+                                handle_puff_error("Start Command", err)
                             }
                         }
                         _ = shutdown => {

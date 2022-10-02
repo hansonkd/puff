@@ -1,5 +1,5 @@
 use crate::databases::redis::RedisClient;
-use crate::errors::{Error, PuffResult};
+use crate::errors::{handle_puff_result, Error, PuffResult};
 use crate::runtime::dispatcher::Dispatcher;
 
 use crate::runtime::{run_with_config_on_local, RuntimeConfig};
@@ -218,14 +218,10 @@ pub fn supervised_task<F: Fn() -> BoxFuture<'static, PuffResult<()>> + Send + Sy
             info!("Starting task {_task_name}");
             let result = inner_handle.spawn(f()).await;
             match result {
-                Ok(r) => match r {
-                    Ok(_r) => {
-                        info!("Task completed.")
-                    }
-                    Err(_e) => {
-                        error!("Task {_task_name} error {_task_name}: {_e}")
-                    }
-                },
+                Ok(r) => {
+                    let label = format!("Task {}", _task_name);
+                    handle_puff_result(label.as_str(), r)
+                }
                 Err(_e) => {
                     error!("Task {_task_name} unexpected error : {_e}")
                 }

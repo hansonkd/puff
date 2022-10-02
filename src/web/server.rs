@@ -65,7 +65,7 @@ use axum::response::{IntoResponse, Response as AxumResponse};
 use axum::{self, Extension};
 use std::net::SocketAddr;
 
-use crate::errors::{Error, Result};
+use crate::errors::{handle_puff_error, Error, Result};
 use axum::body::{Body, Bytes};
 use axum::handler::Handler;
 use axum::routing::{any_service, on, IntoMakeService, MethodFilter, MethodRouter};
@@ -108,7 +108,7 @@ where
 }
 
 fn handle_response_error(e: Error) -> AxumResponse<BoxBody> {
-    error!("Error processing request: {:?}", e);
+    handle_puff_error("Request", e);
     AxumResponse::builder()
         .status(StatusCode::INTERNAL_SERVER_ERROR)
         .body(Body::empty())

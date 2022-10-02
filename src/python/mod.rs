@@ -13,8 +13,8 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 use tracing::error;
 
+use crate::python::postgres::{add_pg_puff_exceptions, PostgresGlobal};
 pub use pyo3::prelude::*;
-use crate::python::postgres::PostgresGlobal;
 
 pub mod greenlet;
 pub mod postgres;
@@ -49,15 +49,21 @@ impl SpawnBlocking {
 }
 
 pub fn log_traceback(e: PyErr) {
+    log_traceback_with_label("Unexpected", e)
+}
+
+pub fn log_traceback_with_label(label: &str, e: PyErr) {
     Python::with_gil(|py| {
         let t = e.traceback(py);
-        t.map(|f| {
-            let res = f
-                .format()
-                .unwrap_or_else(|e| format!("Error formatting traceback\n: {e}"));
-            error!("Python Error: {e}");
-            eprintln!("{}", res);
-        })
+        let tb = t
+            .map(|f| {
+                let tb = f
+                    .format()
+                    .unwrap_or_else(|e| format!("Error formatting traceback\n: {e}"));
+                format!("\n{}", tb)
+            })
+            .unwrap_or_default();
+        error!("Encountered Python {label} Error\n:{e}{tb}");
     });
 }
 
@@ -69,6 +75,7 @@ pub(crate) fn bootstrap_puff_globals(global_state: PyObject) {
         puff_rust_functions.setattr("is_puff", true)?;
         puff_rust_functions.setattr("global_redis_getter", RedisGlobal)?;
         puff_rust_functions.setattr("global_postgres_getter", PostgresGlobal)?;
+        add_pg_puff_exceptions(py)?;
         puff_rust_functions.setattr("global_state", global_state)?;
         puff_rust_functions.setattr("blocking_spawner", SpawnBlocking.into_py(py))
     })

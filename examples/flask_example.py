@@ -5,6 +5,7 @@ from typing import Any
 from flask import Flask
 
 import puff
+import puff.postgres
 import redis
 
 SAMPLE = 1000
@@ -17,11 +18,10 @@ puff_redis = puff.global_redis()
 
 @app.route("/pg/")
 def hello_world_pg():
-    postgres_conn = puff.PostgresConnection()
+    postgres_conn = puff.postgres.PostgresConnection()
     cursor = postgres_conn.cursor()
-    cursor.execute("SELECT 42")
+    cursor.execute("SELECT '[1,2,3]'::jsonb")
     results = cursor.fetchall()
-    print(results)
     return str(results)
 
 
