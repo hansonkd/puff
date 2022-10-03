@@ -22,13 +22,13 @@ impl GreenletReturn {
 impl GreenletReturn {
     pub fn __call__(
         &mut self,
-        _py: Python,
+        py: Python,
         value: PyObject,
-        exception: Option<&PyException>,
+        exception: Option<&PyAny>,
     ) -> PyResult<()> {
         match self.0.take() {
             Some(sender) => match exception {
-                Some(e) => Ok(sender.send(Err(e.into())).unwrap_or(())),
+                Some(e) => Ok(sender.send(Err(PyErr::from_value(e))).unwrap_or(())),
                 None => Ok(sender.send(Ok(value)).unwrap_or(())),
             },
             None => Err(PyException::new_err("Already used GreenletReturn")),
@@ -54,7 +54,7 @@ pub async fn handle_return<F: Future<Output = PuffResult<R>>, R: ToPyObject>(
                         .map_err(|e| log_traceback(e))
                     }
                     Err(e) => {
-                        let py_err = PyException::new_err(format!("Greenlet async exception: {e}"));
+                        let py_err = PyException::new_err(format!("Rust Error: {e}"));
                         return_fun
                         .call1(py, (py.None(), py_err))
                         .map_err(|e| log_traceback(e))

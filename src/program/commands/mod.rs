@@ -10,6 +10,7 @@ use std::sync::Mutex;
 pub mod http;
 pub mod python;
 pub mod wsgi;
+pub mod django_management;
 
 pub struct BasicCommand<F: FnOnce() -> Result<()> + Send + 'static> {
     name: Text,
@@ -54,7 +55,7 @@ impl HttpServerConfig {
                 .long("bind")
                 .value_parser(clap::value_parser!(SocketAddr))
                 .env("PUFF_BIND")
-                .takes_value(true)
+                .num_args(1)
                 .default_value("127.0.0.1:7777")
                 .help("The host and port the HTTP server will bind to."),
         )

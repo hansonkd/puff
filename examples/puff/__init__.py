@@ -1,4 +1,5 @@
 import sys
+import traceback
 from importlib import import_module
 
 from greenlet import greenlet
@@ -12,6 +13,7 @@ import functools
 
 class RustObjects(object):
     """A class that holds functions and objects from Rust."""
+
     is_puff: bool = False
     global_state: Any
 
@@ -30,9 +32,11 @@ parent_thread = contextvars.ContextVar("parent_thread")
 
 def blocking(func):
     if rust_objects.is_puff:
+
         @functools.wraps(func)
         def wrapper_blocking(*args, **kwargs):
             return spawn_blocking(func, *args, **kwargs).join()
+
         return wrapper_blocking
     else:
         return func
@@ -106,7 +110,12 @@ class MainThread(Thread):
 
     def spawn_local(self, task_function, args, kwargs, ret_func):
         task_function_wrapped = self.generate_spawner(task_function)
-        task = Task(args=args, kwargs=kwargs, ret_func=ret_func, task_function=task_function_wrapped)
+        task = Task(
+            args=args,
+            kwargs=kwargs,
+            ret_func=ret_func,
+            task_function=task_function_wrapped,
+        )
         self.event_queue.put(task)
 
     def new_greenlet(self):
@@ -128,6 +137,9 @@ class MainThread(Thread):
                 val = func(*args, **kwargs)
                 ret_func(val, None)
             except Exception as e:
+                exc_type, exc_value, exc_traceback = sys.exc_info()
+                traceback.print_tb(exc_traceback, file=sys.stderr)
+                traceback.print_exception(exc_value, file=sys.stderr)
                 ret_func(None, e)
 
         return override_spawner
@@ -290,12 +302,9 @@ def spawn_blocking_from_rust(on_thread_start, f, args, kwargs, return_result):
 
 def cached_import(module_path, class_name):
     # Check whether module is loaded and fully initialized.
-    if not (
-        (module := sys.modules.get(module_path))
-        and (spec := getattr(module, "__spec__", None))
-        and getattr(spec, "_initializing", False) is False
-    ):
+    if not ((module := sys.modules.get(module_path))):
         module = import_module(module_path)
+
     return getattr(module, class_name)
 
 
@@ -309,10 +318,4 @@ def import_string(dotted_path):
     except ValueError as err:
         raise ImportError("%s doesn't look like a module path" % dotted_path) from err
 
-    try:
-        return cached_import(module_path, class_name)
-    except AttributeError as err:
-        raise ImportError(
-            'Module "%s" does not define a "%s" attribute/class'
-            % (module_path, class_name)
-        ) from err
+    return cached_import(module_path, class_name)

@@ -12,6 +12,7 @@ import functools
 
 class RustObjects(object):
     """A class that holds functions and objects from Rust."""
+
     is_puff: bool = False
     global_state: Any
 
@@ -30,9 +31,11 @@ parent_thread = contextvars.ContextVar("parent_thread")
 
 def blocking(func):
     if rust_objects.is_puff:
+
         @functools.wraps(func)
         def wrapper_blocking(*args, **kwargs):
             return spawn_blocking(func, *args, **kwargs).join()
+
         return wrapper_blocking
     else:
         return func
@@ -106,7 +109,12 @@ class MainThread(Thread):
 
     def spawn_local(self, task_function, args, kwargs, ret_func):
         task_function_wrapped = self.generate_spawner(task_function)
-        task = Task(args=args, kwargs=kwargs, ret_func=ret_func, task_function=task_function_wrapped)
+        task = Task(
+            args=args,
+            kwargs=kwargs,
+            ret_func=ret_func,
+            task_function=task_function_wrapped,
+        )
         self.event_queue.put(task)
 
     def new_greenlet(self):

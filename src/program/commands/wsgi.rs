@@ -15,6 +15,7 @@ use pyo3::prelude::*;
 
 use crate::program::commands::HttpServerConfig;
 use tracing::info;
+use crate::types::text::ToText;
 
 struct WSGIConstructor {
     config: HttpServerConfig,
@@ -48,7 +49,7 @@ impl WSGIServerCommand {
 
 impl RunnableCommand for WSGIServerCommand {
     fn cli_parser(&self) -> Command {
-        HttpServerConfig::add_command_options(Command::new("wsgi"))
+        HttpServerConfig::add_command_options(Command::new("runserver"))
     }
 
     fn runnable_from_args(&self, args: &ArgMatches, context: PuffContext) -> Result<Runnable> {
@@ -66,6 +67,8 @@ impl RunnableCommand for WSGIServerCommand {
         let config = HttpServerConfig::new_from_args(args);
 
         let fut = async move {
+            let server_name = config.socket_addr.ip().to_text();
+            let server_port = config.socket_addr.port();
             let mut ctx = create_server_context(
                 wsgi_app,
                 WSGIConstructor {
@@ -74,6 +77,8 @@ impl RunnableCommand for WSGIServerCommand {
                     router: this_self.router.clone(),
                 },
                 context.clone(),
+                server_name,
+                server_port
             );
             ctx.start()?.await?;
             Ok(())

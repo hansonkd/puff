@@ -330,7 +330,7 @@ pub(crate) fn add_pubsub_command_arguments(command: Command) -> Command {
     command.arg(
         Arg::new("pubsub_url")
             .long("pubsub-url")
-            .takes_value(true)
+            .num_args(1)
             .value_name("PUBSUB_URL")
             .env("PUFF_PUBSUB_URL")
             .default_value("redis://localhost:6379")

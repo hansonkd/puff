@@ -25,7 +25,7 @@ impl PythonCommand {
 
 impl RunnableCommand for PythonCommand {
     fn cli_parser(&self) -> Command {
-        Command::new(self.command_name.puff())
+        Command::new(self.command_name.to_string())
     }
 
     fn runnable_from_args(&self, _args: &ArgMatches, context: PuffContext) -> PuffResult<Runnable> {

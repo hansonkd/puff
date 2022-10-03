@@ -11,7 +11,7 @@ import redis
 SAMPLE = 1000
 
 app = Flask(__name__)
-r = redis.Redis(host='localhost')
+r = redis.Redis(host="localhost")
 
 puff_redis = puff.global_redis()
 
@@ -58,7 +58,9 @@ def redis_get(q):
 
 
 def redis_get_many(q, l):
-    return wrap_async(lambda rr: puff.global_state().concat_redis_gets(rr, q, l), join=False)
+    return wrap_async(
+        lambda rr: puff.global_state().concat_redis_gets(rr, q, l), join=False
+    )
 
 
 def redis_set(k, v):

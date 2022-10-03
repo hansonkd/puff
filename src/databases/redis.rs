@@ -69,7 +69,7 @@ pub(crate) fn add_redis_command_arguments(command: Command) -> Command {
     command.arg(
         Arg::new("redis_url")
             .long("redis-url")
-            .takes_value(true)
+            .num_args(1)
             .value_name("REDIS_URL")
             .env("PUFF_REDIS_URL")
             .default_value("redis://localhost:6379")

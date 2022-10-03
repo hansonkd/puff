@@ -14,6 +14,7 @@ use pyo3::prelude::*;
 
 use crate::context::PuffContext;
 use tokio::sync::oneshot;
+use crate::types::Text;
 
 #[pyclass]
 pub struct Sender {
@@ -65,6 +66,8 @@ pub struct ServerContext<T: WsgiServerSpawner> {
     app: Option<PyObject>,
     server: Option<T>,
     python_dispatcher: PythonDispatcher,
+    server_name: Text,
+    server_port: u16
 }
 
 impl<T: WsgiServerSpawner> ServerContext<T> {
@@ -74,7 +77,7 @@ impl<T: WsgiServerSpawner> ServerContext<T> {
                 let fut = async move {
                     // create wsgi service
                     let wsgi_handler =
-                        WsgiHandler::new(app.clone(), self.python_dispatcher.clone());
+                        WsgiHandler::new(app.clone(), self.python_dispatcher.clone(), self.server_name.clone(), self.server_port);
 
                     server.call(wsgi_handler).await;
 
@@ -92,8 +95,12 @@ pub fn create_server_context<T: WsgiServerSpawner>(
     app: PyObject,
     server: T,
     context: PuffContext,
+    server_name: Text,
+    server_port: u16
 ) -> ServerContext<T> {
     ServerContext {
+        server_name,
+        server_port,
         app: Some(app),
         server: Some(server),
         python_dispatcher: context.python_dispatcher(),

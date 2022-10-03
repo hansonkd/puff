@@ -9,7 +9,7 @@ use axum::response::{IntoResponse, Response};
 use hyper::body::SizeHint;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyString};
+use pyo3::types::{PyByteArray, PyBytes, PyDict, PyString};
 use pyo3::PyDowncastError;
 use std::future::Future;
 
@@ -22,20 +22,25 @@ use std::task::{Context, Poll};
 use crate::errors::handle_puff_error;
 use tracing::error;
 use wsgi::Sender;
+use crate::types::Text;
 
 const MAX_LIST_BODY_INLINE_CONCAT: u64 = 1024 * 4;
 
 #[derive(Clone)]
 pub struct WsgiHandler {
     app: PyObject,
+    server_name: Text,
+    server_port: u16,
     python_dispatcher: PythonDispatcher,
 }
 
 impl WsgiHandler {
-    pub fn new(app: PyObject, python_dispatcher: PythonDispatcher) -> WsgiHandler {
+    pub fn new(app: PyObject, python_dispatcher: PythonDispatcher, server_name: Text, server_port: u16) -> WsgiHandler {
         WsgiHandler {
             app,
             python_dispatcher,
+            server_name,
+            server_port
         }
     }
 }
@@ -169,10 +174,11 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
             let args_to_send: Result<Result<(PyObject, PyObject), Response>, Error> =
                 Python::with_gil(|py| {
                     let environ = PyDict::new(py);
+                    let io = py.import("io")?;
                     environ.set_item("wsgi.version", (1, 0))?;
                     environ.set_item("wsgi.url_scheme", req.uri.scheme_str().unwrap_or("http"))?;
-                    environ.set_item("wsgi.input", PyBytes::new(py, &body_bytes[..]))?;
-                    environ.set_item("wsgi.errors", "")?;
+                    environ.set_item("wsgi.input", io.call_method1("BytesIO", (PyByteArray::new(py, &body_bytes[..]),))?)?;
+                    environ.set_item("wsgi.errors", io.call_method1("BytesIO", (PyByteArray::new(py, &[]),))?)?;
                     environ.set_item("wsgi.multithread", true)?;
                     environ.set_item("wsgi.run_once", false)?;
 
@@ -186,6 +192,8 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                         }
                     };
 
+                    environ.set_item("SERVER_NAME", self.server_name.as_str())?;
+                    environ.set_item("SERVER_PORT", self.server_port)?;
                     environ.set_item("SERVER_PROTOCOL", server_protocol)?;
                     environ.set_item("REQUEST_METHOD", req.method.as_str())?;
                     if let Some(path_and_query) = req.uri.path_and_query() {
@@ -224,7 +232,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                                 "CONTENT_LENGTH".to_owned()
                             }
                             "content-type" => "CONTENT_TYPE".to_owned(),
-                            s => s.to_uppercase().replace("-", "_"),
+                            s => format!("HTTP_{}", s.to_uppercase().replace("-", "_")),
                         };
                         if let Some(val) = environ.get_item(corrected_name.as_str()) {
                             let s = val.downcast::<PyString>().unwrap();

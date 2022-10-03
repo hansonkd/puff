@@ -7,6 +7,7 @@ use crate::context;
 use pyo3::prelude::PyObject;
 use pyo3::{PyResult, Python};
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, oneshot};
@@ -14,7 +15,8 @@ use tokio::sync::{broadcast, oneshot};
 use crate::context::PuffContext;
 use crate::errors::Result;
 use crate::runtime::dispatcher::Dispatcher;
-use crate::types::Puff;
+use crate::types::{Puff, Text};
+use crate::types::text::ToText;
 
 pub mod dispatcher;
 pub mod runner;
@@ -119,6 +121,8 @@ pub struct RuntimeConfig {
     pubsub: bool,
     monitor: Option<Duration>,
     greenlets: bool,
+    env_vars: Vec<(Text, Text)>,
+    python_paths: Vec<Text>,
     global_state_fn: Option<Arc<dyn Fn(Python) -> PyResult<PyObject> + Send + Sync + 'static>>,
     blocking_task_keep_alive: Duration,
     strategy: Strategy,
@@ -185,6 +189,21 @@ impl RuntimeConfig {
     pub fn monitor(&self) -> Option<Duration> {
         self.monitor
     }
+    /// Get all python paths to add to environment.
+    pub fn python_paths(&self) -> Vec<Text> {
+        self.python_paths.clone()
+    }
+    /// Get all env vars to add to environment.
+    pub fn env_vars(&self) -> Vec<(Text, Text)> {
+        self.env_vars.clone()
+    }
+    /// Apply env vars to add to environment.
+    pub fn apply_env_vars(&self) -> () {
+        for (k, v) in &self.env_vars {
+            std::env::set_var(k.as_str(), v.as_str())
+        }
+    }
+
     /// Get the global Python object
     pub fn global_state(&self) -> PyResult<PyObject> {
         Python::with_gil(|py| match self.global_state_fn.clone() {
@@ -312,6 +331,37 @@ impl RuntimeConfig {
         new.global_state_fn = Some(Arc::new(f));
         new
     }
+    /// Add the current directory to the PYTHONPATH
+    pub fn add_env<K: Into<Text>, V: Into<Text>>(self, k: K, v: V) -> Self {
+        let mut new = self;
+        new.env_vars.push((k.into(), v.into()));
+        new
+    }
+
+    /// Add the current directory to the PYTHONPATH
+    pub fn add_cwd_to_python_path(self) -> Self {
+        let cwd = std::env::current_dir().expect("Could not read Current Working Directory");
+        let mut new = self;
+        new.python_paths.push(cwd.to_str().expect("Could not convert path to string").to_text());
+        new
+    }
+
+    /// Add the relative directory to the PYTHONPATH
+    pub fn add_python_path<T: Into<Text>>(self, path: T) -> Self {
+
+        // let cwd_str = cwd.to_str().expect("Could not convert cwd path to string");
+        let p: PathBuf = path.into().parse().expect("Could not convert string to path");
+        let path_to_add = if p.is_relative() {
+            let cwd = std::env::current_dir().expect("Could not read Current Working Directory and path is relative.");
+            cwd.join(p)
+        } else {
+            p
+        };
+        let path_text = path_to_add.to_str().expect("Could not convert path into a string.");
+        let mut new = self;
+        new.python_paths.push(path_text.into());
+        new
+    }
 }
 
 impl Default for RuntimeConfig {
@@ -330,6 +380,8 @@ impl Default for RuntimeConfig {
             pubsub: false,
             blocking_task_keep_alive: Duration::from_secs(30),
             strategy: Strategy::RoundRobin,
+            python_paths: Vec::new(),
+            env_vars: Vec::new(),
         }
     }
 }

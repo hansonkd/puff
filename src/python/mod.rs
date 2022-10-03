@@ -15,6 +15,7 @@ use tracing::error;
 
 use crate::python::postgres::{add_pg_puff_exceptions, PostgresGlobal};
 pub use pyo3::prelude::*;
+use tracing::log::info;
 
 pub mod greenlet;
 pub mod postgres;
@@ -63,13 +64,22 @@ pub fn log_traceback_with_label(label: &str, e: PyErr) {
                 format!("\n{}", tb)
             })
             .unwrap_or_default();
-        error!("Encountered Python {label} Error\n:{e}{tb}");
+        error!("Encountered Python {label} Error:\n{e}{tb}");
     });
 }
 
-pub(crate) fn bootstrap_puff_globals(global_state: PyObject) {
+pub(crate) fn bootstrap_puff_globals(config: RuntimeConfig) -> PuffResult<()> {
+    let global_state = config.global_state()?;
     Python::with_gil(|py| {
-        println!("Adding puff....");
+        let sys_path = py.import("sys")?.getattr("path")?;
+        let mut paths = config.python_paths();
+        paths.reverse();
+        for t in paths {
+            info!("Adding {} to beginning of PYTHONPATH", t);
+            sys_path.call_method1("insert", (0, t.as_str()))?;
+        }
+
+        info!("Adding puff to python....");
         let puff_mod = py.import("puff")?;
         let puff_rust_functions = puff_mod.getattr("rust_objects")?;
         puff_rust_functions.setattr("is_puff", true)?;
@@ -78,8 +88,8 @@ pub(crate) fn bootstrap_puff_globals(global_state: PyObject) {
         add_pg_puff_exceptions(py)?;
         puff_rust_functions.setattr("global_state", global_state)?;
         puff_rust_functions.setattr("blocking_spawner", SpawnBlocking.into_py(py))
-    })
-    .expect("Could not set python globals");
+    })?;
+    Ok(())
 }
 
 #[inline]

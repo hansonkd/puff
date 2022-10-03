@@ -16,6 +16,7 @@ use std::error::Error;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type};
@@ -23,6 +24,8 @@ use tokio_postgres::{NoTls, Row, RowStream, Transaction};
 use tokio_postgres::error::SqlState;
 use tracing::{error, info};
 use crate::python::log_traceback_with_label;
+use crate::types::Bytes;
+use futures_util::Stream;
 
 create_exception!(module, PgError, pyo3::exceptions::PyException);
 create_exception!(module, Warning, pyo3::exceptions::PyException);
@@ -179,9 +182,27 @@ impl Cursor {
         Ok(())
     }
 
-    #[getter]
-    fn get_rowcount(&self) -> PyResult<i32> {
-        Ok(-1)
+    fn do_get_rowcount(&self, return_fun: PyObject) {
+        let inner_loop = self.transaction_loop.clone();
+        self.spawn_and_recover(return_fun.clone(), async move {
+            let txn_loop = {
+                let m = inner_loop.lock().unwrap();
+                m.clone()
+            };
+            match txn_loop {
+                Some(job_sender) => {
+                    Ok(job_sender
+                        .send(TxnCommand::RowCount(
+                            return_fun,
+                        ))
+                        .await?)
+                }
+                None => {
+                    Python::with_gil(|py| return_fun.call1(py, (py.None(), py.None())))?;
+                    Ok(())
+                }
+            }
+        })
     }
 
     fn setinputsizes(&self, size: PyObject) -> PyResult<()> {
@@ -197,6 +218,30 @@ impl Cursor {
             let mut m = self.transaction_loop.lock().unwrap();
             *m = None;
         });
+    }
+
+    fn do_get_query(&self, return_fun: PyObject) {
+        let inner_loop = self.transaction_loop.clone();
+        self.spawn_and_recover(return_fun.clone(), async move {
+            let txn_loop = {
+                let m = inner_loop.lock().unwrap();
+                m.clone()
+            };
+            match txn_loop {
+                Some(job_sender) => {
+                    Ok(job_sender
+                        .send(TxnCommand::Query(
+                            return_fun,
+                        ))
+                        .await?)
+                }
+                None => {
+                    Python::with_gil(|py| return_fun.call1(py, (py.None(), py.None())))?;
+                    Ok(())
+                }
+            }
+
+        })
     }
 
     fn executemany(
@@ -268,33 +313,35 @@ fn row_to_pyton(py: Python, row: Row) -> PyResult<Py<PyList>> {
 
     for (ix, c) in row.columns().iter().enumerate() {
         let val = match c.type_().clone() {
-            Type::BOOL => row.get::<_, bool>(ix).into_py(py),
-            Type::TEXT => row.get::<_, &str>(ix).into_py(py),
-            Type::VARCHAR => row.get::<_, &str>(ix).into_py(py),
-            Type::NAME => row.get::<_, &str>(ix).into_py(py),
-            Type::CHAR => row.get::<_, i8>(ix).into_py(py),
-            Type::UNKNOWN => row.get::<_, &str>(ix).into_py(py),
-            Type::INT2 => row.get::<_, i16>(ix).into_py(py),
-            Type::INT4 => row.get::<_, i32>(ix).into_py(py),
-            Type::INT8 => row.get::<_, i64>(ix).into_py(py),
-            Type::FLOAT4 => row.get::<_, f32>(ix).into_py(py),
-            Type::FLOAT8 => row.get::<_, f64>(ix).into_py(py),
-            Type::OID => row.get::<_, u32>(ix).into_py(py),
-            Type::BYTEA => row.get::<_, &[u8]>(ix).into_py(py),
-            Type::JSON => pythonize::pythonize(py, &row.get::<_, serde_json::Value>(ix))?,
-            Type::JSONB => pythonize::pythonize(py, &row.get::<_, serde_json::Value>(ix))?,
-            Type::BOOL_ARRAY => row.get::<_, Vec<bool>>(ix).into_py(py),
-            Type::TEXT_ARRAY => row.get::<_, Vec<&str>>(ix).into_py(py),
-            Type::VARCHAR_ARRAY => row.get::<_, Vec<&str>>(ix).into_py(py),
-            Type::NAME_ARRAY => row.get::<_, Vec<&str>>(ix).into_py(py),
-            Type::CHAR_ARRAY => row.get::<_, Vec<i8>>(ix).into_py(py),
-            Type::INT2_ARRAY => row.get::<_, Vec<i16>>(ix).into_py(py),
-            Type::INT4_ARRAY => row.get::<_, Vec<i32>>(ix).into_py(py),
-            Type::INT8_ARRAY => row.get::<_, Vec<i64>>(ix).into_py(py),
-            Type::FLOAT4_ARRAY => row.get::<_, Vec<f32>>(ix).into_py(py),
-            Type::FLOAT8_ARRAY => row.get::<_, Vec<f64>>(ix).into_py(py),
-            Type::OID_ARRAY => row.get::<_, Vec<u32>>(ix).into_py(py),
-            Type::BYTEA_ARRAY => row.get::<_, Vec<&[u8]>>(ix).into_py(py),
+            Type::BOOL => row.get::<_, Option<bool>>(ix).into_py(py),
+            Type::TIMESTAMP => row.get::<_, Option<NaiveDateTime>>(ix).map(|f| pyo3_chrono::NaiveDateTime::from(f)).into_py(py),
+            Type::TIMESTAMPTZ => row.get::<_, Option<DateTime<Utc>>>(ix).map(|f| pyo3_chrono::NaiveDateTime::from(f.naive_local())).into_py(py),
+            Type::TEXT => row.get::<_, Option<&str>>(ix).into_py(py),
+            Type::VARCHAR => row.get::<_, Option<&str>>(ix).into_py(py),
+            Type::NAME => row.get::<_, Option<&str>>(ix).into_py(py),
+            Type::CHAR => row.get::<_, Option<i8>>(ix).into_py(py),
+            Type::UNKNOWN => row.get::<_, Option<&str>>(ix).into_py(py),
+            Type::INT2 => row.get::<_, Option<i16>>(ix).into_py(py),
+            Type::INT4 => row.get::<_, Option<i32>>(ix).into_py(py),
+            Type::INT8 => row.get::<_, Option<i64>>(ix).into_py(py),
+            Type::FLOAT4 => row.get::<_, Option<f32>>(ix).into_py(py),
+            Type::FLOAT8 => row.get::<_, Option<f64>>(ix).into_py(py),
+            Type::OID => row.get::<_, Option<u32>>(ix).into_py(py),
+            Type::BYTEA => row.get::<_, Option<&[u8]>>(ix).into_py(py),
+            Type::JSON => pythonize::pythonize(py, &row.get::<_, Option<serde_json::Value>>(ix))?,
+            Type::JSONB => pythonize::pythonize(py, &row.get::<_, Option<serde_json::Value>>(ix))?,
+            Type::BOOL_ARRAY => row.get::<_, Option<Vec<bool>>>(ix).into_py(py),
+            Type::TEXT_ARRAY => row.get::<_, Option<Vec<&str>>>(ix).into_py(py),
+            Type::VARCHAR_ARRAY => row.get::<_, Option<Vec<&str>>>(ix).into_py(py),
+            Type::NAME_ARRAY => row.get::<_, Option<Vec<&str>>>(ix).into_py(py),
+            Type::CHAR_ARRAY => row.get::<_, Option<Vec<i8>>>(ix).into_py(py),
+            Type::INT2_ARRAY => row.get::<_, Option<Vec<i16>>>(ix).into_py(py),
+            Type::INT4_ARRAY => row.get::<_, Option<Vec<i32>>>(ix).into_py(py),
+            Type::INT8_ARRAY => row.get::<_, Option<Vec<i64>>>(ix).into_py(py),
+            Type::FLOAT4_ARRAY => row.get::<_, Option<Vec<f32>>>(ix).into_py(py),
+            Type::FLOAT8_ARRAY => row.get::<_, Option<Vec<f64>>>(ix).into_py(py),
+            Type::OID_ARRAY => row.get::<_, Option<Vec<u32>>>(ix).into_py(py),
+            Type::BYTEA_ARRAY => row.get::<_, Option<Vec<&[u8]>>>(ix).into_py(py),
 
             t => {
                 return Err(NotSupportedError::new_err(format!(
@@ -317,6 +364,8 @@ enum TxnCommand {
     FetchAll(PyObject),
     Commit(PyObject),
     Rollback(PyObject),
+    Query(PyObject),
+    RowCount(PyObject),
 }
 
 #[derive(Debug, Clone)]
@@ -336,46 +385,54 @@ impl ToSql for PythonSqlValue {
         Python::with_gil(|py| {
             let obj_ref = self.0.as_ref(py);
             match ty.clone() {
-                Type::JSON => depythonize::<serde_json::Value>(obj_ref)?.to_sql(ty, out),
-                Type::JSONB => depythonize::<serde_json::Value>(obj_ref)?.to_sql(ty, out),
-                Type::BOOL => obj_ref.extract::<bool>()?.to_sql(ty, out),
-                Type::TEXT => obj_ref.extract::<&str>()?.to_sql(ty, out),
-                Type::VARCHAR => obj_ref.extract::<&str>()?.to_sql(ty, out),
-                Type::NAME => obj_ref.extract::<&str>()?.to_sql(ty, out),
-                Type::CHAR => obj_ref.extract::<i8>()?.to_sql(ty, out),
-                Type::UNKNOWN => obj_ref.extract::<&str>()?.to_sql(ty, out),
-                Type::INT2 => obj_ref.extract::<i16>()?.to_sql(ty, out),
-                Type::INT4 => obj_ref.extract::<i32>()?.to_sql(ty, out),
-                Type::INT8 => obj_ref.extract::<i64>()?.to_sql(ty, out),
-                Type::FLOAT4 => obj_ref.extract::<f32>()?.to_sql(ty, out),
-                Type::FLOAT8 => obj_ref.extract::<f64>()?.to_sql(ty, out),
-                Type::OID => obj_ref.extract::<u32>()?.to_sql(ty, out),
-                Type::BYTEA => obj_ref.extract::<&[u8]>()?.to_sql(ty, out),
-                Type::BOOL_ARRAY => obj_ref.extract::<Vec<bool>>()?.to_sql(ty, out),
-                Type::TEXT_ARRAY => obj_ref.extract::<Vec<&str>>()?.to_sql(ty, out),
-                Type::VARCHAR_ARRAY => obj_ref.extract::<Vec<&str>>()?.to_sql(ty, out),
-                Type::NAME_ARRAY => obj_ref.extract::<Vec<&str>>()?.to_sql(ty, out),
-                Type::CHAR_ARRAY => obj_ref.extract::<Vec<i8>>()?.to_sql(ty, out),
-                Type::INT2_ARRAY => obj_ref.extract::<Vec<i16>>()?.to_sql(ty, out),
-                Type::INT4_ARRAY => obj_ref.extract::<Vec<i32>>()?.to_sql(ty, out),
-                Type::INT8_ARRAY => obj_ref.extract::<Vec<i64>>()?.to_sql(ty, out),
-                Type::FLOAT4_ARRAY => obj_ref.extract::<Vec<f32>>()?.to_sql(ty, out),
-                Type::FLOAT8_ARRAY => obj_ref.extract::<Vec<f64>>()?.to_sql(ty, out),
-                Type::OID_ARRAY => obj_ref.extract::<Vec<u32>>()?.to_sql(ty, out),
-                Type::BYTEA_ARRAY => obj_ref.extract::<Vec<&[u8]>>()?.to_sql(ty, out),
+                Type::JSON => depythonize::<Option<serde_json::Value>>(obj_ref)?.to_sql(ty, out),
+                Type::JSONB => depythonize::<Option<serde_json::Value>>(obj_ref)?.to_sql(ty, out),
+                Type::TIMESTAMP => obj_ref.extract::<Option<pyo3_chrono::NaiveDateTime>>()?.map(|f| f.0).to_sql(ty, out),
+                Type::TIMESTAMPTZ => obj_ref.extract::<Option<pyo3_chrono::NaiveDateTime>>()?.map(|f| f.0).to_sql(ty, out),
+                Type::BOOL => obj_ref.extract::<Option<bool>>()?.to_sql(ty, out),
+                Type::TEXT => {
+                    let s = obj_ref.extract::<Option<&str>>();
+                    match s {
+                        Ok(s) => s.to_sql(ty, out),
+                        Err(_) => obj_ref.to_string().to_sql(ty, out),
+                    }
+                },
+                Type::VARCHAR => obj_ref.extract::<Option<&str>>()?.to_sql(ty, out),
+                Type::NAME => obj_ref.extract::<Option<&str>>()?.to_sql(ty, out),
+                Type::CHAR => obj_ref.extract::<Option<i8>>()?.to_sql(ty, out),
+                Type::UNKNOWN => obj_ref.extract::<Option<&str>>()?.to_sql(ty, out),
+                Type::INT2 => obj_ref.extract::<Option<i16>>()?.to_sql(ty, out),
+                Type::INT4 => obj_ref.extract::<Option<i32>>()?.to_sql(ty, out),
+                Type::INT8 => obj_ref.extract::<Option<i64>>()?.to_sql(ty, out),
+                Type::FLOAT4 => obj_ref.extract::<Option<f32>>()?.to_sql(ty, out),
+                Type::FLOAT8 => obj_ref.extract::<Option<f64>>()?.to_sql(ty, out),
+                Type::OID => obj_ref.extract::<Option<u32>>()?.to_sql(ty, out),
+                Type::BYTEA => obj_ref.extract::<Option<&[u8]>>()?.to_sql(ty, out),
+                Type::BOOL_ARRAY => obj_ref.extract::<Option<Vec<bool>>>()?.to_sql(ty, out),
+                Type::TEXT_ARRAY => obj_ref.extract::<Option<Vec<&str>>>()?.to_sql(ty, out),
+                Type::VARCHAR_ARRAY => obj_ref.extract::<Option<Vec<&str>>>()?.to_sql(ty, out),
+                Type::NAME_ARRAY => obj_ref.extract::<Option<Vec<&str>>>()?.to_sql(ty, out),
+                Type::CHAR_ARRAY => obj_ref.extract::<Option<Vec<i8>>>()?.to_sql(ty, out),
+                Type::INT2_ARRAY => obj_ref.extract::<Option<Vec<i16>>>()?.to_sql(ty, out),
+                Type::INT4_ARRAY => obj_ref.extract::<Option<Vec<i32>>>()?.to_sql(ty, out),
+                Type::INT8_ARRAY => obj_ref.extract::<Option<Vec<i64>>>()?.to_sql(ty, out),
+                Type::FLOAT4_ARRAY => obj_ref.extract::<Option<Vec<f32>>>()?.to_sql(ty, out),
+                Type::FLOAT8_ARRAY => obj_ref.extract::<Option<Vec<f64>>>()?.to_sql(ty, out),
+                Type::OID_ARRAY => obj_ref.extract::<Option<Vec<u32>>>()?.to_sql(ty, out),
+                Type::BYTEA_ARRAY => obj_ref.extract::<Option<Vec<&[u8]>>>()?.to_sql(ty, out),
                 t => {
-                    if let Ok(s) = obj_ref.downcast::<PyString>() {
-                        return s.to_str()?.to_sql(ty, out);
-                    }
-                    if let Ok(s) = obj_ref.downcast::<PyBytes>() {
-                        return s.as_bytes().to_sql(ty, out);
-                    }
-                    if let Ok(s) = obj_ref.downcast::<PyLong>() {
-                        return s.extract::<i64>()?.to_sql(ty, out);
-                    }
-                    if let Ok(s) = obj_ref.downcast::<PyFloat>() {
-                        return s.extract::<f64>()?.to_sql(ty, out);
-                    }
+                    // if let Ok(s) = obj_ref.downcast::<PyString>() {
+                    //     return s.to_str()?.to_sql(ty, out);
+                    // }
+                    // if let Ok(s) = obj_ref.downcast::<PyBytes>() {
+                    //     return s.as_bytes().to_sql(ty, out);
+                    // }
+                    // if let Ok(s) = obj_ref.extract::<i64>() {
+                    //     return s.to_sql(ty, out);
+                    // }
+                    // if let Ok(s) = obj_ref.downcast::<PyFloat>() {
+                    //     return s.extract::<f64>()?.to_sql(ty, out);
+                    // }
                     Err(anyhow!(
                         "Could not convert postgres type {:?} from python {:?}",
                         t,
@@ -393,6 +450,8 @@ impl ToSql for PythonSqlValue {
         match *ty {
             Type::JSON
             | Type::JSONB
+            | Type::TIMESTAMP
+            | Type::TIMESTAMPTZ
             | Type::BOOL
             | Type::TEXT
             | Type::VARCHAR
@@ -447,6 +506,7 @@ fn postgres_to_python_exception(e: tokio_postgres::Error) -> PyErr {
     }
     match e.as_db_error() {
         Some(db_err) => {
+            let message = db_err.message();
             let hint = db_err.hint().map(|f| format!(" Hint: {}", f)).unwrap_or_default();
             let severity = db_err.severity();
             let pos = db_err.hint().map(|f| format!(" Position: {}", f)).unwrap_or_default();
@@ -454,7 +514,7 @@ fn postgres_to_python_exception(e: tokio_postgres::Error) -> PyErr {
             let table = db_err.table().map(|f| format!(" Table: {}", f)).unwrap_or_default();
             let column = db_err.column().map(|f| format!(" Column: {}", f)).unwrap_or_default();
             let constraint = db_err.constraint().map(|f| format!(" Constraint: {}", f)).unwrap_or_default();
-            let formatted = format!("Message: {}, Severity: {}{}{}{}{}{}", hint, severity, pos, schema, table, column, constraint);
+            let formatted = format!("Message: {}, Severity: {}{}{}{}{}{}{}", message, severity, hint, pos, schema, table, column, constraint);
             match db_err.code().clone() {
                 SqlState::WARNING => Warning::new_err(formatted),
                 SqlState::SYNTAX_ERROR => ProgrammingError::new_err(formatted),
@@ -491,27 +551,54 @@ fn postgres_to_python_exception(e: tokio_postgres::Error) -> PyErr {
     }
 }
 
+
 async fn run_txn_loop<'a>(
     mut txn: Transaction<'a>,
     mut rec: &'a mut Receiver<TxnCommand>,
 ) -> PuffResult<bool> {
+    let mut query: Option<String> = None;
     let mut current_stream: Option<Pin<Box<RowStream>>> = None;
     while let Some(x) = rec.recv().await {
+        println!("{:?}", x);
         match x {
+            TxnCommand::Query(ret) => {
+                handle_return(ret, async { Ok(query.as_ref().map(|f| Bytes::copy_from_slice(f.as_bytes()))) }).await;
+            }
             TxnCommand::Commit(ret) => {
-                txn.commit().await?;
-                handle_return(ret, async { Ok(0) }).await;
+                let real_return = match txn.commit().await {
+                    Ok(r) => Ok(()),
+                    Err(e) => {
+                        Err(postgres_to_python_exception(e))
+                    }
+                };
+                handle_return(ret, async { Ok(real_return?) }).await;
                 return Ok(true);
             }
             TxnCommand::Rollback(ret) => {
-                txn.rollback().await?;
-                handle_return(ret, async { Ok(0) }).await;
+                let real_return = match txn.rollback().await {
+                    Ok(r) => Ok(()),
+                    Err(e) => {
+                        Err(postgres_to_python_exception(e))
+                    }
+                };
+                handle_return(ret, async { Ok(real_return?) }).await;
                 return Ok(true);
             }
             TxnCommand::Execute(ret, q, params) => {
-                let res = txn.query_raw(&q, &params[..]).await?;
-                current_stream = Some(Box::pin(res));
-                handle_return(ret, async { Ok(0) }).await
+
+                let res = txn.query_raw(&q, &params[..]).await;
+                let real_return = match res {
+                    Ok(r) => {
+                        query = Some(q);
+                        current_stream = Some(Box::pin(r));
+                        Ok(())
+                    }
+                    Err(e) => {
+                        Err(postgres_to_python_exception(e))
+                    }
+                };
+
+                handle_return(ret, async { Ok(real_return?) }).await
             }
             TxnCommand::ExecuteMany(ret, q, param_seq) => {
                 handle_return(ret, async {
@@ -538,6 +625,18 @@ async fn run_txn_loop<'a>(
                         v.push(res)
                     }
                     PuffResult::Ok(v)
+                })
+                .await
+            }
+            TxnCommand::RowCount(ret) => {
+                handle_return(ret, async {
+                    if let Some(mut v) = current_stream.as_mut() {
+                        let (lower, upper) = v.size_hint();
+                        println!("size {:?} {:?}", lower, upper);
+                        Ok(upper.unwrap_or_default() as i32)
+                    } else {
+                        Ok(-1)
+                    }
                 })
                 .await
             }
@@ -573,6 +672,8 @@ async fn run_txn_loop<'a>(
                                 };
                                 real_result.push(value)
                             } else {
+                                query = None;
+                                current_stream = None;
                                 break;
                             }
                         }
@@ -596,6 +697,8 @@ async fn run_txn_loop<'a>(
                             real_result.push(value)
                         }
                     }
+                    query = None;
+                    current_stream = None;
                     Python::with_gil(|py| Ok(real_result.into_py(py)))
                 })
                 .await
@@ -609,6 +712,7 @@ pub fn add_pg_puff_exceptions(py: Python) -> PyResult<()> {
     let puff_pg = py.import("puff.postgres")?;
     puff_pg.add("Error", py.get_type::<PgError>())?;
     puff_pg.add("Warning", py.get_type::<Warning>())?;
+    puff_pg.add("InternalError", py.get_type::<InternalError>())?;
     puff_pg.add("InterfaceError", py.get_type::<InterfaceError>())?;
     puff_pg.add("DatabaseError", py.get_type::<DatabaseError>())?;
     puff_pg.add("OperationalError", py.get_type::<OperationalError>())?;

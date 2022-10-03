@@ -58,7 +58,7 @@ pub(crate) fn add_postgres_command_arguments(command: Command) -> Command {
     command.arg(
         Arg::new("postgres_url")
             .long("postgres-url")
-            .takes_value(true)
+            .num_args(1)
             .value_name("POSTGRES_URL")
             .env("PUFF_POSTGRES_URL")
             .default_value("postgres://postgres:password@localhost:5432/postgres")

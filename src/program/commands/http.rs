@@ -21,7 +21,7 @@ impl ServerCommand {
 
 impl RunnableCommand for ServerCommand {
     fn cli_parser(&self) -> Command {
-        Command::new("server")
+        Command::new("runserver")
     }
 
     fn runnable_from_args(&self, _args: &ArgMatches, context: PuffContext) -> Result<Runnable> {
