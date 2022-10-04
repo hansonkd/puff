@@ -1,7 +1,7 @@
 use crate::context::PuffContext;
 use crate::errors::PuffResult;
 use crate::program::{Runnable, RunnableCommand};
-use crate::types::{Puff, Text};
+use crate::types::{Text};
 use clap::{ArgMatches, Command};
 use pyo3::prelude::*;
 

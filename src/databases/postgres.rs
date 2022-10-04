@@ -1,9 +1,9 @@
 use crate::errors::PuffResult;
-use crate::runtime::yield_to_future_io;
+
 use bb8_postgres::PostgresConnectionManager;
 use bb8_redis::bb8::Pool;
-use bb8_redis::redis::{FromRedisValue, IntoConnectionInfo};
-use bb8_redis::RedisConnectionManager;
+
+
 use std::time::Duration;
 
 use crate::context::with_puff_context;
@@ -11,7 +11,7 @@ use crate::types::{Puff, Text};
 pub use bb8_redis::redis::Cmd;
 use clap::{Arg, Command};
 use tokio_postgres::tls::NoTls;
-use tokio_postgres::Config;
+
 use tracing::info;
 
 #[derive(Clone)]

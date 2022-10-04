@@ -1,4 +1,4 @@
-use crate::python::{log_traceback, log_traceback_with_label, wsgi, PythonDispatcher};
+use crate::python::{log_traceback_with_label, wsgi, PythonDispatcher};
 use anyhow::{anyhow, Error};
 use axum::body::{Body, BoxBody, Bytes, Full, HttpBody};
 use axum::handler::Handler;
@@ -186,7 +186,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
             let args_to_send: Result<Result<(PyObject, PyObject), Response>, Error> =
                 Python::with_gil(|py| {
                     let environ = PyDict::new(py);
-                    let io = py.import("io")?;
+                    let _io = py.import("io")?;
                     environ.set_item("wsgi.version", (1, 0))?;
                     environ.set_item("wsgi.url_scheme", req.uri.scheme_str().unwrap_or("http"))?;
                     environ.set_item(

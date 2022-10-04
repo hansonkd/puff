@@ -7,7 +7,7 @@ use crate::context;
 use pyo3::prelude::PyObject;
 use pyo3::{PyResult, Python};
 use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::path::{PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, oneshot};

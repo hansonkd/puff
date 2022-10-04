@@ -5,7 +5,7 @@ use pyo3::exceptions::PyRuntimeError;
 use crate::context::{set_puff_context, set_puff_context_waiting, with_puff_context, PuffContext};
 use crate::python::greenlet::{greenlet_async, GreenletReturn};
 use crate::runtime::RuntimeConfig;
-use pyo3::types::{PyBytes, PyDict, PyTuple};
+use pyo3::types::{PyDict, PyTuple};
 
 use std::os::raw::c_int;
 

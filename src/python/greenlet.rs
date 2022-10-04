@@ -22,7 +22,7 @@ impl GreenletReturn {
 impl GreenletReturn {
     pub fn __call__(
         &mut self,
-        py: Python,
+        _py: Python,
         value: PyObject,
         exception: Option<&PyAny>,
     ) -> PyResult<()> {

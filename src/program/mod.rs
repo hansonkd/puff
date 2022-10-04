@@ -43,7 +43,7 @@ use clap::{ArgMatches, Command};
 
 use crate::databases::redis::{add_redis_command_arguments, new_redis_async};
 
-use pyo3::{PyErr, Python};
+
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -56,12 +56,12 @@ use crate::context::{set_puff_context, set_puff_context_waiting, PuffContext};
 use crate::databases::postgres::{add_postgres_command_arguments, new_postgres_async};
 use crate::databases::pubsub::{add_pubsub_command_arguments, new_pubsub_async};
 use crate::errors::{handle_puff_error, handle_puff_result, Result};
-use crate::python::{bootstrap_puff_globals, log_traceback, setup_greenlet};
+use crate::python::{bootstrap_puff_globals, setup_greenlet};
 use crate::runtime::dispatcher::Dispatcher;
 use crate::runtime::RuntimeConfig;
 use crate::types::text::Text;
 use crate::types::Puff;
-use tracing::{error, info};
+use tracing::{info};
 
 pub mod commands;
 

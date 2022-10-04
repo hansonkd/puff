@@ -1,30 +1,30 @@
 use crate::context::with_puff_context;
-use crate::errors::{handle_puff_error, handle_puff_result, PuffResult};
-use crate::python::greenlet::{greenlet_async, handle_python_return, handle_return};
+use crate::errors::{handle_puff_error, PuffResult};
+use crate::python::greenlet::{handle_python_return, handle_return};
 use crate::python::log_traceback_with_label;
 use crate::python::postgres::TxnCommand::ExecuteMany;
-use crate::types::Bytes;
+
 use anyhow::anyhow;
 use bb8_postgres::bb8::Pool;
-use bb8_postgres::tokio_postgres::Client;
+
 use bb8_postgres::PostgresConnectionManager;
 use chrono::{DateTime, NaiveDateTime, Utc};
-use futures_util::{FutureExt, Stream, StreamExt};
+use futures_util::{FutureExt, StreamExt};
 use pyo3::create_exception;
-use pyo3::exceptions::PyException;
+
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyFloat, PyList, PyLong, PyString, PyTuple, PyType};
+use pyo3::types::{PyList, PyString, PyTuple};
 use pythonize::depythonize;
 use std::error::Error;
 use std::future::Future;
-use std::pin::Pin;
+
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type};
-use tokio_postgres::{NoTls, Portal, Row, RowStream, Statement, Transaction};
-use tracing::{error, info};
+use tokio_postgres::{NoTls, Portal, Row, Statement, Transaction};
+
 
 create_exception!(module, PgError, pyo3::exceptions::PyException);
 create_exception!(module, Warning, pyo3::exceptions::PyException);
@@ -224,11 +224,11 @@ impl Cursor {
         })
     }
 
-    fn setinputsizes(&self, size: PyObject) -> PyResult<()> {
+    fn setinputsizes(&self, _size: PyObject) -> PyResult<()> {
         Ok(())
     }
 
-    fn setoutputsizes(&self, size: PyObject, column: Option<PyObject>) -> PyResult<()> {
+    fn setoutputsizes(&self, _size: PyObject, _column: Option<PyObject>) -> PyResult<()> {
         Ok(())
     }
 
@@ -273,7 +273,7 @@ impl Cursor {
         });
     }
 
-    fn callproc(&self, procname: &PyString, parameters: Option<&PyList>) {}
+    fn callproc(&self, _procname: &PyString, _parameters: Option<&PyList>) {}
 
     fn fetchone(&mut self, py: Python, return_func: PyObject) {
         let job_sender = py.allow_threads(|| self.get_sender());
@@ -581,8 +581,8 @@ fn postgres_to_python_exception(e: tokio_postgres::Error) -> PyErr {
 
 async fn run_txn_loop<'a>(
     first_msg: TxnCommand,
-    mut txn: Transaction<'a>,
-    mut rec: &'a mut Receiver<TxnCommand>,
+    txn: Transaction<'a>,
+    rec: &'a mut Receiver<TxnCommand>,
 ) -> PuffResult<bool> {
     let mut row_count: i32 = -1;
     let mut statement: Option<Statement> = None;
@@ -612,7 +612,7 @@ async fn run_txn_loop<'a>(
             TxnCommand::Rollback(ret) => {
                 if !is_first {
                     let real_return = match txn.rollback().await {
-                        Ok(r) => Ok(()),
+                        Ok(_r) => Ok(()),
                         Err(e) => Err(postgres_to_python_exception(e)),
                     };
                     handle_python_return(ret, async { real_return }).await;
@@ -654,7 +654,7 @@ async fn run_txn_loop<'a>(
 
                 handle_python_return(ret, async { real_return }).await
             }
-            TxnCommand::ExecuteMany(ret, q, param_seq) => {
+            TxnCommand::ExecuteMany(_ret, _q, _param_seq) => {
                 todo!()
                 // handle_return(ret, async {
                 //     let param_groups = Python::with_gil(|py| {
