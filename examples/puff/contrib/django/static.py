@@ -11,7 +11,6 @@ from django.utils.translation import gettext as _
 
 
 def serve(request, path, document_root=None, show_indexes=False):
-    print("inside puff")
     """
     Serve static files below a given point in the directory structure.
     To use, put a URL pattern such as::

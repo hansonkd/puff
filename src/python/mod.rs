@@ -36,7 +36,7 @@ impl ReadFileBytes {
         greenlet_async(ctx, return_func, async move {
             let contents = tokio::fs::read(&file_name).await?;
             Ok(Python::with_gil(|py| {
-                PyBytes::new(py, contents.as_slice()).to_object(py)
+                contents.into_py(py)
             }))
         })
     }

@@ -24,7 +24,7 @@ use crate::types::Text;
 use tracing::error;
 use wsgi::Sender;
 
-const MAX_LIST_BODY_INLINE_CONCAT: u64 = 1024 * 4;
+const MAX_LIST_BODY_INLINE_CONCAT: u64 = 1024 * 32;
 
 #[derive(Clone)]
 pub struct WsgiHandler {
@@ -132,6 +132,7 @@ impl HttpBody for HttpResponseBody {
                 let extracted = {
                     if let Ok(bytes) = next_bytes.downcast::<PyBytes>() {
                         Ok(Bytes::copy_from_slice(bytes.as_bytes()))
+                        // Ok(Bytes::copy_from_slice(bytes.as_bytes()))
                     } else if let Ok(str) = next_bytes.downcast::<PyString>() {
                         Ok(Bytes::copy_from_slice(str.to_str().unwrap().as_bytes()))
                     } else {
@@ -242,14 +243,14 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                     environ.set_item("SCRIPT_NAME", "")?;
 
                     for (name, value) in req.headers.iter() {
-                        let corrected_name = match name.as_str() {
-                            "content-length" => {
+                        let corrected_name = match name.to_string().to_uppercase().as_str() {
+                            "CONTENT-LENGTH" => {
                                 let the_string = str::from_utf8(value.as_bytes())?;
                                 content_length = Some(the_string.parse()?);
                                 "CONTENT_LENGTH".to_owned()
                             }
-                            "content-type" => "CONTENT_TYPE".to_owned(),
-                            s => format!("HTTP_{}", s.to_uppercase().replace("-", "_")),
+                            "CONTENT-TYPE" => "CONTENT_TYPE".to_owned(),
+                            s => format!("HTTP_{}", s.replace("-", "_")),
                         };
                         if let Some(val) = environ.get_item(corrected_name.as_str()) {
                             let s = val.downcast::<PyString>().unwrap();
@@ -298,7 +299,11 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                         .expect("Invalid wsgi status format");
                     let status_code: u16 = status.parse().expect("Invalid wsgi status code format");
                     let headers = response.headers_mut().unwrap();
+                    let mut resp_content_len: Option<u64> = None;
                     for (name, value) in pyheaders {
+                        if name.to_uppercase() == "CONTENT-LENGTH" {
+                            resp_content_len = Some(value.parse().expect("Invalid content-length"));
+                        }
                         let name = match HeaderName::from_bytes(name.as_bytes()) {
                             Ok(name) => name,
                             Err(_e) => {
@@ -314,27 +319,36 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                         headers.append(name, value);
                     }
                     response = response.status(status_code);
-                    Python::with_gil(|py| {
+                    let res = Python::with_gil(|py| {
                         let iter_py = iterator.as_ref(py);
-                        if content_length.unwrap_or(u64::MAX) < MAX_LIST_BODY_INLINE_CONCAT {
-                            if let Ok(s) = iter_py.extract::<Vec<&[u8]>>() {
-                                let merged = s.concat();
-                                let body = Full::from(merged);
-                                return response
+
+                        if resp_content_len.unwrap_or(u64::MAX) < MAX_LIST_BODY_INLINE_CONCAT {
+                            let mut combined = Vec::with_capacity(resp_content_len.unwrap_or(0) as usize);
+                            for x in iter_py.iter()? {
+                                let bytes = x?.downcast::<PyBytes>()?;
+                                combined.extend_from_slice(bytes.as_bytes());
+                            }
+                            let body = Full::from(combined);
+                            Ok(response
                                     .body(body)
                                     .map(|f| f.into_response())
-                                    .unwrap_or(WsgiError::FailedToCreateResponse.into_response());
-                            }
+                                    .unwrap_or(WsgiError::FailedToCreateResponse.into_response()))
+                        } else {
+                            let body = HttpResponseBody(
+                                PyObject::from(iter_py.iter().unwrap()),
+                                resp_content_len,
+                            );
+                            Ok(response
+                                .body(body)
+                                .map(|f| f.into_response())
+                                .unwrap_or(WsgiError::FailedToCreateResponse.into_response()))
                         }
-                        let body = HttpResponseBody(
-                            PyObject::from(iter_py.iter().unwrap()),
-                            content_length,
-                        );
-                        response
-                            .body(body)
-                            .map(|f| f.into_response())
-                            .unwrap_or(WsgiError::FailedToCreateResponse.into_response())
-                    })
+                    });
+
+                    match res {
+                        Ok(r) => r,
+                        Err(e) => WsgiError::PyErr(e).into_response()
+                    }
                 }
                 Err(e) => {
                     handle_puff_error("Wsgi Request Scope", e);
