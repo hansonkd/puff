@@ -1,5 +1,6 @@
 extern crate core;
 
+use std::process::ExitCode;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::WebSocketUpgrade;
 
@@ -94,7 +95,7 @@ async fn get_many(key: Text, num: usize) -> PuffResult<Bytes> {
     Ok(builder.into_bytes())
 }
 
-fn main() {
+fn main() -> ExitCode {
     let router = Router::new()
         .get("/deepest/", || {
             yield_to_future(get_many("blam".into(), 1000))

@@ -55,7 +55,7 @@ use tokio::sync::broadcast;
 use crate::context::{set_puff_context, set_puff_context_waiting, PuffContext};
 use crate::databases::postgres::{add_postgres_command_arguments, new_postgres_async};
 use crate::databases::pubsub::{add_pubsub_command_arguments, new_pubsub_async};
-use crate::errors::{handle_puff_error, handle_puff_result, PuffResult, Result};
+use crate::errors::{handle_puff_error, PuffResult, Result};
 use crate::python::{bootstrap_puff_globals, setup_greenlet};
 use crate::runtime::dispatcher::Dispatcher;
 use crate::runtime::RuntimeConfig;

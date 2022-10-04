@@ -1,3 +1,4 @@
+use std::process::ExitCode;
 use puff::errors::Result;
 use puff::program::commands::http::ServerCommand;
 use puff::program::Program;
@@ -5,7 +6,7 @@ use puff::types::text::Text;
 use puff::web::client::{Client, PuffClientResponse, PuffRequestBuilder};
 use puff::web::server::Router;
 
-fn main() {
+fn main() -> ExitCode {
     // build our application with a route
     let app = Router::new().get("/", root);
     // .post("/graphql/", make_graphql_python_service("my_module.Query"))

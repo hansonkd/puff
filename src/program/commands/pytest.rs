@@ -5,7 +5,7 @@ use crate::types::Text;
 use clap::{Arg, ArgMatches, Command};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
-use std::path::{Path, PathBuf};
+use std::path::{PathBuf};
 use std::process::ExitCode;
 
 /// The WSGIServerCommand.
@@ -44,7 +44,7 @@ impl RunnableCommand for PytestCommand {
 
     fn runnable_from_args(&self, args: &ArgMatches, context: PuffContext) -> PuffResult<Runnable> {
         let (pytest_args, python_function) = Python::with_gil(|py| {
-            let mut pytest_args = PyList::empty(py);
+            let pytest_args = PyList::empty(py);
             pytest_args.append(format!(
                 "--rootdir={}",
                 self.path

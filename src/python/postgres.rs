@@ -845,7 +845,7 @@ async fn run_autocommit_loop<'a>(
             TxnCommand::RowCount(ret) => handle_return(ret, async { Ok(row_count) }).await,
             TxnCommand::FetchOne(ret) => {
                 handle_python_return(ret, async {
-                    if let Some(mut v) = current_stream.as_mut() {
+                    if let Some(v) = current_stream.as_mut() {
                         let result = v.next().await;
                         match result {
                             Some(Ok(row)) => {
@@ -868,7 +868,7 @@ async fn run_autocommit_loop<'a>(
             }
             TxnCommand::FetchMany(ret, real_row_count) => {
                 handle_python_return(ret, async {
-                    if let Some(mut v) = current_stream.as_mut() {
+                    if let Some(v) = current_stream.as_mut() {
                         let num_rows = real_row_count as usize;
                         let mut real_result = Vec::with_capacity(num_rows);
                         for _ in 0..num_rows {
@@ -900,7 +900,7 @@ async fn run_autocommit_loop<'a>(
             }
             TxnCommand::FetchAll(ret) => {
                 handle_python_return(ret, async {
-                    if let Some(mut v) = current_stream.as_mut() {
+                    if let Some(v) = current_stream.as_mut() {
                         let mut real_result = Vec::new();
                         loop {
                             let result = v.next().await;

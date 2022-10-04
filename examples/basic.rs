@@ -1,3 +1,4 @@
+use std::process::ExitCode;
 use puff::databases::redis::{Cmd, RedisClient};
 use puff::errors::Result;
 use puff::program::commands::BasicCommand;
@@ -8,7 +9,7 @@ use puff::tracing::info;
 use puff::types::{Puff, Text};
 use puff::web::client::{Client, PuffClientResponse, PuffRequestBuilder};
 
-fn main() {
+fn main() -> ExitCode {
     let config = RuntimeConfig::default().set_redis(true);
     Program::new("my_first_app")
         .runtime_config(config)
