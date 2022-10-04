@@ -1,10 +1,10 @@
-use std::process::ExitCode;
 use puff::program::commands::django_management::DjangoManagementCommand;
 use puff::program::commands::pytest::PytestCommand;
 use puff::program::commands::wsgi::WSGIServerCommand;
 use puff::program::Program;
 use puff::runtime::RuntimeConfig;
 use puff::web::server::Router;
+use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let router = Router::new();

@@ -35,9 +35,7 @@ impl ReadFileBytes {
         let ctx = with_puff_context(|ctx| ctx);
         greenlet_async(ctx, return_func, async move {
             let contents = tokio::fs::read(&file_name).await?;
-            Ok(Python::with_gil(|py| {
-                contents.into_py(py)
-            }))
+            Ok(Python::with_gil(|py| contents.into_py(py)))
         })
     }
 }

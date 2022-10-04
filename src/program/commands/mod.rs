@@ -10,9 +10,9 @@ use std::sync::Mutex;
 
 pub mod django_management;
 pub mod http;
+pub mod pytest;
 pub mod python;
 pub mod wsgi;
-pub mod pytest;
 
 pub struct BasicCommand<F: FnOnce() -> Result<ExitCode> + Send + 'static> {
     name: Text,

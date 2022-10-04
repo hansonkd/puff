@@ -76,10 +76,10 @@ impl<T: WsgiServerSpawner> ServerContext<T> {
             (Some(app), Some(server)) => {
                 let fut = async move {
                     // create wsgi service
-                   let (std_err, bytesio)  = Python::with_gil(|py| {
+                    let (std_err, bytesio) = Python::with_gil(|py| {
                         let std_err = py.import("sys")?.getattr("stderr")?;
                         let bytesio = py.import("io")?.getattr("BytesIO")?;
-                        return PyResult::Ok((std_err.into_py(py), bytesio.into_py(py)))
+                        return PyResult::Ok((std_err.into_py(py), bytesio.into_py(py)));
                     })?;
                     let wsgi_handler = WsgiHandler::new(
                         app.clone(),
@@ -87,7 +87,7 @@ impl<T: WsgiServerSpawner> ServerContext<T> {
                         self.server_name.clone(),
                         self.server_port,
                         std_err,
-                        bytesio
+                        bytesio,
                     );
 
                     server.call(wsgi_handler).await;

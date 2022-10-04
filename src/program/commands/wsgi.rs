@@ -1,11 +1,11 @@
 //! Convert a `Router` into a `RunnableCommand`
-use std::process::ExitCode;
 use crate::context::PuffContext;
 use crate::errors::Result;
 use crate::program::{Runnable, RunnableCommand};
 use crate::python::wsgi::{create_server_context, WsgiServerSpawner};
 use crate::web::server::Router;
 use clap::{ArgMatches, Command};
+use std::process::ExitCode;
 
 use crate::python::wsgi::handler::WsgiHandler;
 use crate::types::Text;

@@ -43,7 +43,6 @@ use clap::{ArgMatches, Command};
 
 use crate::databases::redis::{add_redis_command_arguments, new_redis_async};
 
-
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -62,7 +61,7 @@ use crate::runtime::dispatcher::Dispatcher;
 use crate::runtime::RuntimeConfig;
 use crate::types::text::Text;
 use crate::types::Puff;
-use tracing::{info};
+use tracing::info;
 
 pub mod commands;
 
@@ -135,7 +134,6 @@ pub fn handle_puff_exit(label: &str, r: PuffResult<ExitCode>) -> ExitCode {
         }
     }
 }
-
 
 /// A Puff Program that is responsible for parsing CLI arguments and starting the Runtime.
 #[derive(Clone)]

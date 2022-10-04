@@ -33,7 +33,7 @@ pub struct WsgiHandler {
     server_port: u16,
     python_dispatcher: PythonDispatcher,
     std_err: PyObject,
-    bytesio: PyObject
+    bytesio: PyObject,
 }
 
 impl WsgiHandler {
@@ -43,7 +43,7 @@ impl WsgiHandler {
         server_name: Text,
         server_port: u16,
         std_err: PyObject,
-        bytesio: PyObject
+        bytesio: PyObject,
     ) -> WsgiHandler {
         WsgiHandler {
             app,
@@ -51,7 +51,7 @@ impl WsgiHandler {
             server_name,
             server_port,
             std_err,
-            bytesio
+            bytesio,
         }
     }
 }
@@ -191,12 +191,10 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                     environ.set_item("wsgi.url_scheme", req.uri.scheme_str().unwrap_or("http"))?;
                     environ.set_item(
                         "wsgi.input",
-                        self.bytesio.call1(py,(PyByteArray::new(py, &body_bytes[..]),))?
+                        self.bytesio
+                            .call1(py, (PyByteArray::new(py, &body_bytes[..]),))?,
                     )?;
-                    environ.set_item(
-                        "wsgi.errors",
-                        self.std_err.clone(),
-                    )?;
+                    environ.set_item("wsgi.errors", self.std_err.clone())?;
                     environ.set_item("wsgi.multithread", false)?;
                     environ.set_item("wsgi.run_once", false)?;
 
@@ -323,16 +321,17 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                         let iter_py = iterator.as_ref(py);
 
                         if resp_content_len.unwrap_or(u64::MAX) < MAX_LIST_BODY_INLINE_CONCAT {
-                            let mut combined = Vec::with_capacity(resp_content_len.unwrap_or(0) as usize);
+                            let mut combined =
+                                Vec::with_capacity(resp_content_len.unwrap_or(0) as usize);
                             for x in iter_py.iter()? {
                                 let bytes = x?.downcast::<PyBytes>()?;
                                 combined.extend_from_slice(bytes.as_bytes());
                             }
                             let body = Full::from(combined);
                             Ok(response
-                                    .body(body)
-                                    .map(|f| f.into_response())
-                                    .unwrap_or(WsgiError::FailedToCreateResponse.into_response()))
+                                .body(body)
+                                .map(|f| f.into_response())
+                                .unwrap_or(WsgiError::FailedToCreateResponse.into_response()))
                         } else {
                             let body = HttpResponseBody(
                                 PyObject::from(iter_py.iter().unwrap()),
@@ -347,7 +346,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
 
                     match res {
                         Ok(r) => r,
-                        Err(e) => WsgiError::PyErr(e).into_response()
+                        Err(e) => WsgiError::PyErr(e).into_response(),
                     }
                 }
                 Err(e) => {

@@ -2,7 +2,7 @@
 //!
 //! Puff uses [anyhow::Error] for transparently catching and converting almost all error types. See
 //! Anyhow's documentation for more information.
-use crate::python::{log_traceback_with_label};
+use crate::python::log_traceback_with_label;
 use axum::response::{IntoResponse, Response};
 use pyo3::PyErr;
 use tracing::error;

@@ -3,7 +3,6 @@ use crate::errors::PuffResult;
 use bb8_postgres::PostgresConnectionManager;
 use bb8_redis::bb8::Pool;
 
-
 use std::time::Duration;
 
 use crate::context::with_puff_context;

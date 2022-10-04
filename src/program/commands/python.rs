@@ -1,10 +1,10 @@
-use std::process::ExitCode;
 use crate::context::PuffContext;
 use crate::errors::PuffResult;
 use crate::program::{Runnable, RunnableCommand};
-use crate::types::{Text};
+use crate::types::Text;
 use clap::{ArgMatches, Command};
 use pyo3::prelude::*;
+use std::process::ExitCode;
 
 /// The WSGIServerCommand.
 ///
