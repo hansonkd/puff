@@ -19,7 +19,7 @@ fn main() -> ExitCode {
 }
 
 // Basic handler that responds with a static string
-fn my_command() -> Result<()> {
+fn my_command() -> Result<ExitCode> {
     let redis = RedisClient::new("redis://localhost")?;
 
     let client = Client::new();
@@ -34,7 +34,7 @@ fn my_command() -> Result<()> {
     for text in texts {
         info!("Received {}", text?.len());
     }
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
 
 fn background_task_1(client: Client) -> Result<Text> {
