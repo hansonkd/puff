@@ -55,7 +55,7 @@ impl RunnableCommand for PytestCommand {
             ))?;
             pytest_args.append("--import-mode=importlib")?;
             for arg in args.get_raw("arg").unwrap_or_default() {
-                pytest_args.append(arg.into_py(py));
+                pytest_args.append(arg.into_py(py))?;
             }
             let run_pytest = py.import("pytest")?.getattr("main")?;
             PyResult::Ok((pytest_args.to_object(py), run_pytest.into_py(py)))

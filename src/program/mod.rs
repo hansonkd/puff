@@ -9,6 +9,7 @@
 //! # Example
 //!
 //! ```no_run
+//! use std::process::ExitCode;
 //! use clap::{ArgMatches, Command};
 //! use puff::program::{Program, Runnable, RunnableCommand};
 //! use puff::context::PuffContext;
@@ -23,12 +24,12 @@
 //!     fn runnable_from_args(&self, args: &ArgMatches, context: PuffContext) -> puff::errors::Result<Runnable> {
 //!         Ok(Runnable::new(context.dispatcher().dispatch(|| {
 //!             println!("Hello World from a Puff coroutine!");
-//!             Ok(())
+//!             Ok(ExitCode::SUCCESS)
 //!         })))
 //!     }
 //! }
 //!
-//! fn main() {
+//! fn main() -> ExitCode {
 //!     Program::new("my_first_program")
 //!         .author("Kyle Hanson")
 //!         .version("0.0.0")
@@ -81,6 +82,7 @@ impl Runnable {
 /// # Example:
 ///
 /// ```no_run
+/// use std::process::ExitCode;
 /// use clap::{ArgMatches, Command};
 /// use puff::program::{Runnable, RunnableCommand};
 /// use puff::context::PuffContext;
@@ -95,7 +97,7 @@ impl Runnable {
 ///     fn runnable_from_args(&self, _args: &ArgMatches, context: PuffContext) -> puff::errors::Result<Runnable> {
 ///         Ok(Runnable::new(context.dispatcher().dispatch(|| {
 ///             // Do something in a Puff coroutine
-///             Ok(())
+///             Ok(ExitCode::SUCCESS)
 ///         })))
 ///     }
 /// }

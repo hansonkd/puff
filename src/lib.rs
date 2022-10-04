@@ -43,6 +43,7 @@
 //! This example shows how to make a simple Puff web service.
 //!
 //! ```no_run
+//! use std::process::ExitCode;
 //! use puff::program::commands::http::ServerCommand;
 //! use puff::program::Program;
 //! use puff::types::text::{Text, ToText};
@@ -50,8 +51,8 @@
 //! use puff::errors::Result;
 //! use std::time::Duration;
 //!
-//! fn main() {
-//!     // build our application with a route
+//! fn main() -> ExitCode {
+//!     // build our application with a route//!
 //!     let app = Router::new().get("/", root);
 //!
 //!     Program::new("my_first_app")

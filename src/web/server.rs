@@ -18,6 +18,7 @@
 //! This example shows how to make a simple Puff web service with a variety of Request extractors and Responses.
 //!
 //! ```no_run
+//! use std::process::ExitCode;
 //! use puff::program::commands::http::ServerCommand;
 //! use puff::program::Program;
 //! use puff::errors::Result;
@@ -28,7 +29,7 @@
 //! use serde_json::{Value, json};
 //!
 //!
-//! fn main() {
+//! fn main() -> ExitCode {
 //!     // build our application with a route
 //!     let app = Router::new()
 //!                 .get("/", root)

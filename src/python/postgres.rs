@@ -570,7 +570,6 @@ fn postgres_to_python_exception(e: tokio_postgres::Error) -> PyErr {
                 }
                 SqlState::NUMERIC_VALUE_OUT_OF_RANGE => DataError::new_err(formatted),
                 SqlState::DATETIME_FIELD_OVERFLOW => DataError::new_err(formatted),
-                SqlState::DATETIME_VALUE_OUT_OF_RANGE => DataError::new_err(formatted),
                 SqlState::NULL_VALUE_NOT_ALLOWED => DataError::new_err(formatted),
                 _ => InternalError::new_err(formatted),
             }
@@ -790,7 +789,6 @@ async fn run_autocommit_loop<'a>(
     let mut statement: Option<Statement> = None;
     let mut current_stream: Option<Pin<Box<RowStream>>> = None;
     let mut next_message = Some(first_msg);
-    let mut is_first = true;
     while let Some(x) = next_message.take() {
         match x {
             TxnCommand::SetAutoCommit(new) => return Ok(LoopResult::ChangeAutoCommit(new)),
@@ -807,8 +805,6 @@ async fn run_autocommit_loop<'a>(
             }
             TxnCommand::Execute(ret, q, params) => {
                 row_count = 0;
-                is_first = false;
-
                 let stmt = client.prepare(&q).await;
                 let real_return = match stmt {
                     Ok(r) => {
