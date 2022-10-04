@@ -20,9 +20,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::errors::handle_puff_error;
+use crate::types::Text;
 use tracing::error;
 use wsgi::Sender;
-use crate::types::Text;
 
 const MAX_LIST_BODY_INLINE_CONCAT: u64 = 1024 * 4;
 
@@ -32,15 +32,26 @@ pub struct WsgiHandler {
     server_name: Text,
     server_port: u16,
     python_dispatcher: PythonDispatcher,
+    std_err: PyObject,
+    bytesio: PyObject
 }
 
 impl WsgiHandler {
-    pub fn new(app: PyObject, python_dispatcher: PythonDispatcher, server_name: Text, server_port: u16) -> WsgiHandler {
+    pub fn new(
+        app: PyObject,
+        python_dispatcher: PythonDispatcher,
+        server_name: Text,
+        server_port: u16,
+        std_err: PyObject,
+        bytesio: PyObject
+    ) -> WsgiHandler {
         WsgiHandler {
             app,
             python_dispatcher,
             server_name,
-            server_port
+            server_port,
+            std_err,
+            bytesio
         }
     }
 }
@@ -177,9 +188,15 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                     let io = py.import("io")?;
                     environ.set_item("wsgi.version", (1, 0))?;
                     environ.set_item("wsgi.url_scheme", req.uri.scheme_str().unwrap_or("http"))?;
-                    environ.set_item("wsgi.input", io.call_method1("BytesIO", (PyByteArray::new(py, &body_bytes[..]),))?)?;
-                    environ.set_item("wsgi.errors", io.call_method1("BytesIO", (PyByteArray::new(py, &[]),))?)?;
-                    environ.set_item("wsgi.multithread", true)?;
+                    environ.set_item(
+                        "wsgi.input",
+                        self.bytesio.call1(py,(PyByteArray::new(py, &body_bytes[..]),))?
+                    )?;
+                    environ.set_item(
+                        "wsgi.errors",
+                        self.std_err.clone(),
+                    )?;
+                    environ.set_item("wsgi.multithread", false)?;
                     environ.set_item("wsgi.run_once", false)?;
 
                     let server_protocol = match req.version {

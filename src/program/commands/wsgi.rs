@@ -14,8 +14,8 @@ use futures_util::FutureExt;
 use pyo3::prelude::*;
 
 use crate::program::commands::HttpServerConfig;
-use tracing::info;
 use crate::types::text::ToText;
+use tracing::info;
 
 struct WSGIConstructor {
     config: HttpServerConfig,
@@ -78,7 +78,7 @@ impl RunnableCommand for WSGIServerCommand {
                 },
                 context.clone(),
                 server_name,
-                server_port
+                server_port,
             );
             ctx.start()?.await?;
             Ok(())

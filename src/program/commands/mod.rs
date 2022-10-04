@@ -7,10 +7,10 @@ use clap::{Arg, ArgMatches, Command};
 use std::net::SocketAddr;
 use std::sync::Mutex;
 
+pub mod django_management;
 pub mod http;
 pub mod python;
 pub mod wsgi;
-pub mod django_management;
 
 pub struct BasicCommand<F: FnOnce() -> Result<()> + Send + 'static> {
     name: Text,

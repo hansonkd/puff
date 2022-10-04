@@ -23,6 +23,10 @@ class DatabaseWrapper(PGDatabaseWrapper):
     ops_class = DatabaseOperations
     client_class = DatabaseClient
 
+    def _set_autocommit(self, autocommit):
+        with self.wrap_database_errors:
+            self.connection.set_autocommit(autocommit)
+
     def ensure_timezone(self):
         if self.connection is None:
             return False

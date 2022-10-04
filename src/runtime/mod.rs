@@ -15,8 +15,8 @@ use tokio::sync::{broadcast, oneshot};
 use crate::context::PuffContext;
 use crate::errors::Result;
 use crate::runtime::dispatcher::Dispatcher;
-use crate::types::{Puff, Text};
 use crate::types::text::ToText;
+use crate::types::{Puff, Text};
 
 pub mod dispatcher;
 pub mod runner;
@@ -342,22 +342,31 @@ impl RuntimeConfig {
     pub fn add_cwd_to_python_path(self) -> Self {
         let cwd = std::env::current_dir().expect("Could not read Current Working Directory");
         let mut new = self;
-        new.python_paths.push(cwd.to_str().expect("Could not convert path to string").to_text());
+        new.python_paths.push(
+            cwd.to_str()
+                .expect("Could not convert path to string")
+                .to_text(),
+        );
         new
     }
 
     /// Add the relative directory to the PYTHONPATH
     pub fn add_python_path<T: Into<Text>>(self, path: T) -> Self {
-
         // let cwd_str = cwd.to_str().expect("Could not convert cwd path to string");
-        let p: PathBuf = path.into().parse().expect("Could not convert string to path");
+        let p: PathBuf = path
+            .into()
+            .parse()
+            .expect("Could not convert string to path");
         let path_to_add = if p.is_relative() {
-            let cwd = std::env::current_dir().expect("Could not read Current Working Directory and path is relative.");
+            let cwd = std::env::current_dir()
+                .expect("Could not read Current Working Directory and path is relative.");
             cwd.join(p)
         } else {
             p
         };
-        let path_text = path_to_add.to_str().expect("Could not convert path into a string.");
+        let path_text = path_to_add
+            .to_str()
+            .expect("Could not convert path into a string.");
         let mut new = self;
         new.python_paths.push(path_text.into());
         new

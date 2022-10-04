@@ -73,7 +73,13 @@ WSGI_APPLICATION = "puff_django_example.wsgi.application"
 # Database
 # https://docs.djangoproject.com/en/4.1/ref/settings/#databases
 
-DATABASES = {"default": {"ENGINE": "puff.django.postgres", "NAME": "postgres"}}
+DATABASES = {
+    "default": {
+        "ENGINE": "puff.contrib.django.postgres",
+        "NAME": "postgres",
+        "AUTOCOMMIT": True,
+    }
+}
 
 
 # Password validation

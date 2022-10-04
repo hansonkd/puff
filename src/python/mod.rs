@@ -3,9 +3,9 @@ use crate::python::redis::RedisGlobal;
 use pyo3::exceptions::PyRuntimeError;
 
 use crate::context::{set_puff_context, set_puff_context_waiting, with_puff_context, PuffContext};
-use crate::python::greenlet::GreenletReturn;
+use crate::python::greenlet::{greenlet_async, GreenletReturn};
 use crate::runtime::RuntimeConfig;
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyTuple};
 
 use std::os::raw::c_int;
 
@@ -27,25 +27,18 @@ fn into_py_result<T>(r: PuffResult<T>) -> PyResult<T> {
 }
 
 #[pyclass]
-struct SpawnBlocking;
+struct ReadFileBytes;
 
 #[pymethods]
-impl SpawnBlocking {
-    pub fn __call__(
-        &self,
-        py: Python,
-        function: PyObject,
-        args: Py<PyTuple>,
-        kwargs: Py<PyDict>,
-    ) -> PyResult<()> {
+impl ReadFileBytes {
+    pub fn __call__(&self, return_func: PyObject, file_name: String) {
         let ctx = with_puff_context(|ctx| ctx);
-        ctx.python_dispatcher().dispatch_blocking(
-            py,
-            function,
-            args.as_ref(py),
-            kwargs.as_ref(py),
-        )?;
-        Ok(())
+        greenlet_async(ctx, return_func, async move {
+            let contents = tokio::fs::read(&file_name).await?;
+            Ok(Python::with_gil(|py| {
+                PyBytes::new(py, contents.as_slice()).to_object(py)
+            }))
+        })
     }
 }
 
@@ -81,13 +74,14 @@ pub(crate) fn bootstrap_puff_globals(config: RuntimeConfig) -> PuffResult<()> {
 
         info!("Adding puff to python....");
         let puff_mod = py.import("puff")?;
+        puff_mod.call_method0("patch_libs")?;
         let puff_rust_functions = puff_mod.getattr("rust_objects")?;
         puff_rust_functions.setattr("is_puff", true)?;
         puff_rust_functions.setattr("global_redis_getter", RedisGlobal)?;
         puff_rust_functions.setattr("global_postgres_getter", PostgresGlobal)?;
         add_pg_puff_exceptions(py)?;
         puff_rust_functions.setattr("global_state", global_state)?;
-        puff_rust_functions.setattr("blocking_spawner", SpawnBlocking.into_py(py))
+        puff_rust_functions.setattr("read_file_bytes", ReadFileBytes.into_py(py))
     })?;
     Ok(())
 }

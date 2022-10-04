@@ -2,7 +2,7 @@ use crate::context::PuffContext;
 use crate::errors::PuffResult;
 use crate::program::{Runnable, RunnableCommand};
 use crate::types::{Puff, Text};
-use clap::{ArgMatches, Command, Arg};
+use clap::{Arg, ArgMatches, Command};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -10,9 +10,7 @@ use pyo3::types::PyDict;
 ///
 /// Exposes options to the command line to set the port and host of the server.
 #[derive(Clone)]
-pub struct DjangoManagementCommand {
-
-}
+pub struct DjangoManagementCommand {}
 
 impl DjangoManagementCommand {
     pub fn new() -> Self {
@@ -22,8 +20,12 @@ impl DjangoManagementCommand {
 
 impl RunnableCommand for DjangoManagementCommand {
     fn cli_parser(&self) -> Command {
-        Command::new("django")
-            .arg(Arg::new("arg").num_args(1..).value_name("ARG").help("Arguments to pass to Django."))
+        Command::new("django").arg(
+            Arg::new("arg")
+                .num_args(1..)
+                .value_name("ARG")
+                .help("Arguments to pass to Django."),
+        )
     }
 
     fn runnable_from_args(&self, args: &ArgMatches, context: PuffContext) -> PuffResult<Runnable> {
@@ -31,7 +33,7 @@ impl RunnableCommand for DjangoManagementCommand {
 
         let (django_args, python_function) = Python::with_gil(|py| {
             let mut django_args = vec![subcommand.into_py(py)];
-             for arg in args.get_raw("arg").unwrap_or_default() {
+            for arg in args.get_raw("arg").unwrap_or_default() {
                 django_args.push(arg.into_py(py))
             }
             let management = py.import("puff.django.management")?;
@@ -41,7 +43,12 @@ impl RunnableCommand for DjangoManagementCommand {
 
         let fut = async move {
             let res = Python::with_gil(|py| {
-                context.python_dispatcher().dispatch_blocking(py, python_function, (django_args,), PyDict::new(py))
+                context.python_dispatcher().dispatch_blocking(
+                    py,
+                    python_function,
+                    (django_args,),
+                    PyDict::new(py),
+                )
             })?;
             res.await??;
             Ok(())

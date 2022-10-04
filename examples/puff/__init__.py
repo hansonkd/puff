@@ -23,6 +23,9 @@ class RustObjects(object):
     def global_postgres_getter(self):
         return None
 
+    def read_file_bytes(self, rr: Any, fn: str) -> bytes:
+        pass
+
 
 rust_objects = RustObjects()
 
@@ -319,3 +322,47 @@ def import_string(dotted_path):
         raise ImportError("%s doesn't look like a module path" % dotted_path) from err
 
     return cached_import(module_path, class_name)
+
+
+def read_file_bytes(fn: str) -> bytes:
+    return wrap_async(lambda rr: rust_objects.read_file_bytes(rr, fn), join=True)
+
+
+def patch_asgi_ref_local():
+    try:
+        from asgiref import local
+    except ImportError:
+        return None
+    context_id_var = contextvars.ContextVar("context_id")
+
+    class ContextId:
+        pass
+
+    class Local(local.Local):
+        def _get_context_id(self):
+            """
+            Get the ID we should use for looking up variables
+            """
+            if context_id := context_id_var.get(None):
+                return context_id
+
+            context_id = ContextId()
+            context_id_var.set(context_id)
+            return context_id
+
+    local.Local = Local
+
+
+def patch_django():
+    try:
+        from django.views import static
+    except ImportError:
+        return None
+    from puff.contrib.django.static import serve
+
+    static.serve = serve
+
+
+def patch_libs():
+    patch_asgi_ref_local()
+    patch_django()

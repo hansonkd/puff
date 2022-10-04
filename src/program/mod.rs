@@ -262,16 +262,12 @@ impl Program {
             top_level = add_pubsub_command_arguments(top_level)
         }
 
-
         self.runtime_config.apply_env_vars();
         let mutex_switcher = Arc::new(Mutex::new(None::<PuffContext>));
         let python_dispatcher = if self.runtime_config.python() {
             pyo3::prepare_freethreaded_python();
             bootstrap_puff_globals(self.runtime_config.clone())?;
-            let dispatcher = setup_greenlet(
-                self.runtime_config.clone(),
-                mutex_switcher.clone(),
-            )?;
+            let dispatcher = setup_greenlet(self.runtime_config.clone(), mutex_switcher.clone())?;
             Some(dispatcher)
         } else {
             None
@@ -291,11 +287,6 @@ impl Program {
             if let Some(runner) = hm.remove(&command.to_string().into()) {
                 let mut builder = self.runtime()?;
 
-
-
-
-
-
                 let thread_mutex = mutex_switcher.clone();
 
                 builder.on_thread_start(move || {
@@ -313,18 +304,28 @@ impl Program {
 
                 let mut pubsub_client = None;
                 if self.runtime_config.pubsub() {
-                    pubsub_client = Some(rt.block_on(new_pubsub_async(
-                        arg_matches.get_one::<String>("pubsub_url").unwrap().as_str(),
-                        true,
-                    ))?);
+                    pubsub_client = Some(
+                        rt.block_on(new_pubsub_async(
+                            arg_matches
+                                .get_one::<String>("pubsub_url")
+                                .unwrap()
+                                .as_str(),
+                            true,
+                        ))?,
+                    );
                 }
 
                 let mut postgres = None;
                 if self.runtime_config.postgres() {
-                    postgres = Some(rt.block_on(new_postgres_async(
-                        arg_matches.get_one::<String>("postgres_url").unwrap().as_str(),
-                        true,
-                    ))?);
+                    postgres = Some(
+                        rt.block_on(new_postgres_async(
+                            arg_matches
+                                .get_one::<String>("postgres_url")
+                                .unwrap()
+                                .as_str(),
+                            true,
+                        ))?,
+                    );
                 }
                 let (dispatcher, waiting) =
                     Dispatcher::new(notify_shutdown, self.runtime_config.clone());

@@ -18,7 +18,10 @@ fn main() {
     Program::new("puff_django_app_example")
         .about("This is my first django app")
         .runtime_config(rc)
-        .command(WSGIServerCommand::new(router, "puff_django_example.wsgi.application"))
+        .command(WSGIServerCommand::new(
+            router,
+            "puff_django_example.wsgi.application",
+        ))
         .command(DjangoManagementCommand::new())
         .run()
 }

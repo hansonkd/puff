@@ -1,3 +1,5 @@
+import contextvars
+
 from puff import wrap_async, rust_objects
 
 threadsafety = 3
@@ -16,6 +18,8 @@ ISOLATION_LEVEL_DEFAULT = None
 class PostgresCursor:
     def __init__(self, cursor, connection):
         self.cursor = cursor
+        self.autocommit = False
+        self.last_query = None
         self.connection = connection
         self.current_transaction = False
 
@@ -24,7 +28,7 @@ class PostgresCursor:
         return wrap_async(lambda r: self.cursor.do_get_rowcount(r), join=True)
 
     def execute(self, q, params=None):
-        print((q, params))
+        self.last_query = q.encode("utf8")
         if self.connection.autocommit and self.current_transaction:
             self.connection.commit()
         ix = 1
@@ -44,15 +48,10 @@ class PostgresCursor:
         return wrap_async(lambda r: self.cursor.fetchone(r), join=True)
 
     def fetchmany(self, rowcount=None):
-        return [
-            tuple(r)
-            for r in wrap_async(lambda r: self.cursor.fetchmany(r, rowcount), join=True)
-        ]
+        return wrap_async(lambda r: self.cursor.fetchmany(r, rowcount), join=True)
 
     def fetchall(self):
-        return [
-            tuple(r) for r in wrap_async(lambda r: self.cursor.fetchall(r), join=True)
-        ]
+        return wrap_async(lambda r: self.cursor.fetchall(r), join=True)
 
     def close(self):
         if self.connection.autocommit and self.current_transaction:
@@ -76,15 +75,15 @@ class PostgresCursor:
 
     @property
     def query(self):
-        return wrap_async(lambda r: self.cursor.do_get_query(r), join=True)
+        return self.last_query
 
 
 class PostgresConnection:
     isolation_level = ISOLATION_LEVEL_DEFAULT
     server_version = 140000
 
-    def __init__(self, client=None):
-        self.autocommit = False
+    def __init__(self, client=None, autocommit=False):
+        self.autocommit = autocommit
         self.postgres_client = client or rust_objects.global_postgres_getter()
 
     def __enter__(self):
@@ -94,13 +93,16 @@ class PostgresConnection:
         self.close()
 
     def set_client_encoding(self, encoding, *args, **kwargs):
-        if encoding != 'UTF8':
+        if encoding != "UTF8":
             raise Exception("Only UTF8 Postgres encoding supported.")
 
     def get_parameter_status(self, parameter, *args, **kwargs):
         with self.cursor() as cursor:
             cursor.execute("SELECT current_setting($1)", [parameter])
             return cursor.fetchone()
+
+    def set_autocommit(self, autocommit):
+        self.autocommit = autocommit
 
     def cursor(self) -> PostgresCursor:
         return PostgresCursor(self.postgres_client.cursor(), self)
@@ -109,11 +111,17 @@ class PostgresConnection:
         self.postgres_client.close()
 
     def commit(self):
-        wrap_async(lambda r: self.postgres_client.commit(r), join=True)
+        return wrap_async(lambda r: self.postgres_client.commit(r), join=True)
 
     def rollback(self):
-        wrap_async(lambda r: self.postgres_client.rollback(r), join=True)
+        return wrap_async(lambda r: self.postgres_client.rollback(r), join=True)
 
 
-def connect(*parameters) -> PostgresConnection:
-    return PostgresConnection()
+def connect(*parameters, **kwargs) -> PostgresConnection:
+    real_kwargs = {}
+    valid_params = ["autocommit"]
+    for param in valid_params:
+        if param in kwargs:
+            real_kwargs[param] = kwargs[param]
+    conn = PostgresConnection(**real_kwargs)
+    return conn

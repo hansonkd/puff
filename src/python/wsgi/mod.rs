@@ -13,8 +13,8 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
 use crate::context::PuffContext;
-use tokio::sync::oneshot;
 use crate::types::Text;
+use tokio::sync::oneshot;
 
 #[pyclass]
 pub struct Sender {
@@ -67,7 +67,7 @@ pub struct ServerContext<T: WsgiServerSpawner> {
     server: Option<T>,
     python_dispatcher: PythonDispatcher,
     server_name: Text,
-    server_port: u16
+    server_port: u16,
 }
 
 impl<T: WsgiServerSpawner> ServerContext<T> {
@@ -76,8 +76,19 @@ impl<T: WsgiServerSpawner> ServerContext<T> {
             (Some(app), Some(server)) => {
                 let fut = async move {
                     // create wsgi service
-                    let wsgi_handler =
-                        WsgiHandler::new(app.clone(), self.python_dispatcher.clone(), self.server_name.clone(), self.server_port);
+                   let (std_err, bytesio)  = Python::with_gil(|py| {
+                        let std_err = py.import("sys")?.getattr("stderr")?;
+                        let bytesio = py.import("io")?.getattr("BytesIO")?;
+                        return PyResult::Ok((std_err.into_py(py), bytesio.into_py(py)))
+                    })?;
+                    let wsgi_handler = WsgiHandler::new(
+                        app.clone(),
+                        self.python_dispatcher.clone(),
+                        self.server_name.clone(),
+                        self.server_port,
+                        std_err,
+                        bytesio
+                    );
 
                     server.call(wsgi_handler).await;
 
@@ -96,7 +107,7 @@ pub fn create_server_context<T: WsgiServerSpawner>(
     server: T,
     context: PuffContext,
     server_name: Text,
-    server_port: u16
+    server_port: u16,
 ) -> ServerContext<T> {
     ServerContext {
         server_name,
