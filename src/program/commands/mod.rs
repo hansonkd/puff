@@ -5,19 +5,21 @@ use crate::types::Text;
 use anyhow::anyhow;
 use clap::{Arg, ArgMatches, Command};
 use std::net::SocketAddr;
+use std::process::ExitCode;
 use std::sync::Mutex;
 
 pub mod django_management;
 pub mod http;
 pub mod python;
 pub mod wsgi;
+pub mod pytest;
 
-pub struct BasicCommand<F: FnOnce() -> Result<()> + Send + 'static> {
+pub struct BasicCommand<F: FnOnce() -> Result<ExitCode> + Send + 'static> {
     name: Text,
     inner_func: Mutex<Option<F>>,
 }
 
-impl<F: FnOnce() -> Result<()> + Send + 'static> BasicCommand<F> {
+impl<F: FnOnce() -> Result<ExitCode> + Send + 'static> BasicCommand<F> {
     pub fn new<T: Into<Text>>(name: T, f: F) -> Self {
         Self {
             name: name.into(),
@@ -26,7 +28,7 @@ impl<F: FnOnce() -> Result<()> + Send + 'static> BasicCommand<F> {
     }
 }
 
-impl<F: FnOnce() -> Result<()> + Send + Sync + 'static> RunnableCommand for BasicCommand<F> {
+impl<F: FnOnce() -> Result<ExitCode> + Send + Sync + 'static> RunnableCommand for BasicCommand<F> {
     fn cli_parser(&self) -> Command {
         Command::new(self.name.to_string())
     }

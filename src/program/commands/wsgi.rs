@@ -1,4 +1,5 @@
 //! Convert a `Router` into a `RunnableCommand`
+use std::process::ExitCode;
 use crate::context::PuffContext;
 use crate::errors::Result;
 use crate::program::{Runnable, RunnableCommand};
@@ -81,7 +82,7 @@ impl RunnableCommand for WSGIServerCommand {
                 server_port,
             );
             ctx.start()?.await?;
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         };
         Ok(Runnable::new(fut))
     }

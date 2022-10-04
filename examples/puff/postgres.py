@@ -18,7 +18,6 @@ ISOLATION_LEVEL_DEFAULT = None
 class PostgresCursor:
     def __init__(self, cursor, connection):
         self.cursor = cursor
-        self.autocommit = False
         self.last_query = None
         self.connection = connection
         self.current_transaction = False
@@ -29,8 +28,6 @@ class PostgresCursor:
 
     def execute(self, q, params=None):
         self.last_query = q.encode("utf8")
-        if self.connection.autocommit and self.current_transaction:
-            self.connection.commit()
         ix = 1
         params = list(params) if params is not None else None
         while "%s" in q:
@@ -54,8 +51,6 @@ class PostgresCursor:
         return wrap_async(lambda r: self.cursor.fetchall(r), join=True)
 
     def close(self):
-        if self.connection.autocommit and self.current_transaction:
-            self.connection.commit()
         return self.cursor.close()
 
     def __del__(self):
@@ -83,7 +78,7 @@ class PostgresConnection:
     server_version = 140000
 
     def __init__(self, client=None, autocommit=False):
-        self.autocommit = autocommit
+        self._autocommit = autocommit
         self.postgres_client = client or rust_objects.global_postgres_getter()
 
     def __enter__(self):
@@ -91,6 +86,15 @@ class PostgresConnection:
 
     def __exit__(self):
         self.close()
+
+    @property
+    def autocommit(self):
+        return self._autocommit
+
+    @autocommit.setter
+    def autocommit(self, value):
+        self._autocommit = value
+        self.postgres_client.set_auto_commit(value)
 
     def set_client_encoding(self, encoding, *args, **kwargs):
         if encoding != "UTF8":
@@ -104,7 +108,7 @@ class PostgresConnection:
     def set_autocommit(self, autocommit):
         self.autocommit = autocommit
 
-    def cursor(self) -> PostgresCursor:
+    def cursor(self, *args, **kwargs) -> PostgresCursor:
         return PostgresCursor(self.postgres_client.cursor(), self)
 
     def close(self):

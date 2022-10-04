@@ -17,13 +17,14 @@ use pyo3::types::{PyList, PyString, PyTuple};
 use pythonize::depythonize;
 use std::error::Error;
 use std::future::Future;
+use std::pin::Pin;
 
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type};
-use tokio_postgres::{NoTls, Portal, Row, Statement, Transaction};
+use tokio_postgres::{NoTls, Portal, Row, Statement, Transaction, Client, RowStream};
 
 
 create_exception!(module, PgError, pyo3::exceptions::PyException);
@@ -61,6 +62,21 @@ struct Connection {
     closed: bool,
 }
 
+fn get_sender(loop_pool: Pool<PostgresConnectionManager<NoTls>>, transaction_loop: Arc<Mutex<Option<Sender<TxnCommand>>>>) -> Sender<TxnCommand> {
+    let mut x = transaction_loop.lock().unwrap();
+    if let Some(l) = x.as_ref() {
+        l.clone()
+    } else {
+        let (sender, rec) = channel(1);
+        *x = Some(sender.clone());
+        let handle = with_puff_context(|ctx| ctx.handle());
+        handle.spawn(async move {
+            run_loop(loop_pool, rec).await.unwrap()
+        });
+        sender
+    }
+}
+
 impl Connection {
     pub fn new(pool: Pool<PostgresConnectionManager<NoTls>>) -> Self {
         Self {
@@ -76,6 +92,15 @@ impl Connection {
     #[getter]
     fn get_closed(&self) -> bool {
         self.closed
+    }
+    fn set_auto_commit(&self, new_autocommit: bool) {
+        let ctx = with_puff_context(|ctx| ctx);
+        let loop_pool = self.pool.clone();
+        let transaction_loop_inner = self.transaction_loop.clone();
+        ctx.handle().spawn(async move {
+            let sender = get_sender(loop_pool, transaction_loop_inner);
+            sender.send(TxnCommand::SetAutoCommit(new_autocommit)).await
+        });
     }
 
     fn close(&mut self) {
@@ -150,16 +175,7 @@ struct Cursor {
 
 impl Cursor {
     fn get_sender(&self) -> Sender<TxnCommand> {
-        let mut x = self.transaction_loop.lock().unwrap();
-        if let Some(l) = x.as_ref() {
-            l.clone()
-        } else {
-            let (sender, rec) = channel(1);
-            *x = Some(sender.clone());
-            let handle = with_puff_context(|ctx| ctx.handle());
-            handle.spawn(run_loop(self.pool.clone(), rec));
-            sender
-        }
+        get_sender(self.pool.clone(), self.transaction_loop.clone())
     }
 
     fn spawn_and_recover<F: Future<Output = PuffResult<()>> + Send + Sync + 'static>(
@@ -363,6 +379,7 @@ enum TxnCommand {
     Commit(PyObject),
     Rollback(PyObject),
     RowCount(PyObject),
+    SetAutoCommit(bool),
     Close(Arc<Mutex<Option<Sender<TxnCommand>>>>),
 }
 
@@ -488,22 +505,7 @@ impl ToSql for PythonSqlValue {
     to_sql_checked!();
 }
 
-async fn run_loop(
-    client_pool: Pool<PostgresConnectionManager<NoTls>>,
-    mut rec: Receiver<TxnCommand>,
-) -> PuffResult<()> {
-    let mut running = true;
-    let mut client_conn = client_pool.get().await?;
-    while running {
-        if let Some(msg) = rec.recv().await {
-            let txn = client_conn.transaction().await?;
-            running = run_txn_loop(msg, txn, &mut rec).await?
-        } else {
-            running = false
-        }
-    }
-    Ok(())
-}
+
 
 fn postgres_to_python_exception(e: tokio_postgres::Error) -> PyErr {
     if e.is_closed() {
@@ -579,11 +581,50 @@ fn postgres_to_python_exception(e: tokio_postgres::Error) -> PyErr {
     }
 }
 
+enum LoopResult {
+    ChangeAutoCommit(bool),
+    Continue,
+    Stop
+}
+
+async fn run_loop(
+    client_pool: Pool<PostgresConnectionManager<NoTls>>,
+    mut rec: Receiver<TxnCommand>,
+) -> PuffResult<()> {
+    let mut auto_commit = false;
+    let mut running = true;
+    let mut client_conn = client_pool.get().await?;
+    while running {
+        if let Some(msg) = rec.recv().await {
+            let new_result = if auto_commit {
+                run_autocommit_loop(msg, &mut *client_conn, &mut rec).await?
+            } else {
+                let txn = client_conn.transaction().await?;
+                run_txn_loop(msg, txn, &mut rec).await?
+            };
+            match new_result {
+                LoopResult::Continue => {
+                    running = true
+                }
+                LoopResult::Stop => {
+                    running = false
+                }
+                LoopResult::ChangeAutoCommit(new_autocommit) => {
+                    auto_commit = new_autocommit
+                }
+            }
+        } else {
+            running = false
+        }
+    }
+    Ok(())
+}
+
 async fn run_txn_loop<'a>(
     first_msg: TxnCommand,
     txn: Transaction<'a>,
     rec: &'a mut Receiver<TxnCommand>,
-) -> PuffResult<bool> {
+) -> PuffResult<LoopResult> {
     let mut row_count: i32 = -1;
     let mut statement: Option<Statement> = None;
     let mut current_portal: Option<Portal> = None;
@@ -591,11 +632,14 @@ async fn run_txn_loop<'a>(
     let mut is_first = true;
     while let Some(x) = next_message.take() {
         match x {
+            TxnCommand::SetAutoCommit(new) => {
+                return Ok(LoopResult::ChangeAutoCommit(new))
+            }
             TxnCommand::Close(txn_loop) => {
                 txn.rollback().await?;
                 let mut m = txn_loop.lock().unwrap();
                 *m = None;
-                return Ok(false);
+                return Ok(LoopResult::Stop);
             }
             TxnCommand::Commit(ret) => {
                 if !is_first {
@@ -604,7 +648,7 @@ async fn run_txn_loop<'a>(
                         Err(e) => Err(postgres_to_python_exception(e)),
                     };
                     handle_python_return(ret, async { real_return }).await;
-                    return Ok(true);
+                    return Ok(LoopResult::Continue);
                 } else {
                     handle_python_return(ret, async { Ok(true) }).await;
                 }
@@ -616,7 +660,7 @@ async fn run_txn_loop<'a>(
                         Err(e) => Err(postgres_to_python_exception(e)),
                     };
                     handle_python_return(ret, async { real_return }).await;
-                    return Ok(true);
+                    return Ok(LoopResult::Continue);
                 } else {
                     handle_python_return(ret, async { Ok(true) }).await;
                 }
@@ -624,6 +668,7 @@ async fn run_txn_loop<'a>(
             TxnCommand::Execute(ret, q, params) => {
                 row_count = 0;
                 is_first = false;
+
                 let stmt = txn.prepare(&q).await;
                 let real_return = match stmt {
                     Ok(r) => {
@@ -656,32 +701,6 @@ async fn run_txn_loop<'a>(
             }
             TxnCommand::ExecuteMany(_ret, _q, _param_seq) => {
                 todo!()
-                // handle_return(ret, async {
-                //     let param_groups = Python::with_gil(|py| {
-                //         let mut v = Vec::new();
-                //         for params in param_seq.into_ref(py).iter()? {
-                //             v.push(params?.into_py(py))
-                //         }
-                //         PuffResult::Ok(v)
-                //     })?;
-                //     let mut v = Vec::new();
-                //     for params in param_groups {
-                //         let ps: Vec<PythonSqlValue> = Python::with_gil(|py| {
-                //             PuffResult::Ok(
-                //                 params
-                //                     .extract::<Vec<PyObject>>(py)?
-                //                     .into_iter()
-                //                     .map(PythonSqlValue)
-                //                     .collect(),
-                //             )
-                //         })?;
-                //
-                //         let res = txn.execute_raw(&q, ps).await?;
-                //         v.push(res)
-                //     }
-                //     PuffResult::Ok(v)
-                // })
-                // .await
             }
             TxnCommand::RowCount(ret) => handle_return(ret, async { Ok(row_count) }).await,
             TxnCommand::FetchOne(ret) => {
@@ -769,7 +788,172 @@ async fn run_txn_loop<'a>(
         next_message = rec.recv().await;
     }
     txn.rollback().await?;
-    Ok(false)
+    Ok(LoopResult::Stop)
+}
+
+
+async fn run_autocommit_loop<'a>(
+    first_msg: TxnCommand,
+    client: &'a mut Client,
+    rec: &'a mut Receiver<TxnCommand>,
+) -> PuffResult<LoopResult> {
+    let mut row_count: i32 = -1;
+    let mut statement: Option<Statement> = None;
+    let mut current_stream: Option<Pin<Box<RowStream>>> = None;
+    let mut next_message = Some(first_msg);
+    let mut is_first = true;
+    while let Some(x) = next_message.take() {
+        match x {
+            TxnCommand::SetAutoCommit(new) => {
+                return Ok(LoopResult::ChangeAutoCommit(new))
+            }
+            TxnCommand::Close(txn_loop) => {
+                let mut m = txn_loop.lock().unwrap();
+                *m = None;
+                return Ok(LoopResult::Stop);
+            }
+            TxnCommand::Commit(ret) => {
+                handle_python_return(ret, async { Ok(true) }).await;
+            }
+            TxnCommand::Rollback(ret) => {
+                handle_python_return(ret, async { Ok(false) }).await;
+            }
+            TxnCommand::Execute(ret, q, params) => {
+                row_count = 0;
+                is_first = false;
+
+                let stmt = client.prepare(&q).await;
+                let real_return = match stmt {
+                    Ok(r) => {
+                        statement = Some(r.clone());
+                        if r.columns().len() == 0 {
+                            let res = client.execute_raw(&r, &params[..]).await;
+                            match res {
+                                Ok(r) => {
+                                    current_stream = None;
+                                    row_count = r as i32;
+                                    Ok(())
+                                }
+                                Err(e) => Err(postgres_to_python_exception(e)),
+                            }
+                        } else {
+                            let res = client.query_raw(&r, &params[..]).await;
+                            match res {
+                                Ok(r) => {
+                                    current_stream = Some(Box::pin(r));
+                                    Ok(())
+                                }
+                                Err(e) => Err(postgres_to_python_exception(e)),
+                            }
+                        }
+                    }
+                    Err(e) => Err(postgres_to_python_exception(e)),
+                };
+
+                handle_python_return(ret, async { real_return }).await
+            }
+            TxnCommand::ExecuteMany(_ret, _q, _param_seq) => {
+                todo!()
+            }
+            TxnCommand::RowCount(ret) => handle_return(ret, async { Ok(row_count) }).await,
+            TxnCommand::FetchOne(ret) => {
+                handle_python_return(ret, async {
+                    if let Some(mut v) = current_stream.as_mut() {
+                        let result = v.next().await;
+                        match result {
+                            Some(Ok(row)) => {
+                                row_count += 1;
+                                Python::with_gil(
+                                    |py| Ok(row_to_pyton(py, row)?.into_py(py)),
+                                )
+                            }
+                            Some(Err(e)) => {
+                                current_stream = None;
+                                Err(postgres_to_python_exception(e))
+                            }
+                            None => {
+                                Python::with_gil(|py| Ok(py.None()))
+                            }
+                        }
+                    } else {
+                        Err(InternalError::new_err(format!(
+                            "Fetchone Cursor not ready."
+                        )))?
+                    }
+                })
+                .await
+            }
+            TxnCommand::FetchMany(ret, real_row_count) => {
+                handle_python_return(ret, async {
+                    if let Some(mut v) = current_stream.as_mut() {
+                        let num_rows = real_row_count as usize;
+                        let mut real_result = Vec::with_capacity(num_rows);
+                        for _ in 0..num_rows {
+                            let result = v.next().await;
+                            match result {
+                                Some(Ok(row)) => {
+                                    row_count += 1;
+                                    let obj = Python::with_gil(
+                                        |py| PyResult::Ok(row_to_pyton(py, row)?.into_py(py))
+                                    )?;
+                                    real_result.push(obj);
+                                }
+                                Some(Err(e)) => {
+                                    current_stream = None;
+                                    return Err(postgres_to_python_exception(e))
+                                }
+                                None => {
+                                    current_stream = None;
+                                    break
+                                }
+                            }
+                        }
+                        Ok(real_result)
+
+                    } else {
+                        Ok(Vec::new())
+                    }
+                })
+                .await
+            }
+            TxnCommand::FetchAll(ret) => {
+                handle_python_return(ret, async {
+                    if let Some(mut v) = current_stream.as_mut() {
+                        let mut real_result = Vec::new();
+                        loop {
+                            let result = v.next().await;
+                            match result {
+                                Some(Ok(row)) => {
+                                    row_count += 1;
+                                    let obj = Python::with_gil(
+                                        |py| PyResult::Ok(row_to_pyton(py, row)?.into_py(py))
+                                    )?;
+                                    real_result.push(obj);
+                                }
+                                Some(Err(e)) => {
+                                    current_stream = None;
+                                    return Err(postgres_to_python_exception(e))
+                                }
+                                None => {
+                                    break
+                                }
+                            }
+                        }
+                        Ok(real_result)
+
+                    } else {
+                        Err(InternalError::new_err(format!(
+                            "Fetchone Cursor not ready."
+                        )))?
+                    }
+                })
+                .await
+            }
+        }
+
+        next_message = rec.recv().await;
+    }
+    Ok(LoopResult::Stop)
 }
 
 pub fn add_pg_puff_exceptions(py: Python) -> PyResult<()> {

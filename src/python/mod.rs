@@ -74,14 +74,16 @@ pub(crate) fn bootstrap_puff_globals(config: RuntimeConfig) -> PuffResult<()> {
 
         info!("Adding puff to python....");
         let puff_mod = py.import("puff")?;
-        puff_mod.call_method0("patch_libs")?;
+
         let puff_rust_functions = puff_mod.getattr("rust_objects")?;
         puff_rust_functions.setattr("is_puff", true)?;
         puff_rust_functions.setattr("global_redis_getter", RedisGlobal)?;
         puff_rust_functions.setattr("global_postgres_getter", PostgresGlobal)?;
         add_pg_puff_exceptions(py)?;
         puff_rust_functions.setattr("global_state", global_state)?;
-        puff_rust_functions.setattr("read_file_bytes", ReadFileBytes.into_py(py))
+        puff_rust_functions.setattr("read_file_bytes", ReadFileBytes.into_py(py))?;
+        puff_mod.call_method0("patch_libs")?;
+        PyResult::Ok(())
     })?;
     Ok(())
 }

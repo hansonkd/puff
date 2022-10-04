@@ -196,7 +196,6 @@ class Greenlet:
     def join(self):
         while not self.finished:
             self.thread.event_loop_processor.switch()
-
         if self.exception:
             raise self.exception
         else:
@@ -363,6 +362,18 @@ def patch_django():
     static.serve = serve
 
 
+def patch_psycopg2():
+    try:
+        import psycopg2
+    except ImportError:
+        return None
+    from puff import postgres
+    for s in dir(postgres):
+        if not s.startswith("__"):
+            setattr(psycopg2, s, getattr(postgres, s))
+
+
 def patch_libs():
     patch_asgi_ref_local()
     patch_django()
+    patch_psycopg2()

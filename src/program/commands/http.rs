@@ -6,6 +6,7 @@ use crate::web::server::Router;
 use clap::{ArgMatches, Command};
 
 use std::net::SocketAddr;
+use std::process::ExitCode;
 
 /// The ServerCommand.
 ///
@@ -28,11 +29,12 @@ impl RunnableCommand for ServerCommand {
         let this_self = self.clone();
         let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
         let fut = async move {
-            Ok(this_self
+            this_self
                 .0
                 .clone()
                 .into_hyper_server(&addr, context)
-                .await?)
+                .await?;
+            Ok(ExitCode::SUCCESS)
         };
         Ok(Runnable::new(fut))
     }

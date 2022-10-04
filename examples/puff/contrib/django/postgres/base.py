@@ -1,4 +1,4 @@
-import puff.postgres as Database
+# import puff.postgres as Database
 
 from .client import DatabaseClient  # NOQA
 from .creation import DatabaseCreation  # NOQA
@@ -14,7 +14,7 @@ from django.db.backends.postgresql.base import (
 
 
 class DatabaseWrapper(PGDatabaseWrapper):
-    Database = Database
+    # Database = Database
     display_name = "PuffPostgres"
     SchemaEditorClass = DatabaseSchemaEditor
     creation_class = DatabaseCreation

@@ -47,6 +47,7 @@ use crate::databases::redis::{add_redis_command_arguments, new_redis_async};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
 use tokio::runtime::Builder;
@@ -55,7 +56,7 @@ use tokio::sync::broadcast;
 use crate::context::{set_puff_context, set_puff_context_waiting, PuffContext};
 use crate::databases::postgres::{add_postgres_command_arguments, new_postgres_async};
 use crate::databases::pubsub::{add_pubsub_command_arguments, new_pubsub_async};
-use crate::errors::{handle_puff_error, handle_puff_result, Result};
+use crate::errors::{handle_puff_error, handle_puff_result, PuffResult, Result};
 use crate::python::{bootstrap_puff_globals, setup_greenlet};
 use crate::runtime::dispatcher::Dispatcher;
 use crate::runtime::RuntimeConfig;
@@ -66,10 +67,10 @@ use tracing::{info};
 pub mod commands;
 
 /// A wrapper for a boxed future that is able to be run by a Puff Program.
-pub struct Runnable(Pin<Box<dyn Future<Output = Result<()>> + 'static>>);
+pub struct Runnable(Pin<Box<dyn Future<Output = Result<ExitCode>> + 'static>>);
 
 impl Runnable {
-    pub fn new<F: Future<Output = Result<()>> + 'static>(inner: F) -> Self {
+    pub fn new<F: Future<Output = Result<ExitCode>> + 'static>(inner: F) -> Self {
         Self(Box::pin(inner))
     }
 }
@@ -124,6 +125,17 @@ impl PackedCommand {
         self.0.runnable_from_args(args, dispatcher)
     }
 }
+
+pub fn handle_puff_exit(label: &str, r: PuffResult<ExitCode>) -> ExitCode {
+    match r {
+        Ok(exit) => exit,
+        Err(e) => {
+            handle_puff_error(label, e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
 
 /// A Puff Program that is responsible for parsing CLI arguments and starting the Runtime.
 #[derive(Clone)]
@@ -236,15 +248,15 @@ impl Program {
     /// Run the program and panics if it fails.
     ///
     /// See [Self::try_run] for more information.
-    pub fn run(&self) -> () {
-        handle_puff_result("Program", self.try_run())
+    pub fn run(&self) -> ExitCode {
+        handle_puff_exit("Program", self.try_run())
     }
 
     /// Tries to run the program and returns an Error if it fails.
     ///
     /// This will parse the command line arguments, start a new runtime, dispatcher and
     /// coroutine worker threads and blocks until the command finishes.
-    pub fn try_run(&self) -> Result<()> {
+    pub fn try_run(&self) -> Result<ExitCode> {
         tracing_subscriber::fmt::init();
         let (notify_shutdown, _) = broadcast::channel(1);
 
@@ -363,20 +375,19 @@ impl Program {
                     // let result = ctx.start()?.await;
                     tokio::select! {
                         res = runnable.0 => {
-                            if let Err(err) = res {
-                                handle_puff_error("Start Command", err)
-                            }
+                            return res
                         }
                         _ = shutdown => {
                             // The shutdown signal has been received.
                             info!("shutting down");
+                            return Ok(ExitCode::SUCCESS)
                         }
                     }
                 };
-                rt.block_on(main_fut);
+                return rt.block_on(main_fut);
             }
         }
 
-        Ok(())
+        Ok(ExitCode::SUCCESS)
     }
 }

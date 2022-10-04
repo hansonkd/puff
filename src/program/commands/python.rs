@@ -1,3 +1,4 @@
+use std::process::ExitCode;
 use crate::context::PuffContext;
 use crate::errors::PuffResult;
 use crate::program::{Runnable, RunnableCommand};
@@ -40,7 +41,7 @@ impl RunnableCommand for PythonCommand {
         let fut = async move {
             let res = context.python_dispatcher().dispatch1(python_function, ())?;
             res.await??;
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         };
         Ok(Runnable::new(fut))
     }
