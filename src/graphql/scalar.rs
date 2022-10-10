@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail};
 use juniper::{graphql_scalar, FromInputValue, InputValue, ScalarValue, Value as JuniperValue};
 use serde::de::{EnumAccess, MapAccess, SeqAccess};
-use serde::{de, Deserialize, Deserializer, ser, Serialize, Serializer};
+use serde::{de, ser, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::error::Error;

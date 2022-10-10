@@ -54,13 +54,11 @@ impl PartialOrd for Text {
     }
 }
 
-
 impl Ord for Text {
     fn cmp(&self, other: &Self) -> Ordering {
         self.0.as_str().cmp(other.0.as_str())
     }
 }
-
 
 impl Text {
     pub fn new() -> Text {

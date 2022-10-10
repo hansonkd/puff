@@ -1,5 +1,6 @@
 use crate::context::with_puff_context;
 use async_trait::async_trait;
+use axum::headers::Te;
 use juniper::executor::LookAheadMethods;
 use juniper::meta::{Argument, Field, MetaType};
 use juniper::{
@@ -7,35 +8,63 @@ use juniper::{
     FromInputValue, GraphQLSubscriptionValue, GraphQLType, GraphQLValue, GraphQLValueAsync,
     InputValue, Registry, Value, ValuesStream,
 };
+use pyo3::types::PyDict;
 use pyo3::Python;
 use serde_json::{Map, Value as JsonValue};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use pyo3::types::PyDict;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio_stream::wrappers::{ReceiverStream, UnboundedReceiverStream};
 
-use crate::graphql::puff_schema::{returned_values_into_stream, selection_to_fields, AggroArgument, AggroContext, AggroField, AggroObject, AggroTypeInfo, SubscriptionSender};
+use crate::graphql::puff_schema::{
+    returned_values_into_stream, selection_to_fields, AggroArgument, AggroContext, AggroField,
+    AggroObject, AggroTypeInfo, SubscriptionSender,
+};
 use crate::graphql::row_return::{ExtractorRootNode, RootNode};
 use crate::graphql::scalar::{AggroScalarValue, AggroValue, GenericScalar};
 use crate::types::text::ToText;
 use crate::types::Text;
+
+pub enum SchemaComponent {
+    Mutation,
+    Query,
+    Subscription,
+}
 
 #[derive(Debug, Clone)]
 pub struct SchemaInfo {
     pub all_objs: Arc<BTreeMap<Text, AggroObject>>,
     pub input_objs: Arc<BTreeMap<Text, AggroObject>>,
     pub name: Text,
+    pub commit: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Object {
-    pub fields: InputValue<AggroScalarValue>,
+pub struct PuffGqlObject;
+
+impl PuffGqlObject {
+    pub fn new() -> Self {
+        Self
+    }
 }
 
-impl<'s> GraphQLType<AggroScalarValue> for Object {
+impl<'s> GraphQLType<AggroScalarValue> for PuffGqlObject {
     fn name(info: &Self::TypeInfo) -> Option<&str> {
-        Some(info.name.as_str())
+        if let Some(obj) = info.all_objs.get(&info.name) {
+            if obj.fields.is_empty() {
+                let n = match info.name.as_str() {
+                    "Mutation" => "_Mutation",
+                    "Query" => "_Query",
+                    "Subscription" => "_Subscription",
+                    s => s,
+                };
+                Some(n)
+            } else {
+                Some(info.name.as_str())
+            }
+        } else {
+            Some(info.name.as_str())
+        }
     }
 
     fn meta<'r>(
@@ -45,9 +74,10 @@ impl<'s> GraphQLType<AggroScalarValue> for Object {
     where
         AggroScalarValue: 'r,
     {
-        println!("\n\n\nwhat:{:?}\n\n", info.all_objs);
-
         if let Some(obj) = info.all_objs.get(&info.name) {
+            if obj.fields.is_empty() {
+                return registry.build_object_type::<Self>(&info, &[]).into_meta();
+            }
             let mut fields = Vec::new();
             for (k, v) in obj.fields.iter() {
                 let f = build_field(info, registry, k, v);
@@ -55,7 +85,7 @@ impl<'s> GraphQLType<AggroScalarValue> for Object {
             }
 
             registry
-                .build_object_type::<Object>(info, fields.as_slice())
+                .build_object_type::<PuffGqlObject>(info, fields.as_slice())
                 .into_meta()
         } else if let Some(obj) = info.input_objs.get(&info.name) {
             let mut args = Vec::new();
@@ -66,7 +96,7 @@ impl<'s> GraphQLType<AggroScalarValue> for Object {
             }
 
             registry
-                .build_input_object_type::<Object>(info, args.as_slice())
+                .build_input_object_type::<PuffGqlObject>(info, args.as_slice())
                 .into_meta()
         } else {
             panic!("Did not find object, {}, in all types", info.name.as_str())
@@ -120,19 +150,21 @@ fn build_argument<'r>(
                     all_objs: info.all_objs.clone(),
                     input_objs: info.input_objs.clone(),
                     name: tn.clone(),
+                    commit: info.commit,
                 };
 
                 match (arg.param_type.optional, inner.optional) {
-                    (true, true) => {
-                        registry.arg::<Option<Vec<Option<Object>>>>(arg_name, field_node_type_info)
-                    }
+                    (true, true) => registry
+                        .arg::<Option<Vec<Option<PuffGqlObject>>>>(arg_name, field_node_type_info),
                     (true, false) => {
-                        registry.arg::<Option<Vec<Object>>>(arg_name, field_node_type_info)
+                        registry.arg::<Option<Vec<PuffGqlObject>>>(arg_name, field_node_type_info)
                     }
                     (false, true) => {
-                        registry.arg::<Vec<Option<Object>>>(arg_name, field_node_type_info)
+                        registry.arg::<Vec<Option<PuffGqlObject>>>(arg_name, field_node_type_info)
                     }
-                    (false, false) => registry.arg::<Vec<Object>>(arg_name, field_node_type_info),
+                    (false, false) => {
+                        registry.arg::<Vec<PuffGqlObject>>(arg_name, field_node_type_info)
+                    }
                 }
             }
         },
@@ -176,11 +208,12 @@ fn build_argument<'r>(
                 all_objs: info.all_objs.clone(),
                 input_objs: info.input_objs.clone(),
                 name: tn.clone(),
+                commit: info.commit,
             };
             if arg.param_type.optional {
-                registry.arg::<Option<Object>>(arg_name, field_node_type_info)
+                registry.arg::<Option<PuffGqlObject>>(arg_name, field_node_type_info)
             } else {
-                registry.arg::<Object>(arg_name, field_node_type_info)
+                registry.arg::<PuffGqlObject>(arg_name, field_node_type_info)
             }
         }
     }
@@ -234,18 +267,19 @@ fn build_field<'r>(
                     all_objs: info.all_objs.clone(),
                     input_objs: info.input_objs.clone(),
                     name: s.clone(),
+                    commit: info.commit,
                 };
                 match (field.return_type.optional, inner.optional) {
-                    (true, true) => registry
-                        .field::<Option<Vec<Option<Object>>>>(field_name, field_node_type_info),
-                    (true, false) => {
-                        registry.field::<Option<Vec<Object>>>(field_name, field_node_type_info)
-                    }
-                    (false, true) => {
-                        registry.field::<Vec<Option<Object>>>(field_name, field_node_type_info)
-                    }
+                    (true, true) => registry.field::<Option<Vec<Option<PuffGqlObject>>>>(
+                        field_name,
+                        field_node_type_info,
+                    ),
+                    (true, false) => registry
+                        .field::<Option<Vec<PuffGqlObject>>>(field_name, field_node_type_info),
+                    (false, true) => registry
+                        .field::<Vec<Option<PuffGqlObject>>>(field_name, field_node_type_info),
                     (false, false) => {
-                        registry.field::<Vec<Object>>(field_name, field_node_type_info)
+                        registry.field::<Vec<PuffGqlObject>>(field_name, field_node_type_info)
                     }
                 }
             }
@@ -290,11 +324,12 @@ fn build_field<'r>(
                 all_objs: info.all_objs.clone(),
                 input_objs: info.input_objs.clone(),
                 name: tn.clone(),
+                commit: info.commit,
             };
             if field.return_type.optional {
-                registry.field::<Option<Object>>(field_name, field_node_type_info)
+                registry.field::<Option<PuffGqlObject>>(field_name, field_node_type_info)
             } else {
-                registry.field::<Object>(field_name, field_node_type_info)
+                registry.field::<PuffGqlObject>(field_name, field_node_type_info)
             }
         }
     };
@@ -310,7 +345,7 @@ fn build_field<'r>(
 // impl<S> GraphQLValue<S> for Object
 //     where
 //         S: ScalarValue
-impl GraphQLValue<AggroScalarValue> for Object {
+impl GraphQLValue<AggroScalarValue> for PuffGqlObject {
     type Context = AggroContext;
     type TypeInfo = SchemaInfo;
 
@@ -320,7 +355,7 @@ impl GraphQLValue<AggroScalarValue> for Object {
 }
 
 #[async_trait]
-impl GraphQLValueAsync<AggroScalarValue> for Object {
+impl GraphQLValueAsync<AggroScalarValue> for PuffGqlObject {
     fn resolve_field_async<'a>(
         &'a self,
         info: &'a Self::TypeInfo,
@@ -342,18 +377,25 @@ impl GraphQLValueAsync<AggroScalarValue> for Object {
                 .expect(format!("Could not find field {}", field_name).as_str());
             // let ctx = executor.context();
             let pool = with_puff_context(|ctx| ctx.postgres().pool());
-             let all_objects = info.all_objs.clone();
-             let input_objs = &info.input_objs;
+            let all_objects = info.all_objs.clone();
+            let input_objs = &info.input_objs;
             let mut client = pool.get().await?;
-            let look_ahead = Python::with_gil(|py| selection_to_fields(py, aggro_field, look_ahead_slice, input_objs, &all_objects))?;
+            let look_ahead = Python::with_gil(|py| {
+                selection_to_fields(py, aggro_field, look_ahead_slice, input_objs, &all_objects)
+            })?;
             // let field_obj = info.all_objs.get(field.return_type.primary_type.as_str()).unwrap();
             let txn = client.transaction().await?;
             let rows = Arc::new(ExtractorRootNode);
 
-            let res = returned_values_into_stream(&txn, rows, &look_ahead, aggro_field, all_objects)
-                .await?;
+            let res =
+                returned_values_into_stream(&txn, rows, &look_ahead, aggro_field, all_objects)
+                    .await?;
 
-            txn.rollback().await?;
+            if info.commit {
+                txn.commit().await?;
+            } else {
+                txn.rollback().await?;
+            }
 
             for s in res {
                 return Ok(s);
@@ -363,8 +405,26 @@ impl GraphQLValueAsync<AggroScalarValue> for Object {
     }
 }
 
-impl GraphQLSubscriptionValue<AggroScalarValue> for Object {
-    fn resolve_field_into_stream<'s, 'i, 'ft, 'args, 'e, 'ref_e, 'res, 'f>(&'s self, info: &'i Self::TypeInfo, field_name: &'ft str, _: Arguments<'args, AggroScalarValue>, executor: &'ref_e Executor<'ref_e, 'e, Self::Context, AggroScalarValue>) -> BoxFuture<'f, Result<Value<ValuesStream<'res, AggroScalarValue>>, FieldError<AggroScalarValue>>> where 's: 'f, 'i: 'res, 'ft: 'f, 'args: 'f, 'ref_e: 'f, 'res: 'f, 'e: 'res {
+impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
+    fn resolve_field_into_stream<'s, 'i, 'ft, 'args, 'e, 'ref_e, 'res, 'f>(
+        &'s self,
+        info: &'i Self::TypeInfo,
+        field_name: &'ft str,
+        _: Arguments<'args, AggroScalarValue>,
+        executor: &'ref_e Executor<'ref_e, 'e, Self::Context, AggroScalarValue>,
+    ) -> BoxFuture<
+        'f,
+        Result<Value<ValuesStream<'res, AggroScalarValue>>, FieldError<AggroScalarValue>>,
+    >
+    where
+        's: 'f,
+        'i: 'res,
+        'ft: 'f,
+        'args: 'f,
+        'ref_e: 'f,
+        'res: 'f,
+        'e: 'res,
+    {
         Box::pin(async move {
             let look_ahead = executor.look_ahead();
             let look_ahead_slice = &look_ahead;
@@ -381,25 +441,28 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for Object {
             let (sender, ret) = unbounded_channel();
             let all_objects = info.all_objs.clone();
             let input_objs = &info.input_objs;
-            let look_ahead = Python::with_gil(|py| selection_to_fields(py, field, look_ahead_slice, input_objs, &all_objects))?;
+            let look_ahead = Python::with_gil(|py| {
+                selection_to_fields(py, field, look_ahead_slice, input_objs, &all_objects)
+            })?;
 
             let ss = SubscriptionSender::new(sender, look_ahead, field.clone(), all_objects);
 
             let py_dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
-            let acceptor_method = field.acceptor_method.clone().expect("Subscription field needs an acceptor");
+            let acceptor_method = field
+                .acceptor_method
+                .clone()
+                .expect("Subscription field needs an acceptor");
             py_dispatcher.dispatch::<_, &PyDict>(acceptor_method, (ss,), None)?;
-            let stream: ValuesStream<AggroScalarValue> = Box::pin(UnboundedReceiverStream::new(ret));
+            let stream: ValuesStream<AggroScalarValue> =
+                Box::pin(UnboundedReceiverStream::new(ret));
             return Ok(Value::Scalar(stream));
         })
     }
-    // fn resolve_into_type_stream<'s, 'i, 'tn, 'e, 'ref_e, 'res, 'f>(&'s self, info: &'i Self::TypeInfo, type_name: &'tn str, executor: &'ref_e Executor<'ref_e, 'e, Self::Context, AggroScalarValue>) -> BoxFuture<'f, Result<Value<ValuesStream<'res, AggroScalarValue>>, FieldError<AggroScalarValue>>> where 'i: 'res, 'e: 'res, 's: 'f, 'tn: 'f, 'ref_e: 'f, 'res: 'f {
-    //     todo!()
-    // }
 }
 
-impl FromInputValue<AggroScalarValue> for Object {
+impl FromInputValue<AggroScalarValue> for PuffGqlObject {
     type Error = String;
     fn from_input_value(v: &InputValue<AggroScalarValue>) -> Result<Self, String> {
-        Ok(Object { fields: v.clone() })
+        Ok(PuffGqlObject)
     }
 }

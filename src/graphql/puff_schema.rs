@@ -1,8 +1,12 @@
-use crate::context::{PuffContext, with_puff_context};
-use crate::errors::{PuffResult, to_py_error};
+use crate::context::{with_puff_context, PuffContext};
+use crate::errors::{to_py_error, PuffResult};
 use crate::graphql::puff_schema::LookAheadFields::{Nested, Terminal};
-use crate::graphql::row_return::{convert_postgres_to_juniper, convert_pyany_to_jupiter, ExtractorRootNode, ExtractValues, PostgresResultRows, PostgresRows, PythonResultRows, PythonReturnValues, PythonRows, RowReturn};
+use crate::graphql::row_return::{
+    convert_postgres_to_juniper, convert_pyany_to_jupiter, ExtractValues, ExtractorRootNode,
+    PostgresResultRows, PostgresRows, PythonResultRows, PythonReturnValues, PythonRows, RowReturn,
+};
 use crate::graphql::scalar::{AggroScalarValue, AggroSqlValue, AggroValue, AlignedValues};
+use crate::python::greenlet::greenlet_async;
 use crate::python::postgres::PythonSqlValue;
 use crate::types::text::ToText;
 use crate::types::Text;
@@ -12,12 +16,16 @@ use bb8_postgres::PostgresConnectionManager;
 use futures::future::try_join_all;
 use futures::{pin_mut, Stream, TryStreamExt};
 use futures_util::{stream, FutureExt};
-use juniper::{BoxFuture, ExecutionError, ExecutionResult, LocalBoxFuture, LookAheadArgument, LookAheadMethods, LookAheadSelection, LookAheadValue, Object as JuniperObject, Object, Value, ValuesStream};
+use juniper::{
+    BoxFuture, ExecutionError, ExecutionResult, LocalBoxFuture, LookAheadArgument,
+    LookAheadMethods, LookAheadSelection, LookAheadValue, Object as JuniperObject, Object, Value,
+    ValuesStream,
+};
 use pyo3::basic::CompareOp::Ne;
 use pyo3::exceptions::{PyException, PyKeyError};
 use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyDict, PyList, PyString, PyTuple};
-use std::collections::{HashSet, BTreeMap};
+use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -27,7 +35,6 @@ use tokio::sync::mpsc::{Sender, UnboundedSender};
 use tokio_postgres::{Client, NoTls, Row, Transaction};
 use tokio_stream::wrappers::{ReceiverStream, UnboundedReceiverStream};
 use tokio_stream::StreamExt;
-use crate::python::greenlet::greenlet_async;
 
 static NUMBERS: &'static [&'static str] = &["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
 
@@ -173,9 +180,9 @@ pub fn convert_obj(name: &str, desc: BTreeMap<String, &PyAny>) -> PyResult<Aggro
         }
 
         let depends_on = field_description
-                .getattr("depends_on")?
-                .extract::<Option<_>>()?
-                .unwrap_or_default();
+            .getattr("depends_on")?
+            .extract::<Option<_>>()?
+            .unwrap_or_default();
 
         let field = AggroField {
             depends_on,
@@ -247,122 +254,107 @@ fn scalar_to_python(py: Python, v: &AggroScalarValue) -> PyResult<Py<PyAny>> {
     }
 }
 
-fn input_to_python(py: Python, t: &DecodedType, all_inputs: &Arc<BTreeMap<Text, AggroObject>>, v: &LookAheadValue<AggroScalarValue>) -> PyResult<Py<PyAny>> {
+fn input_to_python(
+    py: Python,
+    t: &DecodedType,
+    all_inputs: &Arc<BTreeMap<Text, AggroObject>>,
+    v: &LookAheadValue<AggroScalarValue>,
+) -> PyResult<Py<PyAny>> {
     match v {
         LookAheadValue::Null => {
-                if t.optional {
-                    return Ok(PyList::empty(py).into_py(py))
-                } else {
-                    return Err(PyException::new_err("Null supplied to non-optional field"))
-                }
+            if t.optional {
+                return Ok(PyList::empty(py).into_py(py));
+            } else {
+                return Err(PyException::new_err("Null supplied to non-optional field"));
             }
-        _ => ()
+        }
+        _ => (),
     };
 
     match &t.type_info {
-        AggroTypeInfo::List(inner_t) => {
-            match v {
-                LookAheadValue::List(inner) => {
-                    let mut val_vec: Vec<PyObject> = Vec::with_capacity(inner.len());
-                    for iv in inner {
-                        val_vec.push(input_to_python(py, inner_t, all_inputs, iv)?);
-                    }
-                    Ok(PyList::new(py, val_vec).into_py(py))
+        AggroTypeInfo::List(inner_t) => match v {
+            LookAheadValue::List(inner) => {
+                let mut val_vec: Vec<PyObject> = Vec::with_capacity(inner.len());
+                for iv in inner {
+                    val_vec.push(input_to_python(py, inner_t, all_inputs, iv)?);
                 }
-                _ => Err(PyException::new_err("Input non-list to a list input"))
+                Ok(PyList::new(py, val_vec).into_py(py))
             }
-        }
-        AggroTypeInfo::Object(inner_t_name) => {
-            match v {
-                LookAheadValue::Object(inner) => {
-                    if let Some(inner_t) = all_inputs.get(inner_t_name) {
-                        let mut required = HashSet::new();
-                        for (n, f) in inner_t.fields.iter() {
-                            if !f.return_type.optional {
-                                required.insert(n);
-                            }
+            _ => Err(PyException::new_err("Input non-list to a list input")),
+        },
+        AggroTypeInfo::Object(inner_t_name) => match v {
+            LookAheadValue::Object(inner) => {
+                if let Some(inner_t) = all_inputs.get(inner_t_name) {
+                    let mut required = HashSet::new();
+                    for (n, f) in inner_t.fields.iter() {
+                        if !f.return_type.optional {
+                            required.insert(n);
                         }
-                        let mut val_vec: Vec<(PyObject, PyObject)> = Vec::with_capacity(inner.len());
-                        for (k, iv) in inner {
-                            let key = k.to_text();
-                            if let Some(f)  = inner_t.fields.get(&key) {
-                                required.remove(&key);
-                                val_vec.push((key.into_py(py), input_to_python(py, &f.return_type, all_inputs, iv)?));
-                            }
+                    }
+                    let mut val_vec: Vec<(PyObject, PyObject)> = Vec::with_capacity(inner.len());
+                    for (k, iv) in inner {
+                        let key = k.to_text();
+                        if let Some(f) = inner_t.fields.get(&key) {
+                            required.remove(&key);
+                            val_vec.push((
+                                key.into_py(py),
+                                input_to_python(py, &f.return_type, all_inputs, iv)?,
+                            ));
                         }
-                        if required.len() > 0 {
-                            Err(PyException::new_err(format!("Missing required fields {:?}", required)))
-                        } else {
-                            Ok(val_vec.into_py_dict(py).into_py(py))
-                        }
+                    }
+                    if required.len() > 0 {
+                        Err(PyException::new_err(format!(
+                            "Missing required fields {:?}",
+                            required
+                        )))
                     } else {
-                        Err(PyException::new_err(format!("Could not find type {}", inner_t_name)))
+                        Ok(val_vec.into_py_dict(py).into_py(py))
                     }
+                } else {
+                    Err(PyException::new_err(format!(
+                        "Could not find type {}",
+                        inner_t_name
+                    )))
                 }
-                _ => Err(PyException::new_err("Input non-object to a object input"))
             }
-
-        }
-        AggroTypeInfo::Int => {
-            match v {
-                LookAheadValue::Scalar(&AggroScalarValue::Int(i)) => {
-                    Ok(i.into_py(py))
+            _ => Err(PyException::new_err("Input non-object to a object input")),
+        },
+        AggroTypeInfo::Int => match v {
+            LookAheadValue::Scalar(&AggroScalarValue::Int(i)) => Ok(i.into_py(py)),
+            _ => Err(PyException::new_err("Input non-int to a int input")),
+        },
+        AggroTypeInfo::Float => match v {
+            LookAheadValue::Scalar(&AggroScalarValue::Float(i)) => Ok(i.into_py(py)),
+            _ => Err(PyException::new_err("Input non-float to a float input")),
+        },
+        AggroTypeInfo::String => match v {
+            LookAheadValue::Scalar(AggroScalarValue::String(i)) => Ok(i.into_py(py)),
+            _ => Err(PyException::new_err("Input non-string to a string input")),
+        },
+        AggroTypeInfo::Boolean => match v {
+            LookAheadValue::Scalar(AggroScalarValue::Boolean(i)) => Ok(i.into_py(py)),
+            _ => Err(PyException::new_err("Input non-bool to a bool input")),
+        },
+        AggroTypeInfo::Any => match v {
+            LookAheadValue::Null => Ok(py.None()),
+            LookAheadValue::Scalar(s) => scalar_to_python(py, s),
+            LookAheadValue::List(vals) => {
+                let mut v = Vec::with_capacity(vals.len());
+                for val in vals {
+                    v.push(input_to_python(py, t, all_inputs, val)?);
                 }
-                _ => Err(PyException::new_err("Input non-int to a int input"))
+                Ok(PyList::new(py, v).into_py(py))
             }
-        }
-        AggroTypeInfo::Float => {
-            match v {
-                LookAheadValue::Scalar(&AggroScalarValue::Float(i)) => {
-                    Ok(i.into_py(py))
+            LookAheadValue::Object(vals) => {
+                let mut v = BTreeMap::new();
+                for (k, val) in vals {
+                    v.insert(k, input_to_python(py, t, all_inputs, val)?);
                 }
-                _ => Err(PyException::new_err("Input non-float to a float input"))
+                Ok(v.into_py_dict(py).into_py(py))
             }
-        }
-        AggroTypeInfo::String => {
-            match v {
-                LookAheadValue::Scalar(AggroScalarValue::String(i)) => {
-                    Ok(i.into_py(py))
-                }
-                _ => Err(PyException::new_err("Input non-string to a string input"))
-            }
-        }
-        AggroTypeInfo::Boolean => {
-            match v {
-                LookAheadValue::Scalar(AggroScalarValue::Boolean(i)) => {
-                    Ok(i.into_py(py))
-                }
-                _ => Err(PyException::new_err("Input non-bool to a bool input"))
-            }
-        }
-        AggroTypeInfo::Any => {
-            match v {
-                LookAheadValue::Null => {
-                    Ok(py.None())
-                }
-                LookAheadValue::Scalar(s) => {
-                    scalar_to_python(py, s)
-                }
-                LookAheadValue::List(vals) => {
-                    let mut v = Vec::with_capacity(vals.len());
-                    for val in vals {
-                        v.push(input_to_python(py, t, all_inputs, val)?);
-                    }
-                    Ok(PyList::new(py, v).into_py(py))
-                }
-                LookAheadValue::Object(vals) => {
-                    let mut v = BTreeMap::new();
-                    for (k, val) in vals {
-                        v.insert(k, input_to_python(py, t, all_inputs, val)?);
-                    }
-                    Ok(v.into_py_dict(py).into_py(py))
-                }
-                _ => Err(PyException::new_err("Input non-bool to a bool input"))
-            }
-        }
-        _ => {
-            Err(PyException::new_err("Input non-list to a list input"))
-        }
+            _ => Err(PyException::new_err("Input non-bool to a bool input")),
+        },
+        _ => Err(PyException::new_err("Input non-list to a list input")),
     }
 }
 
@@ -636,9 +628,7 @@ pub async fn do_returned_values_into_stream(
                         let row_cor_len = parent.len();
                         let mut row_cor_iter = parent.into_iter();
                         let key = key_from_extracted(&mut row_cor_iter, row_cor_len);
-                        let r = mapped_children
-                            .get(&key)
-                            .map(|f| f.clone());
+                        let r = mapped_children.get(&key).map(|f| f.clone());
 
                         let val = if aggro_value_is_list {
                             r.unwrap_or_else(|| AggroValue::List(vec![]))
@@ -729,21 +719,19 @@ pub fn selection_to_fields(
     let args = collect_arguments_for_python(py, all_inputs, field, c.arguments())?;
     if c.has_children() {
         let t = match &field.return_type.type_info {
-            AggroTypeInfo::Object(t) => {
-                t
-            }
-            AggroTypeInfo::List(inner) => {
-                match &inner.type_info {
-                    AggroTypeInfo::Object(t) => {
-                        t
-                    }
-                    _ => {
-                        return Err(PyException::new_err("Input with children passed an object when none was expected."))
-                    }
+            AggroTypeInfo::Object(t) => t,
+            AggroTypeInfo::List(inner) => match &inner.type_info {
+                AggroTypeInfo::Object(t) => t,
+                _ => {
+                    return Err(PyException::new_err(
+                        "Input with children passed an object when none was expected.",
+                    ))
                 }
-            }
+            },
             _ => {
-                return Err(PyException::new_err("Input with children passed an object when none was expected."))
+                return Err(PyException::new_err(
+                    "Input with children passed an object when none was expected.",
+                ))
             }
         };
 
@@ -778,10 +766,11 @@ fn collect_arguments_for_python(
     for c in args {
         let key = c.name().to_text();
         if let Some(arg) = field.arguments.get(&key) {
-            ret.insert(key, input_to_python(py, &arg.param_type, all_inputs, c.value())?);
+            ret.insert(
+                key,
+                input_to_python(py, &arg.param_type, all_inputs, c.value())?,
+            );
         }
-
-
     }
     Ok(ret)
 }
@@ -806,7 +795,7 @@ pub struct SubscriptionSender {
     sender: UnboundedSender<Result<Value<AggroScalarValue>, ExecutionError<AggroScalarValue>>>,
     look_ahead: LookAheadFields,
     field: AggroField,
-    all_objs: Arc<BTreeMap<Text, AggroObject>>
+    all_objs: Arc<BTreeMap<Text, AggroObject>>,
 }
 
 impl SubscriptionSender {
@@ -814,9 +803,14 @@ impl SubscriptionSender {
         sender: UnboundedSender<Result<Value<AggroScalarValue>, ExecutionError<AggroScalarValue>>>,
         look_ahead: LookAheadFields,
         field: AggroField,
-        all_objs: Arc<BTreeMap<Text, AggroObject>>
+        all_objs: Arc<BTreeMap<Text, AggroObject>>,
     ) -> Self {
-        Self { sender, look_ahead, field, all_objs }
+        Self {
+            sender,
+            look_ahead,
+            field,
+            all_objs,
+        }
     }
 }
 
@@ -834,12 +828,14 @@ impl SubscriptionSender {
             let pool = postgres.pool();
             let mut conn = pool.get().await?;
             let txn = conn.transaction().await?;
-            let rows = Arc::new(PythonResultRows{ py_list });
-            let res = returned_values_into_stream(&txn, rows, &this_lookahead, &this_field, all_objects).await?;
+            let rows = Arc::new(PythonResultRows { py_list });
+            let res =
+                returned_values_into_stream(&txn, rows, &this_lookahead, &this_field, all_objects)
+                    .await?;
             for r in res {
                 if !this_sender.send(Ok(r)).is_ok() {
                     txn.rollback().await?;
-                    return Ok(false)
+                    return Ok(false);
                 }
             }
             txn.rollback().await?;

@@ -1,5 +1,5 @@
 use axum::extract::{FromRequest, Query, WebSocketUpgrade};
-use axum::http::{Method, Request, StatusCode};
+use axum::http::{HeaderMap, Method, Request, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
 use juniper::{
@@ -14,6 +14,8 @@ use std::sync::Arc;
 use crate::graphql::scalar::AggroScalarValue;
 use juniper::http::{GraphQLBatchRequest, GraphQLBatchResponse, GraphQLRequest};
 
+use crate::context::with_puff_context;
+use crate::graphql::AggroContext;
 use async_trait::async_trait;
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::FutureExt;
@@ -459,6 +461,34 @@ where
             let new_ctx = new_ctx.clone();
             JuniperPuffResponse(request.execute(&root_node, &new_ctx).await)
         })
+    }
+}
+
+pub fn handle_graphql(
+) -> impl FnOnce(JuniperPuffRequest) -> BoxFuture<'static, JuniperPuffResponse> + Clone + Send + 'static
+{
+    move |JuniperPuffRequest(request): JuniperPuffRequest| {
+        Box::pin(async move {
+            let root_node = with_puff_context(|ctx| ctx.gql());
+            let new_ctx = AggroContext::new();
+            JuniperPuffResponse(request.execute(&root_node, &new_ctx).await)
+        })
+    }
+}
+
+pub fn handle_subscriptions(
+) -> impl FnOnce(WebSocketUpgrade, ()) -> future::Ready<Response> + Clone + Send {
+    move |ws: WebSocketUpgrade, _| {
+        let root_node = with_puff_context(|ctx| ctx.gql());
+        let new_ctx = AggroContext::new();
+
+        let s = ws
+            .protocols(["graphql-ws"])
+            .max_frame_size(1024)
+            .max_message_size(1024)
+            .max_send_queue(100)
+            .on_upgrade(move |socket| handle_graphql_socket(socket, root_node, new_ctx));
+        future::ready(s)
     }
 }
 

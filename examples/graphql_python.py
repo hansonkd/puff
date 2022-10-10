@@ -14,6 +14,7 @@ class SomeInputObject:
     some_count: int
     some_string: str
 
+
 @dataclass
 class SomeObject:
     field1: int
@@ -27,8 +28,6 @@ class SomeObject:
     def hello_world_query(cls, ctx, ids, /, my_input: Optional[int] = None) -> Tuple[List[DbObject], str, List[Any], List[str], List[str]]:
         q = "SELECT ($2 || ' HELLO WORLD '::TEXT || $1) AS title, unnest($3::int[]) AS count, unnest($3::int[]) % 2 as parent_id"
         return ..., q, ["cowabunga", "uwu", [5, 6, 7, 8]], ["field1"], ["parent_id"]
-
-    hello_world_query.__func__.depends_on = "field1"
 
 
 @dataclass
@@ -46,16 +45,12 @@ class Query:
                 objs.append(SomeObject(field1=inp.some_count, field2=inp.some_string))
         return ..., objs
 
-    @classmethod
-    def hello_world_query_aligned(cls, parents, context, /, my_input: Optional[int] = None) -> Tuple[SomeObject, str, List[Any], str, str]:
-        return ..., "SELECT 'HELLO WORLD'::TEXT as id FROM WHERE one IN $1", [parents], "id", "id"
-
 
 @dataclass
 class Mutation:
     @classmethod
     def hello_world(cls, parents, context, /, my_input: Optional[int] = None) -> str:
-        return f"hello mutation: {my_input}"
+        return f"hello: {my_input}"
 
 
 @dataclass

@@ -11,6 +11,7 @@ use std::cell::RefCell;
 
 use crate::databases::postgres::PostgresClient;
 use crate::databases::pubsub::PubSubClient;
+use crate::graphql::PuffGraphqlRoot;
 use crate::python::PythonDispatcher;
 use futures_util::task::SpawnExt;
 use std::sync::{Arc, Mutex};
@@ -30,6 +31,7 @@ pub struct PuffContext {
     postgres: Option<PostgresClient>,
     python_dispatcher: Option<PythonDispatcher>,
     pubsub_client: Option<PubSubClient>,
+    gql_root: Option<PuffGraphqlRoot>,
 }
 
 // Context consists of a hierarchy of Contexts. PUFF_CONTEXT is the primary thread local that holds
@@ -93,13 +95,14 @@ impl PuffContext {
             postgres: None,
             python_dispatcher: None,
             pubsub_client: None,
+            gql_root: None,
         }
     }
 
     /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`. This function will start
     /// the number of `coroutine_threads` specified in your config.
     pub fn new(dispatcher: Arc<Dispatcher>, handle: Handle) -> PuffContext {
-        Self::new_with_options(handle, dispatcher, None, None, None, None)
+        Self::new_with_options(handle, dispatcher, None, None, None, None, None)
     }
 
     /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`. This function will start
@@ -111,6 +114,7 @@ impl PuffContext {
         postgres: Option<PostgresClient>,
         python_dispatcher: Option<PythonDispatcher>,
         pubsub_client: Option<PubSubClient>,
+        gql_root: Option<PuffGraphqlRoot>,
     ) -> PuffContext {
         let arc_dispatcher = Self {
             dispatcher,
@@ -119,6 +123,7 @@ impl PuffContext {
             postgres,
             python_dispatcher,
             pubsub_client,
+            gql_root,
         };
 
         arc_dispatcher
@@ -157,6 +162,12 @@ impl PuffContext {
             .expect("Postgres is not configured for this runtime.")
     }
 
+    /// The configured graphql root node. Panics if not enabled.
+    pub fn gql(&self) -> PuffGraphqlRoot {
+        self.gql_root
+            .clone()
+            .expect("Postgres is not configured for this runtime.")
+    }
     /// The coroutine dispatcher.
     pub fn dispatcher(&self) -> Arc<Dispatcher> {
         self.dispatcher.clone()

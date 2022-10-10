@@ -10,13 +10,14 @@ mod schema;
 pub use puff_schema::AggroContext;
 
 use crate::graphql::scalar::AggroScalarValue;
-use crate::graphql::schema::Object;
+use crate::graphql::schema::PuffGqlObject;
 use crate::types::text::ToText;
 use serde_json;
 
-pub fn load_schema(
-    module: &str,
-) -> PyResult<Arc<RootNode<Object, Object, Object, AggroScalarValue>>> {
+pub type PuffGraphqlRoot =
+    Arc<RootNode<'static, PuffGqlObject, PuffGqlObject, PuffGqlObject, AggroScalarValue>>;
+
+pub fn load_schema(module: &str) -> PyResult<PuffGraphqlRoot> {
     let (converted_objs, input_objs) = Python::with_gil(|py| -> PyResult<_> {
         let puff = py.import("puff")?;
         let puff_gql = py.import("puff.graphql")?;
@@ -30,24 +31,25 @@ pub fn load_schema(
         Ok((converted_objs, input_objs))
     })?;
 
-    let data = serde_json::from_str(r#"{}"#).unwrap();
-
     let info = schema::SchemaInfo {
         name: "Query".to_text(),
         all_objs: Arc::new(converted_objs),
         input_objs: Arc::new(input_objs),
+        commit: false,
     };
     let mutation_info = schema::SchemaInfo {
         name: "Mutation".to_text(),
         all_objs: info.all_objs.clone(),
         input_objs: info.input_objs.clone(),
+        commit: true,
     };
     let subscription_info = schema::SchemaInfo {
         name: "Subscription".to_text(),
         all_objs: info.all_objs.clone(),
         input_objs: info.input_objs.clone(),
+        commit: false,
     };
-    let object = schema::Object { fields: data };
+    let object = schema::PuffGqlObject::new();
 
     let schema: RootNode<_, _, _, AggroScalarValue> = RootNode::new_with_info(
         object.clone(),

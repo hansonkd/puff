@@ -123,6 +123,7 @@ pub struct RuntimeConfig {
     greenlets: bool,
     env_vars: Vec<(Text, Text)>,
     python_paths: Vec<Text>,
+    gql_module: Option<Text>,
     global_state_fn: Option<Arc<dyn Fn(Python) -> PyResult<PyObject> + Send + Sync + 'static>>,
     blocking_task_keep_alive: Duration,
     strategy: Strategy,
@@ -184,6 +185,10 @@ impl RuntimeConfig {
     /// Get if greenlets will be enabled.
     pub fn greenlets(&self) -> bool {
         self.greenlets
+    }
+    /// Get the gql module that will be enabled.
+    pub fn gql_module(&self) -> Option<Text> {
+        self.gql_module.puff()
     }
     /// Get monitor interval
     pub fn monitor(&self) -> Option<Duration> {
@@ -320,6 +325,15 @@ impl RuntimeConfig {
         new
     }
 
+    /// If provided, will load the GraphQl configuration from the module path
+    ///
+    /// Default: true
+    pub fn set_gql_module<T: Into<Text>>(self, gql_module: T) -> Self {
+        let mut new = self;
+        new.gql_module = Some(gql_module.into());
+        new
+    }
+
     /// Run a function in a python context and set the result as the global state for Python.
     ///
     /// Default: true
@@ -391,6 +405,7 @@ impl Default for RuntimeConfig {
             strategy: Strategy::RoundRobin,
             python_paths: Vec::new(),
             env_vars: Vec::new(),
+            gql_module: None,
         }
     }
 }

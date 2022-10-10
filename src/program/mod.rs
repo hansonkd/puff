@@ -44,6 +44,7 @@ use clap::{ArgMatches, Command};
 
 use crate::databases::redis::{add_redis_command_arguments, new_redis_async};
 
+use anyhow::bail;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -57,6 +58,7 @@ use crate::context::{set_puff_context, set_puff_context_waiting, PuffContext};
 use crate::databases::postgres::{add_postgres_command_arguments, new_postgres_async};
 use crate::databases::pubsub::{add_pubsub_command_arguments, new_pubsub_async};
 use crate::errors::{handle_puff_error, PuffResult, Result};
+use crate::graphql::load_schema;
 use crate::python::{bootstrap_puff_globals, setup_greenlet};
 use crate::runtime::dispatcher::Dispatcher;
 use crate::runtime::RuntimeConfig;
@@ -339,6 +341,11 @@ impl Program {
                         ))?,
                     );
                 }
+
+                let mut gql_root = None;
+                if let Some(mod_path) = self.runtime_config.gql_module() {
+                    gql_root = Some(load_schema(mod_path.as_str())?);
+                }
                 let (dispatcher, waiting) =
                     Dispatcher::new(notify_shutdown, self.runtime_config.clone());
                 let arc_dispatcher = Arc::new(dispatcher);
@@ -352,6 +359,7 @@ impl Program {
                     postgres,
                     python_dispatcher,
                     pubsub_client.clone(),
+                    gql_root.clone(),
                 );
 
                 for i in waiting {
