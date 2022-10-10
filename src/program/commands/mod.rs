@@ -1,3 +1,4 @@
+use std::future::Future;
 use crate::context::PuffContext;
 use crate::errors::Result;
 use crate::program::{Runnable, RunnableCommand};
@@ -18,12 +19,12 @@ pub mod pytest;
 pub mod python;
 pub mod wsgi;
 
-pub struct BasicCommand<F: FnOnce() -> Result<ExitCode> + Send + 'static> {
+pub struct BasicCommand<F: Future<Output=Result<ExitCode>> + Send + 'static> {
     name: Text,
     inner_func: Mutex<Option<F>>,
 }
 
-impl<F: FnOnce() -> Result<ExitCode> + Send + 'static> BasicCommand<F> {
+impl<F: Future<Output=Result<ExitCode>> + Send + 'static> BasicCommand<F> {
     pub fn new<T: Into<Text>>(name: T, f: F) -> Self {
         Self {
             name: name.into(),
@@ -32,7 +33,7 @@ impl<F: FnOnce() -> Result<ExitCode> + Send + 'static> BasicCommand<F> {
     }
 }
 
-impl<F: FnOnce() -> Result<ExitCode> + Send + Sync + 'static> RunnableCommand for BasicCommand<F> {
+impl<F: Future<Output=Result<ExitCode>> + Send + Sync + 'static> RunnableCommand for BasicCommand<F> {
     fn cli_parser(&self) -> Command {
         Command::new(self.name.to_string())
     }
@@ -44,8 +45,7 @@ impl<F: FnOnce() -> Result<ExitCode> + Send + Sync + 'static> RunnableCommand fo
             .unwrap()
             .take()
             .ok_or(anyhow!("Already ran command."))?;
-        let fut = context.dispatcher().dispatch(this_self_func);
-        Ok(Runnable::new(fut))
+        Ok(Runnable::new(this_self_func))
     }
 }
 

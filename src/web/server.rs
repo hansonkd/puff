@@ -94,28 +94,6 @@ pub type ResponseBuilder = AxumResponse<()>;
 #[derive(Clone)]
 pub struct Router<S = ()>(axum::Router<S>);
 
-async fn internal_handler<F>(
-    Extension(puff_context): Extension<PuffContext>,
-    f: F,
-) -> AxumResponse<BoxBody>
-where
-    F: FnOnce() -> Result<AxumResponse<BoxBody>> + Send + Sync + 'static,
-{
-    let res = puff_context.dispatcher().dispatch(|| Ok(f())).await;
-    match res {
-        Ok(r) => r.unwrap_or_else(|e| handle_response_error(e)),
-        Err(r) => handle_response_error(r),
-    }
-}
-
-fn handle_response_error(e: Error) -> AxumResponse<BoxBody> {
-    handle_puff_error("Request", e);
-    AxumResponse::builder()
-        .status(StatusCode::INTERNAL_SERVER_ERROR)
-        .body(Body::empty())
-        .unwrap()
-        .into_response()
-}
 
 pub trait PuffHandler<Inp, S, Res> {
     fn into_handler(self, filter: MethodFilter) -> MethodRouter<S>;
@@ -135,82 +113,6 @@ where
     }
 }
 
-impl<F, S, Res> PuffHandler<(), S, Res> for F
-where
-    Res: IntoResponse,
-    S: Send + Sync + 'static,
-    F: FnOnce() -> Result<Res> + Send + Sync + Clone + 'static,
-{
-    fn into_handler(self, filter: MethodFilter) -> MethodRouter<S> {
-        on(filter, move |disp| {
-            internal_handler(disp, || self().map(|v| v.into_response()))
-        })
-    }
-}
-
-impl<F, S, Req, Res> PuffHandler<(Req,), S, Res> for F
-where
-    Res: IntoResponse,
-    S: Send + Sync + 'static,
-    Req: FromRequest<S, Body> + Send + Sync + 'static,
-    F: FnOnce(Req) -> Result<Res> + Send + Sync + Clone + 'static,
-{
-    fn into_handler(self, filter: MethodFilter) -> MethodRouter<S> {
-        on(filter, move |disp, req| {
-            internal_handler(disp, || self(req).map(|v| v.into_response()))
-        })
-    }
-}
-
-impl<F, S, Req, T1, Res> PuffHandler<(Req, T1), S, Res> for F
-where
-    Res: IntoResponse,
-    S: Send + Sync + 'static,
-    Req: FromRequest<S, Body> + Send + Sync + 'static,
-    T1: FromRequestParts<S> + Send + Sync + 'static,
-    F: FnOnce(T1, Req) -> Result<Res> + Send + Sync + Clone + 'static,
-{
-    fn into_handler(self, filter: MethodFilter) -> MethodRouter<S> {
-        on(filter, move |disp, parts, req| {
-            internal_handler(disp, || self(parts, req).map(|v| v.into_response()))
-        })
-    }
-}
-
-impl<F, S, Req, T1, T2, Res> PuffHandler<(Req, T1, T2), S, Res> for F
-where
-    Res: IntoResponse,
-    S: Send + Sync + 'static,
-    Req: FromRequest<S, Body> + Send + Sync + 'static,
-    T1: FromRequestParts<S> + Send + Sync + 'static,
-    T2: FromRequestParts<S> + Send + Sync + 'static,
-    F: FnOnce(T1, T2, Req) -> Result<Res> + Send + Sync + Clone + 'static,
-{
-    fn into_handler(self, filter: MethodFilter) -> MethodRouter<S> {
-        on(filter, move |disp, parts, parts2, req| {
-            internal_handler(disp, || self(parts, parts2, req).map(|v| v.into_response()))
-        })
-    }
-}
-
-impl<F, S, Req, T1, T2, T3, Res> PuffHandler<(Req, T1, T2, T3), S, Res> for F
-where
-    Res: IntoResponse,
-    S: Send + Sync + 'static,
-    Req: FromRequest<S, Body> + Send + Sync + 'static,
-    T1: FromRequestParts<S> + Send + Sync + 'static,
-    T2: FromRequestParts<S> + Send + Sync + 'static,
-    T3: FromRequestParts<S> + Send + Sync + 'static,
-    F: FnOnce(T1, T2, T3, Req) -> Result<Res> + Send + Sync + Clone + 'static,
-{
-    fn into_handler(self, filter: MethodFilter) -> MethodRouter<S> {
-        on(filter, move |disp, parts, parts2, parts3, req| {
-            internal_handler(disp, || {
-                self(parts, parts2, parts3, req).map(|v| v.into_response())
-            })
-        })
-    }
-}
 
 impl<S> Router<S>
 where

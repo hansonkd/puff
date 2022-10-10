@@ -1,7 +1,6 @@
 use crate::databases::redis::{with_redis, Cmd, RedisClient};
 
 use crate::python::greenlet::greenlet_async;
-use crate::python::into_py_result;
 use crate::types::Bytes;
 use bb8_redis::redis::{FromRedisValue, Value};
 
@@ -73,25 +72,5 @@ impl PythonRedis {
 
     fn set(&self, py: Python, return_fun: PyObject, key: &str, val: &str) -> PyResult<PyObject> {
         self.run_command::<()>(py, return_fun, Cmd::set(key, val))
-    }
-
-    fn command(&self, py: Python, command: &PyList) -> PyResult<PyObject> {
-        let mut cmd = Cmd::new();
-        for arg in command {
-            if let Ok(v) = arg.downcast::<PyBytes>() {
-                cmd.arg(v.as_bytes());
-            } else {
-                return Err(PyValueError::new_err(
-                    "Redis command expected a list of bytes.",
-                ));
-            }
-        }
-        py.allow_threads(|| {
-            into_py_result(
-                self.0
-                    .query(cmd)
-                    .map(|v| Python::with_gil(|inner_py| extract_redis_to_python(inner_py, v))),
-            )
-        })
     }
 }

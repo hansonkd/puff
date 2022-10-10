@@ -4,5 +4,4 @@
 //! and those familiar with Tokio and Rust frameworks should feel at home.
 //!
 
-pub mod client;
 pub mod server;

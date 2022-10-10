@@ -1,8 +1,7 @@
 use crate::databases::redis::RedisClient;
 use crate::errors::{handle_puff_result, Error, PuffResult};
-use crate::runtime::dispatcher::Dispatcher;
 
-use crate::runtime::{run_with_config_on_local, RuntimeConfig};
+use crate::runtime::RuntimeConfig;
 use crate::types::{Puff, Text};
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
@@ -24,7 +23,6 @@ use tracing::{error, info};
 /// a reference to the parent Tokio Runtime as well as references to all coroutine workers.
 #[derive(Clone)]
 pub struct PuffContext {
-    dispatcher: Arc<Dispatcher>,
     handle: Handle,
     redis: Option<RedisClient>,
     postgres: Option<PostgresClient>,
@@ -86,10 +84,8 @@ pub fn with_context(context: PuffContext) {
 impl PuffContext {
     /// Creates an empty RuntimeDispatcher with no active threads for testing.
     pub fn empty(handle: Handle) -> PuffContext {
-        let (notify_shutdown, _) = broadcast::channel(1);
         Self {
             handle,
-            dispatcher: Arc::new(Dispatcher::empty(notify_shutdown)),
             redis: None,
             postgres: None,
             python_dispatcher: None,
@@ -98,17 +94,15 @@ impl PuffContext {
         }
     }
 
-    /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`. This function will start
-    /// the number of `coroutine_threads` specified in your config.
-    pub fn new(dispatcher: Arc<Dispatcher>, handle: Handle) -> PuffContext {
-        Self::new_with_options(handle, dispatcher, None, None, None, None, None)
+    /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`.
+    pub fn new(handle: Handle) -> PuffContext {
+        Self::new_with_options(handle, None, None, None, None, None)
     }
 
     /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`. This function will start
     /// the number of `coroutine_threads` specified in your config. Includes options.
     pub fn new_with_options(
         handle: Handle,
-        dispatcher: Arc<Dispatcher>,
         redis: Option<RedisClient>,
         postgres: Option<PostgresClient>,
         python_dispatcher: Option<PythonDispatcher>,
@@ -116,7 +110,6 @@ impl PuffContext {
         gql_root: Option<PuffGraphqlRoot>,
     ) -> PuffContext {
         let arc_dispatcher = Self {
-            dispatcher,
             handle,
             redis,
             postgres,
@@ -167,49 +160,12 @@ impl PuffContext {
             .clone()
             .expect("Postgres is not configured for this runtime.")
     }
-    /// The coroutine dispatcher.
-    pub fn dispatcher(&self) -> Arc<Dispatcher> {
-        self.dispatcher.clone()
-    }
-
-    /// Dispatch a task onto a blocking thread. This must be used if you use any type of non-async
-    /// blocking functions (like from the std-lib). This is also useful if you have a task that takes
-    /// a lot of computational power.
-    ///
-    /// Tokio will create up to `max_blocking_threads` as specified in [crate::runtime::RuntimeConfig], after
-    /// which it will start to queue tasks until previous tasks finish. Each task will execute up
-    /// to the duration specified in `blocking_task_keep_alive`.
-    pub fn dispatch_blocking<F, R>(&self, f: F) -> BoxFuture<'static, Result<R, Error>>
-    where
-        F: FnOnce() -> Result<R, Error> + Send + 'static,
-        R: Send + 'static,
-    {
-        let (new_sender, rec) = oneshot::channel();
-        let dispatcher = self.clone();
-        let future = self.handle.spawn_blocking(|| {
-            let handle = Handle::current();
-            let local = LocalSet::new();
-            let h = local.spawn_local(run_with_config_on_local(dispatcher, new_sender, f));
-            handle.block_on(local);
-            handle.block_on(h)
-        });
-        let f = async {
-            future.await???;
-            Ok(rec.await??)
-        };
-        f.boxed()
-    }
 }
 
 impl Default for PuffContext {
     fn default() -> Self {
         let rt = Runtime::new().unwrap();
-        let (notify_shutdown, _) = broadcast::channel(1);
-        let (dispatcher, waiting) = Dispatcher::new(notify_shutdown, RuntimeConfig::default());
-        let ctx = PuffContext::new(Arc::new(dispatcher), rt.handle().clone());
-        for w in waiting {
-            w.send(ctx.clone()).unwrap_or(());
-        }
+        let ctx = PuffContext::new(rt.handle().clone());
         ctx
     }
 }

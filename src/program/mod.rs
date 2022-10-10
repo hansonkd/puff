@@ -22,10 +22,10 @@
 //!     }
 //!
 //!     fn runnable_from_args(&self, args: &ArgMatches, context: PuffContext) -> puff::errors::Result<Runnable> {
-//!         Ok(Runnable::new(context.dispatcher().dispatch(|| {
-//!             println!("Hello World from a Puff coroutine!");
+//!         Ok(Runnable::new(async {
+//!             println!("hello from rust!");
 //!             Ok(ExitCode::SUCCESS)
-//!         })))
+//!         }))
 //!     }
 //! }
 //!
@@ -60,7 +60,6 @@ use crate::databases::pubsub::{add_pubsub_command_arguments, new_pubsub_async};
 use crate::errors::{handle_puff_error, PuffResult, Result};
 use crate::graphql::load_schema;
 use crate::python::{bootstrap_puff_globals, setup_greenlet};
-use crate::runtime::dispatcher::Dispatcher;
 use crate::runtime::RuntimeConfig;
 use crate::types::text::Text;
 use crate::types::Puff;
@@ -241,8 +240,7 @@ impl Program {
         rt.enable_all()
             .worker_threads(self.runtime_config.tokio_worker_threads())
             .max_blocking_threads(self.runtime_config.max_blocking_threads())
-            .thread_keep_alive(self.runtime_config.blocking_task_keep_alive())
-            .thread_stack_size(self.runtime_config.stack_size());
+            .thread_keep_alive(self.runtime_config.blocking_task_keep_alive());
 
         Ok(rt)
     }
@@ -256,11 +254,10 @@ impl Program {
 
     /// Tries to run the program and returns an Error if it fails.
     ///
-    /// This will parse the command line arguments, start a new runtime, dispatcher and
-    /// coroutine worker threads and blocks until the command finishes.
+    /// This will parse the command line arguments, start a new runtimeand blocks until
+    /// the command finishes.
     pub fn try_run(&self) -> Result<ExitCode> {
         tracing_subscriber::fmt::init();
-        let (notify_shutdown, _) = broadcast::channel(1);
 
         let mut top_level = self.clap_command();
 
@@ -346,25 +343,15 @@ impl Program {
                 if let Some(mod_path) = self.runtime_config.gql_module() {
                     gql_root = Some(load_schema(mod_path.as_str())?);
                 }
-                let (dispatcher, waiting) =
-                    Dispatcher::new(notify_shutdown, self.runtime_config.clone());
-                let arc_dispatcher = Arc::new(dispatcher);
-
-                arc_dispatcher.start_monitor();
 
                 let context = PuffContext::new_with_options(
                     rt.handle().clone(),
-                    arc_dispatcher,
                     redis,
                     postgres,
                     python_dispatcher,
                     pubsub_client.clone(),
                     gql_root.clone(),
                 );
-
-                for i in waiting {
-                    i.send(context.puff()).unwrap_or(());
-                }
 
                 set_puff_context(context.puff());
 

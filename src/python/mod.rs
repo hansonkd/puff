@@ -22,9 +22,6 @@ pub mod postgres;
 pub mod redis;
 pub mod wsgi;
 
-fn into_py_result<T>(r: PuffResult<T>) -> PyResult<T> {
-    r.map_err(|err| PyRuntimeError::new_err(format!("PuffError: {:?}", err)))
-}
 
 #[pyclass]
 struct ReadFileBytes;

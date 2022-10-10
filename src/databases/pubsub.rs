@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use crate::context::{supervised_task, with_puff_context};
 use crate::errors::PuffResult;
-use crate::runtime::yield_to_future_io;
 use crate::types::{Bytes, Puff, Text};
 use anyhow::anyhow;
 use bb8_redis::bb8::Pool;
@@ -136,11 +135,6 @@ async fn handle_event(
 }
 
 impl PubSubClient {
-    pub fn new<T: IntoConnectionInfo + Send + 'static>(conn: T) -> PuffResult<Self> {
-        let client = yield_to_future_io(new_pubsub_async(conn, false))??;
-        Ok(client)
-    }
-
     pub fn start_supervised_listener(&self) {
         let task_name = self.task_name.clone();
         let inner_client = self.clone();

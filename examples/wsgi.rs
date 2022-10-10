@@ -13,7 +13,7 @@ use puff::errors::PuffResult;
 use puff::program::commands::wsgi::WSGIServerCommand;
 use puff::program::Program;
 use puff::python::greenlet::greenlet_async;
-use puff::runtime::{yield_to_future, RuntimeConfig};
+use puff::runtime::RuntimeConfig;
 
 use puff::context::with_puff_context;
 
@@ -97,9 +97,6 @@ async fn get_many(key: Text, num: usize) -> PuffResult<Bytes> {
 
 fn main() -> ExitCode {
     let router = Router::new()
-        .get("/deepest/", || {
-            yield_to_future(get_many("blam".into(), 1000))
-        })
         .get("/ws/", ws_handler);
 
     let rc = RuntimeConfig::default()

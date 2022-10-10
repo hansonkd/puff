@@ -130,23 +130,6 @@ impl<'de> Deserialize<'de> for AggroScalarValue {
     }
 }
 
-// #[derive(Debug, PartialEq, Clone)]
-// #[allow(missing_docs)]
-// pub enum AggroScalarValue {
-//     Int(i32),
-//     Float(f64),
-//     String(String),
-//     Boolean(bool),
-//     Generic(Box<AggroValue>),
-// }
-//
-// impl<'de> Deserialize for AggroScalarValue {
-//     fn deserialize<D>(deserializer: D) -> Result<Self, serde::de::Error> where D: Deserializer<'de> {
-//         let Some(s) = i32::deserialize(deserializer) {
-//             return AggroScalarValue::Int(s)
-//         }
-//     }
-// }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct AggroSqlValue(JuniperValue<AggroScalarValue>);
