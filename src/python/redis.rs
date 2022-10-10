@@ -5,9 +5,9 @@ use crate::types::Bytes;
 use bb8_redis::redis::{FromRedisValue, Value};
 
 use crate::context::with_puff_context;
-use pyo3::exceptions::PyValueError;
+
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyList};
+
 
 #[pyclass]
 pub struct RedisGlobal;

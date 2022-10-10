@@ -61,13 +61,13 @@
 use std::convert::Infallible;
 use std::future::Future;
 
-use axum::body::BoxBody;
+
 use axum::http::Request as AxumRequest;
 use axum::response::{IntoResponse, Response as AxumResponse};
 use axum::{self, Extension};
 use std::net::SocketAddr;
 
-use crate::errors::{handle_puff_error, Error, Result};
+
 use axum::body::{Body, Bytes};
 use axum::handler::Handler;
 use axum::routing::{any_service, on, IntoMakeService, MethodFilter, MethodRouter};
@@ -77,7 +77,7 @@ use tower_service::Service;
 
 pub use axum::http::StatusCode;
 
-use axum::extract::{FromRequest, FromRequestParts};
+
 
 use crate::context::PuffContext;
 

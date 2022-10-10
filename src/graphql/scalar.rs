@@ -134,11 +134,6 @@ impl<'de> Deserialize<'de> for AggroScalarValue {
 #[derive(Debug, PartialEq, Clone)]
 pub struct AggroSqlValue(JuniperValue<AggroScalarValue>);
 
-impl AggroSqlValue {
-    pub fn new(value: JuniperValue<AggroScalarValue>) -> AggroSqlValue {
-        AggroSqlValue(value)
-    }
-}
 
 impl ToSql for AggroSqlValue {
     fn to_sql(&self, ty: &Type, out: &mut BytesMut) -> Result<IsNull, Box<dyn Error + Sync + Send>>
