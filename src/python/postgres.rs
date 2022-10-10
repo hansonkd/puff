@@ -196,7 +196,7 @@ impl Cursor {
                                 InternalError::new_err("Error sending cursor command"),
                             ),
                         )
-                        .map_err(|e| log_traceback_with_label("Postgres return", e))
+                        .map_err(|e| log_traceback_with_label("Postgres return", &e))
                         .unwrap()
                 });
                 handle_puff_error("Postgres", e);

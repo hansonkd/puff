@@ -22,9 +22,28 @@ impl IntoResponse for RequestError {
 
 pub fn handle_puff_error(label: &str, e: Error) {
     match e.downcast::<PyErr>() {
-        Ok(pye) => log_traceback_with_label(label, pye),
+        Ok(pye) => log_traceback_with_label(label, &pye),
         Err(e) => {
             error!("Encountered {label} Error: {e}")
+        }
+    }
+}
+
+pub fn log_puff_error<T>(label: &str, r: PuffResult<T>) -> PuffResult<T> {
+    match r {
+        Ok(pye) => Ok(pye),
+        Err(e) => {
+            match e.downcast::<PyErr>() {
+                Ok(pye) => {
+                    log_traceback_with_label(label, &pye);
+                    Err(pye.into())
+                }
+                Err(e) => {
+                    error!("Encountered {label} Error: {}", &e);
+                    Err(e)
+                }
+            }
+
         }
     }
 }

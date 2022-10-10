@@ -40,11 +40,11 @@ impl ReadFileBytes {
     }
 }
 
-pub fn log_traceback(e: PyErr) {
+pub fn log_traceback(e: &PyErr) {
     log_traceback_with_label("Unexpected", e)
 }
 
-pub fn log_traceback_with_label(label: &str, e: PyErr) {
+pub fn log_traceback_with_label(label: &str, e: &PyErr) {
     Python::with_gil(|py| {
         let t = e.traceback(py);
         let tb = t

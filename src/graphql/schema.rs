@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio_stream::wrappers::{ReceiverStream, UnboundedReceiverStream};
+use crate::errors::log_puff_error;
 
 use crate::graphql::puff_schema::{
     returned_values_into_stream, selection_to_fields, AggroArgument, AggroContext, AggroField,
@@ -364,43 +365,48 @@ impl GraphQLValueAsync<AggroScalarValue> for PuffGqlObject {
         executor: &'a Executor<'_, '_, Self::Context, AggroScalarValue>,
     ) -> BoxFuture<'a, ExecutionResult<AggroScalarValue>> {
         Box::pin(async move {
-            let look_ahead = executor.look_ahead();
-            let look_ahead_slice = &look_ahead;
+            let fut = async move {
+                let look_ahead = executor.look_ahead();
+                let look_ahead_slice = &look_ahead;
 
-            let this_obj = info
-                .all_objs
-                .get(&info.name)
-                .expect(format!("Could not find object {}", info.name).as_str());
-            let aggro_field = this_obj
-                .fields
-                .get(&field_name.to_text())
-                .expect(format!("Could not find field {}", field_name).as_str());
-            // let ctx = executor.context();
-            let pool = with_puff_context(|ctx| ctx.postgres().pool());
-            let all_objects = info.all_objs.clone();
-            let input_objs = &info.input_objs;
-            let mut client = pool.get().await?;
-            let look_ahead = Python::with_gil(|py| {
-                selection_to_fields(py, aggro_field, look_ahead_slice, input_objs, &all_objects)
-            })?;
-            // let field_obj = info.all_objs.get(field.return_type.primary_type.as_str()).unwrap();
-            let txn = client.transaction().await?;
-            let rows = Arc::new(ExtractorRootNode);
+                let this_obj = info
+                    .all_objs
+                    .get(&info.name)
+                    .expect(format!("Could not find object {}", info.name).as_str());
+                let aggro_field = this_obj
+                    .fields
+                    .get(&field_name.to_text())
+                    .expect(format!("Could not find field {}", field_name).as_str());
+                // let ctx = executor.context();
+                let pool = with_puff_context(|ctx| ctx.postgres().pool());
+                let all_objects = info.all_objs.clone();
+                let input_objs = &info.input_objs;
+                let mut client = pool.get().await?;
+                let look_ahead = Python::with_gil(|py| {
+                    selection_to_fields(py, aggro_field, look_ahead_slice, input_objs, &all_objects)
+                })?;
+                // let field_obj = info.all_objs.get(field.return_type.primary_type.as_str()).unwrap();
+                let txn = client.transaction().await?;
+                let rows = Arc::new(ExtractorRootNode);
 
-            let res =
-                returned_values_into_stream(&txn, rows, &look_ahead, aggro_field, all_objects)
-                    .await?;
+                let res =
+                    returned_values_into_stream(&txn, rows, &look_ahead, aggro_field, all_objects)
+                        .await?;
 
-            if info.commit {
-                txn.commit().await?;
-            } else {
-                txn.rollback().await?;
-            }
+                if info.commit {
+                    txn.commit().await?;
+                } else {
+                    txn.rollback().await?;
+                }
 
-            for s in res {
-                return Ok(s);
-            }
-            return Ok(AggroValue::Null);
+                for s in res {
+                    return Ok(s);
+                }
+                return Ok(AggroValue::Null);
+            };
+            let result = log_puff_error("GQL", fut.await);
+
+            return Ok(result?);
         })
     }
 }
@@ -426,36 +432,41 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
         'e: 'res,
     {
         Box::pin(async move {
-            let look_ahead = executor.look_ahead();
-            let look_ahead_slice = &look_ahead;
+            let fut = async move {
+                let look_ahead = executor.look_ahead();
+                let look_ahead_slice = &look_ahead;
 
-            let this_obj = info
-                .all_objs
-                .get(&info.name)
-                .expect(format!("Could not find object {}", info.name).as_str());
-            let field = this_obj
-                .fields
-                .get(&field_name.to_text())
-                .expect(format!("Could not find subscription field {}", field_name).as_str());
-            // let ctx = executor.context();
-            let (sender, ret) = unbounded_channel();
-            let all_objects = info.all_objs.clone();
-            let input_objs = &info.input_objs;
-            let look_ahead = Python::with_gil(|py| {
-                selection_to_fields(py, field, look_ahead_slice, input_objs, &all_objects)
-            })?;
+                let this_obj = info
+                    .all_objs
+                    .get(&info.name)
+                    .expect(format!("Could not find object {}", info.name).as_str());
+                let field = this_obj
+                    .fields
+                    .get(&field_name.to_text())
+                    .expect(format!("Could not find subscription field {}", field_name).as_str());
+                // let ctx = executor.context();
+                let (sender, ret) = unbounded_channel();
+                let all_objects = info.all_objs.clone();
+                let input_objs = &info.input_objs;
+                let look_ahead = Python::with_gil(|py| {
+                    selection_to_fields(py, field, look_ahead_slice, input_objs, &all_objects)
+                })?;
 
-            let ss = SubscriptionSender::new(sender, look_ahead, field.clone(), all_objects);
+                let ss = SubscriptionSender::new(sender, look_ahead, field.clone(), all_objects);
 
-            let py_dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
-            let acceptor_method = field
-                .acceptor_method
-                .clone()
-                .expect("Subscription field needs an acceptor");
-            py_dispatcher.dispatch::<_, &PyDict>(acceptor_method, (ss,), None)?;
-            let stream: ValuesStream<AggroScalarValue> =
-                Box::pin(UnboundedReceiverStream::new(ret));
-            return Ok(Value::Scalar(stream));
+                let py_dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
+                let acceptor_method = field
+                    .acceptor_method
+                    .clone()
+                    .expect("Subscription field needs an acceptor");
+                py_dispatcher.dispatch::<_, &PyDict>(acceptor_method, (ss, ), None)?;
+                let stream: ValuesStream<AggroScalarValue> =
+                    Box::pin(UnboundedReceiverStream::new(ret));
+                Ok(Value::Scalar(stream))
+            };
+            let result = log_puff_error("GQL Subscription", fut.await);
+
+            return Ok(result?);
         })
     }
 }

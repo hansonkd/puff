@@ -45,16 +45,16 @@ pub async fn handle_return<F: Future<Output = PuffResult<R>>, R: ToPyObject>(
         match res {
             Ok(r) => return_fun
                 .call1(py, (r.to_object(py), py.None()))
-                .map_err(|e| log_traceback(e)),
+                .map_err(|e| log_traceback(&e)),
             Err(e) => match e.downcast::<PyErr>() {
                 Ok(py_err) => return_fun
                     .call1(py, (py.None(), py_err))
-                    .map_err(|e| log_traceback(e)),
+                    .map_err(|e| log_traceback(&e)),
                 Err(e) => {
                     let py_err = PyException::new_err(format!("Rust Error: {e}"));
                     return_fun
                         .call1(py, (py.None(), py_err))
-                        .map_err(|e| log_traceback(e))
+                        .map_err(|e| log_traceback(&e))
                 }
             },
         }
@@ -71,10 +71,10 @@ pub async fn handle_python_return<F: Future<Output = PyResult<R>>, R: ToPyObject
         match res {
             Ok(r) => return_fun
                 .call1(py, (r.to_object(py), py.None()))
-                .map_err(|e| log_traceback(e)),
+                .map_err(|e| log_traceback(&e)),
             Err(py_err) => return_fun
                 .call1(py, (py.None(), py_err))
-                .map_err(|e| log_traceback(e)),
+                .map_err(|e| log_traceback(&e)),
         }
         .unwrap_or(py.None())
     });

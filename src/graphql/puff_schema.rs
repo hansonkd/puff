@@ -101,6 +101,7 @@ pub struct AggroField {
     pub producer_method: Option<Py<PyAny>>,
     pub acceptor_method: Option<Py<PyAny>>,
     pub arguments: BTreeMap<Text, AggroArgument>,
+    pub safe_without_context: bool,
     pub default: Py<PyAny>,
 }
 
@@ -190,6 +191,7 @@ pub fn convert_obj(name: &str, desc: BTreeMap<String, &PyAny>) -> PyResult<Aggro
             return_type: decode_type(field_description.getattr("return_type")?)?,
             producer_method: field_description.getattr("producer")?.extract()?,
             acceptor_method: field_description.getattr("acceptor")?.extract()?,
+            safe_without_context: field_description.getattr("safe_without_context")?.extract()?,
             default: field_description.getattr("default")?.extract()?,
             arguments: final_arguments,
         };
@@ -215,7 +217,7 @@ impl PyExtract {
         for row in rows {
             let py_row = PyList::empty(py);
             for val in row {
-                py_row.append(value_to_python(py, &val)?)?
+                py_row.append(to_py_error("Gql Extract", value_to_python(py, &val))?)?
             }
             ret_list.append(py_row)?
         }
@@ -223,7 +225,7 @@ impl PyExtract {
     }
 }
 
-fn value_to_python(py: Python, v: &AggroValue) -> PyResult<Py<PyAny>> {
+fn value_to_python(py: Python, v: &AggroValue) -> PuffResult<Py<PyAny>> {
     match v {
         AggroValue::List(inner) => {
             let mut val_vec: Vec<PyObject> = Vec::with_capacity(inner.len());
@@ -244,7 +246,7 @@ fn value_to_python(py: Python, v: &AggroValue) -> PyResult<Py<PyAny>> {
     }
 }
 
-fn scalar_to_python(py: Python, v: &AggroScalarValue) -> PyResult<Py<PyAny>> {
+fn scalar_to_python(py: Python, v: &AggroScalarValue) -> PuffResult<Py<PyAny>> {
     match v {
         AggroScalarValue::String(s) => Ok(s.into_py(py)),
         AggroScalarValue::Int(s) => Ok(s.into_py(py)),
@@ -259,13 +261,13 @@ fn input_to_python(
     t: &DecodedType,
     all_inputs: &Arc<BTreeMap<Text, AggroObject>>,
     v: &LookAheadValue<AggroScalarValue>,
-) -> PyResult<Py<PyAny>> {
+) -> PuffResult<Py<PyAny>> {
     match v {
         LookAheadValue::Null => {
             if t.optional {
                 return Ok(PyList::empty(py).into_py(py));
             } else {
-                return Err(PyException::new_err("Null supplied to non-optional field"));
+                bail!("Null supplied to non-optional field");
             }
         }
         _ => (),
@@ -278,9 +280,9 @@ fn input_to_python(
                 for iv in inner {
                     val_vec.push(input_to_python(py, inner_t, all_inputs, iv)?);
                 }
-                Ok(PyList::new(py, val_vec).into_py(py))
+                PuffResult::Ok(PyList::new(py, val_vec).into_py(py))
             }
-            _ => Err(PyException::new_err("Input non-list to a list input")),
+            _ => bail!("Input non-list to a list input"),
         },
         AggroTypeInfo::Object(inner_t_name) => match v {
             LookAheadValue::Object(inner) => {
@@ -303,37 +305,37 @@ fn input_to_python(
                         }
                     }
                     if required.len() > 0 {
-                        Err(PyException::new_err(format!(
+                        bail!(
                             "Missing required fields {:?}",
                             required
-                        )))
+                        )
                     } else {
                         Ok(val_vec.into_py_dict(py).into_py(py))
                     }
                 } else {
-                    Err(PyException::new_err(format!(
+                    bail!(
                         "Could not find type {}",
                         inner_t_name
-                    )))
+                    )
                 }
             }
-            _ => Err(PyException::new_err("Input non-object to a object input")),
+            _ => bail!("Input non-object to a object input"),
         },
         AggroTypeInfo::Int => match v {
             LookAheadValue::Scalar(&AggroScalarValue::Int(i)) => Ok(i.into_py(py)),
-            _ => Err(PyException::new_err("Input non-int to a int input")),
+            _ => bail!("Input non-int to a int input"),
         },
         AggroTypeInfo::Float => match v {
             LookAheadValue::Scalar(&AggroScalarValue::Float(i)) => Ok(i.into_py(py)),
-            _ => Err(PyException::new_err("Input non-float to a float input")),
+            _ => bail!("Input non-float to a float input"),
         },
         AggroTypeInfo::String => match v {
             LookAheadValue::Scalar(AggroScalarValue::String(i)) => Ok(i.into_py(py)),
-            _ => Err(PyException::new_err("Input non-string to a string input")),
+            _ => bail!("Input non-string to a string input"),
         },
         AggroTypeInfo::Boolean => match v {
             LookAheadValue::Scalar(AggroScalarValue::Boolean(i)) => Ok(i.into_py(py)),
-            _ => Err(PyException::new_err("Input non-bool to a bool input")),
+            _ => bail!("Input non-bool to a bool input"),
         },
         AggroTypeInfo::Any => match v {
             LookAheadValue::Null => Ok(py.None()),
@@ -352,9 +354,9 @@ fn input_to_python(
                 }
                 Ok(v.into_py_dict(py).into_py(py))
             }
-            _ => Err(PyException::new_err("Input non-bool to a bool input")),
+            _ => bail!("Input non-bool to a bool input"),
         },
-        _ => Err(PyException::new_err("Input non-list to a list input")),
+        _ => bail!("Input non-list to a list input")
     }
 }
 
@@ -451,17 +453,26 @@ pub async fn do_returned_values_into_stream(
 
     match class_method {
         Some(cm) => {
+            let py_extractor = PyExtract {
+                extractor: rows.clone(),
+            };
+            let result = if aggro_field.safe_without_context {
+                Python::with_gil(|py| {
+                    let arg_dict = args.into_py_dict(py);
+                    cm.call(py, ("wow", py_extractor), Some(arg_dict))
+                })?
+            } else {
+                let py_dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
+                let rec = Python::with_gil(|py| {
+                    let arg_dict = args.into_py_dict(py);
+                    py_dispatcher.dispatch(cm, ("wow", py_extractor), Some(arg_dict))
+                })?;
+
+                rec.await??
+            };
+
             let (method_result, method_corr) = Python::with_gil(|py| {
-                let class_method_ref = cm.as_ref(py);
-                let py_res = class_method_ref.call(
-                    (
-                        "wow",
-                        PyExtract {
-                            extractor: rows.clone(),
-                        },
-                    ),
-                    Some(args.into_py_dict(py)),
-                )?;
+                let py_res = result.as_ref(py);
                 if let Ok((_elp, q, l)) = py_res.extract::<(&PyAny, &PyString, &PyList)>() {
                     let v = l
                         .into_iter()
@@ -715,7 +726,7 @@ pub fn selection_to_fields(
     c: &LookAheadSelection<AggroScalarValue>,
     all_inputs: &Arc<BTreeMap<Text, AggroObject>>,
     all_objects: &Arc<BTreeMap<Text, AggroObject>>,
-) -> PyResult<LookAheadFields> {
+) -> PuffResult<LookAheadFields> {
     let args = collect_arguments_for_python(py, all_inputs, field, c.arguments())?;
     if c.has_children() {
         let t = match &field.return_type.type_info {
@@ -723,15 +734,15 @@ pub fn selection_to_fields(
             AggroTypeInfo::List(inner) => match &inner.type_info {
                 AggroTypeInfo::Object(t) => t,
                 _ => {
-                    return Err(PyException::new_err(
+                    bail!(
                         "Input with children passed an object when none was expected.",
-                    ))
+                    )
                 }
             },
             _ => {
-                return Err(PyException::new_err(
+                return bail!(
                     "Input with children passed an object when none was expected.",
-                ))
+                )
             }
         };
 
@@ -749,7 +760,7 @@ pub fn selection_to_fields(
             }
             Ok(Nested(args, final_res))
         } else {
-            Err(PyException::new_err(format!("Couldn't find type {}", t)))
+            bail!("Couldn't find type {}", t)
         }
     } else {
         Ok(Terminal(args))
@@ -761,7 +772,7 @@ fn collect_arguments_for_python(
     all_inputs: &Arc<BTreeMap<Text, AggroObject>>,
     field: &AggroField,
     args: &[LookAheadArgument<AggroScalarValue>],
-) -> PyResult<BTreeMap<Text, PyObject>> {
+) -> PuffResult<BTreeMap<Text, PyObject>> {
     let mut ret = BTreeMap::new();
     for c in args {
         let key = c.name().to_text();

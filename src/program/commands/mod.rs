@@ -9,6 +9,8 @@ use hyper::server::Builder;
 use std::net::SocketAddr;
 use std::process::ExitCode;
 use std::sync::Mutex;
+use tracing::info;
+use tracing::log::log;
 
 pub mod django_management;
 pub mod http;
@@ -54,6 +56,7 @@ pub struct HttpServerConfig {
 
 impl HttpServerConfig {
     pub fn server_builder(&self) -> Builder<AddrIncoming> {
+        info!("Serving on http://{}", &self.socket_addr);
         return axum::Server::bind(&self.socket_addr);
     }
 

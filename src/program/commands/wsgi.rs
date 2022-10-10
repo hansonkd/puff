@@ -97,7 +97,6 @@ async fn start(
     wsgi: WsgiHandler,
 ) {
     let app = router.into_axum_router(puff_context).fallback(wsgi);
-    info!("Starting server on {:?}", http_configuration.socket_addr);
     if let Err(err) = http_configuration
         .server_builder()
         .serve(app.into_make_service())

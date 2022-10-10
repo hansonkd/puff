@@ -31,7 +31,6 @@ def wrap_subscription_sender(acceptor_method):
     @wraps(acceptor_method)
     def new_acceptor(*args):
         self = None
-        print(args)
         if len(args) == 1:
             sender = args[0]
         else:
@@ -63,6 +62,10 @@ def acceptor(acceptor_method):
     return decorator
 
 
+def safe_without_context(func):
+    func.safe_without_context = True
+    return func
+
 NoneType = type(None)
 
 T = TypeVar('T')
@@ -85,6 +88,7 @@ class FieldDescription:
     """Class for keeping track of an item in inventory."""
     return_type: Any
     arguments: Dict[str, Any]
+    safe_without_context: bool = False
     producer: Optional[Callable[[Any], Any]] = None
     acceptor: Optional[Callable[[Callable[[Any], None]], None]] = None
     depends_on: Optional[List[str]] = None
@@ -188,10 +192,8 @@ def wrap_method(method, type_hints):
     def wrapped_method(*args, **kwargs):
         for arg_name, arg_value in kwargs.items():
             is_list, arg_field_type = expanded_hints.get(arg_name, None)
-            print(f"called: {is_list} {arg_name} {arg_value}")
 
             if is_list and is_dataclass(arg_field_type) and isinstance(arg_value, list):
-
                 new_obj = [arg_field_type(**v) if isinstance(v, dict) else v for v in arg_value]
                 kwargs[arg_name] = new_obj
             elif is_dataclass(arg_field_type) and isinstance(arg_value, dict):
@@ -203,7 +205,6 @@ def wrap_method(method, type_hints):
 
 
 def load_aggro_type(t, all_types, input_types, is_input):
-    print(("type", t))
     type_name = get_type_name(t)
 
     properties = {}
@@ -225,7 +226,7 @@ def load_aggro_type(t, all_types, input_types, is_input):
 
         field_type = type_to_scalar(field_t, all_types, input_types, is_input)
         db_column = field.name
-        desc = FieldDescription(return_type=field_type, arguments={}, depends_on=[db_column], default=field.default)
+        desc = FieldDescription(return_type=field_type, arguments={}, depends_on=[db_column], safe_without_context=True, default=field.default)
         properties[field.name] = desc
 
     if is_input:
@@ -239,7 +240,6 @@ def load_aggro_type(t, all_types, input_types, is_input):
         type_hints = get_type_hints(method)
         signature = inspect.signature(method)
         params = signature.parameters
-        print(("method", method_name, method.__self__))
         if method.__self__ is t:
             arguments = {}
             positional_only = []
@@ -256,7 +256,6 @@ def load_aggro_type(t, all_types, input_types, is_input):
                         raise Exception(f"Keyword argument for field {param_name} in {method_name} in type {t.__name__} does not have annotation")
                     param_t = annotation
                     scalar_t = type_to_scalar(param_t, all_types, input_types, True)
-                    print(("param_type", param, param_t, get_origin(param_t), scalar_t))
                     arguments[param_name] = ParameterDescription(param_type=scalar_t, default=default)
                 else:
                     raise Exception(f"Invalid Parameter {param_name} in {method_name} in type {t.__name__}")
@@ -288,13 +287,14 @@ def load_aggro_type(t, all_types, input_types, is_input):
 
             depends_on = getattr(method, "depends_on", None)
             acceptor = getattr(method, "acceptor", None)
+            safe_without_context = getattr(method, "safe_without_context", False)
             wrapped_method = wrap_method(method, type_hints)
 
-            desc = FieldDescription(return_type=type_to_scalar(return_t, all_types, input_types, is_input), arguments=arguments, acceptor=acceptor, producer=wrapped_method, depends_on=depends_on)
+            desc = FieldDescription(return_type=type_to_scalar(return_t, all_types, input_types, is_input), safe_without_context=safe_without_context, arguments=arguments, acceptor=acceptor, producer=wrapped_method, depends_on=depends_on)
             properties[method_name] = desc
 
         else:
-            print(f"Skipping method {method_name}")
+            pass
 
 
 def type_to_description(schema):

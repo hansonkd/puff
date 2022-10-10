@@ -97,7 +97,7 @@ impl IntoResponse for WsgiError {
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
             }
             WsgiError::PyErr(e) => {
-                log_traceback_with_label("Wsgi", e);
+                log_traceback_with_label("Wsgi", &e);
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
             }
         }
