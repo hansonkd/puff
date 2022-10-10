@@ -1,10 +1,10 @@
-use std::process::ExitCode;
 use puff::errors::Result;
 use puff::program::commands::http::ServerCommand;
 use puff::program::Program;
 use puff::types::text::Text;
 use puff::web::client::{Client, PuffClientResponse, PuffRequestBuilder};
 use puff::web::server::Router;
+use std::process::ExitCode;
 
 fn main() -> ExitCode {
     // build our application with a route

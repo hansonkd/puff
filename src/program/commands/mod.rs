@@ -4,6 +4,8 @@ use crate::program::{Runnable, RunnableCommand};
 use crate::types::Text;
 use anyhow::anyhow;
 use clap::{Arg, ArgMatches, Command};
+use hyper::server::conn::AddrIncoming;
+use hyper::server::Builder;
 use std::net::SocketAddr;
 use std::process::ExitCode;
 use std::sync::Mutex;
@@ -51,6 +53,10 @@ pub struct HttpServerConfig {
 }
 
 impl HttpServerConfig {
+    pub fn server_builder(&self) -> Builder<AddrIncoming> {
+        return axum::Server::bind(&self.socket_addr);
+    }
+
     pub fn add_command_options(cmd: Command) -> Command {
         cmd.arg(
             Arg::new("bind")

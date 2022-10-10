@@ -7,8 +7,6 @@ use puff::web::server::Router;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let router = Router::new();
-
     let rc = RuntimeConfig::default()
         .add_env("DJANGO_SETTINGS_MODULE", "puff_django_example.settings")
         .add_python_path("examples/puff_django_example")
@@ -21,8 +19,8 @@ fn main() -> ExitCode {
         .about("This is my first django app")
         .runtime_config(rc)
         .command(WSGIServerCommand::new(
-            router,
             "puff_django_example.wsgi.application",
+            || Router::new(),
         ))
         .command(DjangoManagementCommand::new())
         .command(PytestCommand::new("examples/puff_django_example"))

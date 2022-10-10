@@ -4,7 +4,8 @@
 //! Anyhow's documentation for more information.
 use crate::python::log_traceback_with_label;
 use axum::response::{IntoResponse, Response};
-use pyo3::PyErr;
+use pyo3::exceptions::PyException;
+use pyo3::{PyErr, PyResult, Python};
 use tracing::error;
 
 pub type Result<T> = anyhow::Result<T>;
@@ -25,6 +26,16 @@ pub fn handle_puff_error(label: &str, e: Error) {
         Err(e) => {
             error!("Encountered {label} Error: {e}")
         }
+    }
+}
+
+pub fn to_py_error<T>(label: &str, r: PuffResult<T>) -> PyResult<T> {
+    match r {
+        Ok(v) => Ok(v),
+        Err(e) => match e.downcast::<PyErr>() {
+            Ok(pye) => Err(pye),
+            Err(e) => Err(PyException::new_err(format!("Puff Error: {}", e))),
+        },
     }
 }
 

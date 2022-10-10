@@ -18,3 +18,4 @@ Cargo.lock
 __pycache__/
 *.py[cod]
 .venv
+.idea/vcs.xml

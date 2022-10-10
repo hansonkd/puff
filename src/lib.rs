@@ -72,10 +72,13 @@
 //! Run with `cargo run server` or use `cargo run help` to show all CLI options of your Puff program.
 //!
 //!
+extern crate core;
+
 pub mod channels;
 pub mod context;
 pub mod databases;
 pub mod errors;
+pub mod graphql;
 pub mod program;
 pub mod python;
 pub mod rand;

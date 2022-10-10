@@ -1,8 +1,8 @@
 extern crate core;
 
-use std::process::ExitCode;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::WebSocketUpgrade;
+use std::process::ExitCode;
 
 use axum::response::Response;
 use bb8_redis::redis::Cmd;
@@ -100,7 +100,7 @@ fn main() -> ExitCode {
         .get("/deepest/", || {
             yield_to_future(get_many("blam".into(), 1000))
         })
-        .get::<_, _, _, Response>("/ws/", ws_handler);
+        .get("/ws/", ws_handler);
 
     let rc = RuntimeConfig::default()
         .set_postgres(true)
@@ -111,7 +111,9 @@ fn main() -> ExitCode {
     Program::new("my_first_app")
         .about("This is my first app")
         .runtime_config(rc)
-        .command(WSGIServerCommand::new(router, "flask_example.app"))
+        .command(WSGIServerCommand::new("flask_example.app", || {
+            router.clone()
+        }))
         .run()
 }
 

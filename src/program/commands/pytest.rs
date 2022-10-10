@@ -5,7 +5,7 @@ use crate::types::Text;
 use clap::{Arg, ArgMatches, Command};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
-use std::path::{PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// The WSGIServerCommand.

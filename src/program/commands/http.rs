@@ -5,35 +5,36 @@ use crate::program::{Runnable, RunnableCommand};
 use crate::web::server::Router;
 use clap::{ArgMatches, Command};
 
+use crate::program::commands::HttpServerConfig;
+use axum::ServiceExt;
 use std::net::SocketAddr;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 /// The ServerCommand.
 ///
 /// Exposes options to the command line to set the port and host of the server.
 #[derive(Clone)]
-pub struct ServerCommand(Router);
+pub struct ServerCommand<F: Fn() -> Router + 'static>(Arc<F>);
 
-impl ServerCommand {
-    pub fn new(s: Router) -> Self {
-        Self(s)
+impl<F: Fn() -> Router + 'static> ServerCommand<F> {
+    pub fn new(s: F) -> Self {
+        Self(Arc::new(s))
     }
 }
 
-impl RunnableCommand for ServerCommand {
+impl<F: Fn() -> Router + 'static> RunnableCommand for ServerCommand<F> {
     fn cli_parser(&self) -> Command {
-        Command::new("runserver")
+        HttpServerConfig::add_command_options(Command::new("runserver"))
     }
 
-    fn runnable_from_args(&self, _args: &ArgMatches, context: PuffContext) -> Result<Runnable> {
-        let this_self = self.clone();
-        let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    fn runnable_from_args(&self, args: &ArgMatches, context: PuffContext) -> Result<Runnable> {
+        let config = HttpServerConfig::new_from_args(args);
+        let router_fn = self.0.clone();
         let fut = async move {
-            this_self
-                .0
-                .clone()
-                .into_hyper_server(&addr, context)
-                .await?;
+            let app = router_fn().into_axum_router(context);
+            let server = config.server_builder().serve(app.into_make_service());
+            server.await?;
             Ok(ExitCode::SUCCESS)
         };
         Ok(Runnable::new(fut))

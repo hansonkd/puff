@@ -6,6 +6,7 @@ use crate::python::wsgi::{create_server_context, WsgiServerSpawner};
 use crate::web::server::Router;
 use clap::{ArgMatches, Command};
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use crate::python::wsgi::handler::WsgiHandler;
 use crate::types::Text;
@@ -18,15 +19,15 @@ use crate::program::commands::HttpServerConfig;
 use crate::types::text::ToText;
 use tracing::info;
 
-struct WSGIConstructor {
+struct WSGIConstructor<F: Fn() -> Router + 'static> {
     config: HttpServerConfig,
-    router: Router,
+    router: Arc<F>,
     puff_context: PuffContext,
 }
 
-impl WsgiServerSpawner for WSGIConstructor {
+impl<F: Fn() -> Router + 'static> WsgiServerSpawner for WSGIConstructor<F> {
     fn call(self, handler: WsgiHandler) -> LocalBoxFuture<'static, ()> {
-        start(self.config, self.router, self.puff_context, handler).boxed_local()
+        start(self.config, (self.router)(), self.puff_context, handler).boxed_local()
     }
 }
 
@@ -34,21 +35,21 @@ impl WsgiServerSpawner for WSGIConstructor {
 ///
 /// Exposes options to the command line to set the port and host of the server.
 #[derive(Clone)]
-pub struct WSGIServerCommand {
-    router: Router,
+pub struct WSGIServerCommand<F: Fn() -> Router + 'static> {
+    router: Arc<F>,
     app_path: Text,
 }
 
-impl WSGIServerCommand {
-    pub fn new<M: Into<Text>>(router: Router, app_path: M) -> Self {
+impl<F: Fn() -> Router + 'static> WSGIServerCommand<F> {
+    pub fn new<M: Into<Text>>(app_path: M, f: F) -> Self {
         Self {
-            router,
+            router: Arc::new(f),
             app_path: app_path.into(),
         }
     }
 }
 
-impl RunnableCommand for WSGIServerCommand {
+impl<F: Fn() -> Router + 'static> RunnableCommand for WSGIServerCommand<F> {
     fn cli_parser(&self) -> Command {
         HttpServerConfig::add_command_options(Command::new("runserver"))
     }
@@ -67,6 +68,7 @@ impl RunnableCommand for WSGIServerCommand {
 
         let config = HttpServerConfig::new_from_args(args);
 
+        let router_fn = this_self.router.clone();
         let fut = async move {
             let server_name = config.socket_addr.ip().to_text();
             let server_port = config.socket_addr.port();
@@ -75,7 +77,7 @@ impl RunnableCommand for WSGIServerCommand {
                 WSGIConstructor {
                     config,
                     puff_context: context.clone(),
-                    router: this_self.router.clone(),
+                    router: router_fn,
                 },
                 context.clone(),
                 server_name,
@@ -96,7 +98,8 @@ async fn start(
 ) {
     let app = router.into_axum_router(puff_context).fallback(wsgi);
     info!("Starting server on {:?}", http_configuration.socket_addr);
-    if let Err(err) = axum::Server::bind(&http_configuration.socket_addr)
+    if let Err(err) = http_configuration
+        .server_builder()
         .serve(app.into_make_service())
         .await
     {

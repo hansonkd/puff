@@ -59,6 +59,7 @@
 //! ```
 //!
 use std::convert::Infallible;
+use std::future::Future;
 
 use axum::body::BoxBody;
 use axum::http::Request as AxumRequest;
@@ -122,9 +123,9 @@ pub trait PuffHandler<Inp, S, Res> {
 
 pub struct AxumHandlerArgs<T>(T);
 
-impl<F, S, T1, Res> PuffHandler<AxumHandlerArgs<T1>, S, Res> for F
+impl<F, S, T1>
+    PuffHandler<AxumHandlerArgs<T1>, S, <<F as Handler<T1, S>>::Future as Future>::Output> for F
 where
-    Res: IntoResponse,
     S: Send + Sync + 'static,
     T1: Send + Sync + 'static,
     F: Handler<T1, S>,

@@ -8,9 +8,10 @@ use bb8_redis::redis::{
 };
 use compact_str::{CompactString, ToCompactString};
 use pyo3::types::PyString;
-use pyo3::{FromPyObject, PyAny, PyResult};
+use pyo3::{FromPyObject, PyAny, PyObject, PyResult, Python, ToPyObject};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::fmt::{Display, Formatter, Pointer};
 use std::ops::{Add, Deref};
 use std::str::{from_utf8, FromStr};
@@ -47,6 +48,20 @@ impl Display for Text {
     }
 }
 
+impl PartialOrd for Text {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.0.as_str().partial_cmp(other.0.as_str())
+    }
+}
+
+
+impl Ord for Text {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.as_str().cmp(other.0.as_str())
+    }
+}
+
+
 impl Text {
     pub fn new() -> Text {
         Text(CompactString::from(""))
@@ -73,11 +88,11 @@ impl Text {
 //     }
 // }
 
-// impl ToPyObject for Text {
-//     fn to_object(&self, py: Python<'_>) -> PyObject {
-//         self.0.to_object(py)
-//     }
-// }
+impl ToPyObject for Text {
+    fn to_object(&self, py: Python<'_>) -> PyObject {
+        self.0.as_str().to_object(py)
+    }
+}
 
 impl Add for Text {
     type Output = Self;
