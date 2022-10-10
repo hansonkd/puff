@@ -17,7 +17,6 @@ use crate::context::with_puff_context;
 use crate::graphql::AggroContext;
 use async_trait::async_trait;
 use axum::extract::ws::{Message, WebSocket};
-use futures_util::FutureExt;
 use hyper::Body;
 use juniper::futures::{SinkExt, StreamExt, TryStreamExt};
 use juniper_graphql_ws::{ClientMessage, Connection, ConnectionConfig, Schema, WebsocketError};

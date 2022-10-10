@@ -12,7 +12,7 @@ use pyo3::{FromPyObject, PyAny, PyObject, PyResult, Python, ToPyObject};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::fmt::{Display, Formatter, Pointer};
+use std::fmt::{Display, Formatter};
 use std::ops::{Add, Deref};
 use std::str::{from_utf8, FromStr};
 
@@ -77,14 +77,6 @@ impl Text {
         self.0.as_str()
     }
 }
-
-//
-// impl<'source> FromPyObject<'source> for Text {
-//     fn extract(ob: &'source PyAny) -> PyResult<Self> {
-//         let s: &str = ob.extract()?;
-//         Ok(Text(CompactString::from(s)))
-//     }
-// }
 
 impl ToPyObject for Text {
     fn to_object(&self, py: Python<'_>) -> PyObject {

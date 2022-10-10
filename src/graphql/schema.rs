@@ -1,7 +1,6 @@
 use crate::context::with_puff_context;
 use async_trait::async_trait;
 
-use juniper::executor::LookAheadMethods;
 use juniper::meta::{Argument, Field, MetaType};
 use juniper::{
     Arguments, BoxFuture, ExecutionResult, Executor, FieldError,
@@ -26,11 +25,6 @@ use crate::graphql::scalar::{AggroScalarValue, AggroValue, GenericScalar};
 use crate::types::text::ToText;
 use crate::types::Text;
 
-pub enum SchemaComponent {
-    Mutation,
-    Query,
-    Subscription,
-}
 
 #[derive(Debug, Clone)]
 pub struct SchemaInfo {

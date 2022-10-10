@@ -6,8 +6,6 @@ use crate::web::server::Router;
 use clap::{ArgMatches, Command};
 
 use crate::program::commands::HttpServerConfig;
-use axum::ServiceExt;
-
 use std::process::ExitCode;
 use std::sync::Arc;
 

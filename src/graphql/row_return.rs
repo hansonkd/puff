@@ -1,47 +1,13 @@
-
-
-use crate::graphql::scalar::{AggroScalarValue, AggroValue, AlignedValues};
+use crate::graphql::scalar::{AggroScalarValue, AggroValue};
 
 use crate::types::Text;
 use anyhow::{anyhow, bail, Result};
 use juniper::Object;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString};
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::collections::HashMap;
 use tokio_postgres::{Column, Row, Statement};
 
-pub type FlatValueVec = Vec<AggroScalarValue>;
-
-fn to_unique_scalars<I>(values: I) -> Result<Vec<AggroScalarValue>>
-where
-    I: Iterator<Item = AggroValue>,
-{
-    let mut scalar_set: HashSet<AggroScalarValue> = HashSet::new();
-    for v in values {
-        match v {
-            AggroValue::Scalar(s) => {
-                scalar_set.insert(s);
-            }
-            _ => {
-                bail!("Expected scalar")
-            }
-        }
-    }
-    Ok(scalar_set.into_iter().collect())
-}
-
-pub trait RowReturn: Send {
-    fn len(&self) -> usize;
-    fn flatten(&self, name: &str) -> Result<FlatValueVec> {
-        let flat_vec: Vec<_> = match self.extract_aligned(&[name])? {
-            AlignedValues::One(one) => to_unique_scalars(one.into_values().flatten())?,
-            AlignedValues::Many(many) => to_unique_scalars(many.into_values().flatten().flatten())?,
-        };
-        Ok(flat_vec)
-    }
-    fn extract_aligned(&self, names: &[&str]) -> Result<AlignedValues>;
-}
 
 pub fn convert_pyany_to_jupiter(attribute_val: &PyAny) -> AggroValue {
     if let Ok(s) = attribute_val.extract() {
@@ -86,85 +52,6 @@ pub fn convert_pyany_to_jupiter(attribute_val: &PyAny) -> AggroValue {
     AggroValue::Object(obj)
 }
 
-#[derive(Debug, Clone)]
-pub struct RootNode;
-
-impl RowReturn for RootNode {
-    fn len(&self) -> usize {
-        return 1;
-    }
-    fn extract_aligned(&self, names: &[&str]) -> Result<AlignedValues> {
-        let v = names.into_iter().map(|_| AggroValue::Null).collect();
-        Ok(AlignedValues::One(HashMap::from([(
-            AggroScalarValue::Int(0),
-            v,
-        )])))
-    }
-}
-
-impl RootNode {
-    pub fn make_row_return() -> Arc<dyn RowReturn + Sync + Send> {
-        Arc::new(RootNode)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum PythonReturnValues {
-    One(HashMap<AggroScalarValue, Py<PyAny>>),
-    Many(HashMap<AggroScalarValue, Vec<Py<PyAny>>>),
-}
-
-#[derive(Debug, Clone)]
-pub struct PythonRows {
-    pub py_rows: PythonReturnValues,
-}
-
-impl RowReturn for PythonRows {
-    fn len(&self) -> usize {
-        match &self.py_rows {
-            PythonReturnValues::One(one) => one.len(),
-            PythonReturnValues::Many(many) => many.len(),
-        }
-    }
-    fn extract_aligned(&self, fields: &[&str]) -> Result<AlignedValues> {
-        let my_vals: AlignedValues = Python::with_gil(|py| -> PyResult<_> {
-            match &self.py_rows {
-                PythonReturnValues::One(one) => {
-                    let mut new_vals = Vec::with_capacity(self.len());
-                    for (key, obj) in one.iter() {
-                        let mut ret = Vec::with_capacity(fields.len());
-                        for field_name in fields {
-                            let attr = obj.getattr(py, field_name)?;
-                            let attribute_val = attr.extract(py)?;
-                            ret.push(convert_pyany_to_jupiter(attribute_val))
-                        }
-                        new_vals.push((key.clone(), ret));
-                    }
-                    Ok(AlignedValues::One(new_vals.into_iter().collect()))
-                }
-                PythonReturnValues::Many(many) => {
-                    let mut new_vals = Vec::with_capacity(self.len());
-                    for (key, group) in many.iter() {
-                        let mut group_vec = Vec::with_capacity(group.len());
-                        for obj in group {
-                            let mut ret = Vec::with_capacity(fields.len());
-                            for field_name in fields {
-                                let attr = obj.getattr(py, field_name)?;
-                                let attribute_val = attr.extract(py)?;
-                                ret.push(convert_pyany_to_jupiter(attribute_val))
-                            }
-                            group_vec.push(ret)
-                        }
-                        new_vals.push((key.clone(), group_vec));
-                    }
-                    Ok(AlignedValues::Many(new_vals.into_iter().collect()))
-                }
-            }
-        })?;
-        Ok(my_vals)
-    }
-}
-
 pub fn convert_postgres_to_juniper(
     r: &Row,
     column_index: usize,
@@ -189,83 +76,6 @@ pub fn convert_postgres_to_juniper(
         }
         _ => {
             panic!("Unsupported postgres type")
-        }
-    }
-}
-
-pub struct PostgresRows {
-    pub just_one: bool,
-    pub rows: HashMap<AggroScalarValue, Vec<Row>>,
-}
-
-impl RowReturn for PostgresRows {
-    fn len(&self) -> usize {
-        self.rows.len()
-    }
-    fn extract_aligned(&self, names: &[&str]) -> Result<AlignedValues> {
-        let first_row = self.rows.iter().find_map(|(_, c)| c.first());
-        if let Some(first_row) = first_row {
-            let field_mapping: HashMap<&str, (usize, &Column)> = names
-                .iter()
-                .flat_map(|&field_name| {
-                    first_row.columns().iter().enumerate().find_map(|(ix, c)| {
-                        if c.name() == field_name {
-                            Some((c.name(), (ix, c)))
-                        } else {
-                            None
-                        }
-                    })
-                })
-                .collect();
-
-            if self.just_one {
-                let mut ret_vec = Vec::with_capacity(self.rows.len());
-                for (k, these_rows) in &self.rows {
-                    let mut row_vec = Vec::with_capacity(names.len());
-                    for name in names {
-                        let (column_ix, c) = if let Some((column_ix, c)) = field_mapping.get(name) {
-                            (column_ix, *c)
-                        } else {
-                            bail!("Could not find {} in Postgres row", name)
-                        };
-                        for row in these_rows.iter() {
-                            let field_val =
-                                convert_postgres_to_juniper(row, *column_ix, c.type_())?;
-                            row_vec.push(field_val);
-                            break;
-                        }
-                    }
-                    ret_vec.push((k.clone(), row_vec));
-                }
-
-                Ok(AlignedValues::One(ret_vec.into_iter().collect()))
-            } else {
-                let mut ret_vec = Vec::with_capacity(self.rows.len());
-                for (k, these_rows) in &self.rows {
-                    let mut row_vec = Vec::with_capacity(these_rows.len());
-                    for row in these_rows.iter() {
-                        let mut children_vec = Vec::with_capacity(names.len());
-                        for name in names {
-                            let (column_ix, c) =
-                                if let Some((column_ix, c)) = field_mapping.get(name) {
-                                    (column_ix, *c)
-                                } else {
-                                    bail!("Could not find {} in Postgres row", name)
-                                };
-                            let field_val =
-                                convert_postgres_to_juniper(row, *column_ix, c.type_())?;
-                            children_vec.push(field_val)
-                        }
-
-                        row_vec.push(children_vec);
-                    }
-                    ret_vec.push((k.clone(), row_vec));
-                }
-
-                Ok(AlignedValues::Many(ret_vec.into_iter().collect()))
-            }
-        } else {
-            panic!("Shouldn't be here")
         }
     }
 }
@@ -354,28 +164,10 @@ pub struct PythonResultRows {
     pub py_list: Py<PyList>,
 }
 
-impl PythonResultRows {
-    fn root_node() -> Self {
-        let py_list = Python::with_gil(|py| PyList::new(py, vec![py.None()]).into_py(py));
-        Self { py_list }
-    }
-}
 
 impl ExtractValues for PythonResultRows {
     fn len(&self) -> usize {
         Python::with_gil(|py| self.py_list.as_ref(py).len())
-    }
-    fn extract_first(&self) -> Result<Vec<AggroValue>> {
-        Python::with_gil(|py| {
-            let l = self.py_list.as_ref(py);
-            let mut ret_vec = Vec::with_capacity(l.len());
-
-            for row in l {
-                let val = convert_pyany_to_jupiter(row);
-                ret_vec.push(val);
-            }
-            Ok(ret_vec)
-        })
     }
     fn extract_values(&self, names: &[Text]) -> Result<Vec<Vec<AggroValue>>> {
         Python::with_gil(|py| {
@@ -396,6 +188,18 @@ impl ExtractValues for PythonResultRows {
                     row_vec.push(jupiter_val)
                 }
                 ret_vec.push(row_vec);
+            }
+            Ok(ret_vec)
+        })
+    }
+    fn extract_first(&self) -> Result<Vec<AggroValue>> {
+        Python::with_gil(|py| {
+            let l = self.py_list.as_ref(py);
+            let mut ret_vec = Vec::with_capacity(l.len());
+
+            for row in l {
+                let val = convert_pyany_to_jupiter(row);
+                ret_vec.push(val);
             }
             Ok(ret_vec)
         })

@@ -2,8 +2,6 @@ use anyhow::{anyhow};
 use juniper::{graphql_scalar, FromInputValue, InputValue, ScalarValue, Value as JuniperValue};
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
-
-use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::fmt::{Display, Formatter};
@@ -14,10 +12,6 @@ use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type};
 
 pub type AggroValue = JuniperValue<AggroScalarValue>;
 
-pub enum AlignedValues {
-    One(HashMap<AggroScalarValue, Vec<AggroValue>>),
-    Many(HashMap<AggroScalarValue, Vec<Vec<AggroValue>>>),
-}
 
 fn convert_from_input(value: &InputValue<AggroScalarValue>) -> AggroValue {
     match value {
@@ -54,46 +48,12 @@ impl GenericScalar {
         Ok(GenericScalar(convert_from_input(v)))
     }
 
-    fn resolve(&self) -> AggroValue {
-        JuniperValue::Scalar(AggroScalarValue::Generic(Box::new(self.0.clone())))
-    }
-    //
-    // fn from_input(value: &InputValue<AggroScalarValue>) -> Option<GenericScalar> {
-    //     Some(GenericScalar(convert_from_input(value)))
-    // }
-
     fn parse_token<'a>(
         _value: juniper::ScalarToken<'a>,
     ) -> juniper::ParseScalarResult<AggroScalarValue> {
         panic!("Shouldn't from_str");
     }
 }
-// impl<S> GraphQLScalar for GenericScalar
-// where
-//     S: ScalarValue {
-//
-//      fn resolve(&self) -> juniper::Value {
-//          match &self.0 {
-//              JuniperValue::Scalar(s) => JuniperValue::scalar(s.clone()),
-//              JuniperValue::List(l) => {
-//                  l.map(|c| {
-//                      c.to
-//                  })
-//              }
-//          }
-//          // panic!("Shouldn't resolve");
-//     }
-//
-//     fn from_input_value(value: &juniper::InputValue) -> Option<GenericScalar> {
-//         Some(GenericScalar(JuniperValue::Null))
-//         // panic!("Shouldn't from_input_value");
-//     }
-//
-//     fn from_str<'a>(value: juniper::ScalarToken<'a>) -> juniper::ParseScalarResult<'a, S> {
-//         panic!("Shouldn't from_str");
-//     }
-//
-// }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum AggroScalarValue {

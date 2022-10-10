@@ -13,7 +13,6 @@ use crate::databases::postgres::PostgresClient;
 use crate::databases::pubsub::PubSubClient;
 use crate::graphql::PuffGraphqlRoot;
 use crate::python::PythonDispatcher;
-use futures_util::task::SpawnExt;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::{broadcast, oneshot};

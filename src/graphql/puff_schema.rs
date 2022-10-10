@@ -2,10 +2,10 @@ use crate::context::{with_puff_context};
 use crate::errors::{to_py_error, PuffResult};
 use crate::graphql::puff_schema::LookAheadFields::{Nested, Terminal};
 use crate::graphql::row_return::{
-    convert_pyany_to_jupiter, ExtractValues,
-    PostgresResultRows, PythonResultRows, RowReturn,
+    ExtractValues,
+    PostgresResultRows, PythonResultRows,
 };
-use crate::graphql::scalar::{AggroScalarValue, AggroSqlValue, AggroValue};
+use crate::graphql::scalar::{AggroScalarValue, AggroValue};
 use crate::python::greenlet::greenlet_async;
 use crate::python::postgres::PythonSqlValue;
 use crate::types::text::ToText;
@@ -33,7 +33,6 @@ use std::sync::Arc;
 use tokio::sync::mpsc::{UnboundedSender};
 use tokio_postgres::{Transaction};
 
-use tokio_stream::StreamExt;
 
 static NUMBERS: &'static [&'static str] = &["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
 
@@ -63,15 +62,15 @@ impl AggroTypeInfo {
     fn is_list(&self) -> bool {
         matches!(self, AggroTypeInfo::List(_))
     }
-    fn is_scalar(&self) -> bool {
-        matches!(
-            self,
-            AggroTypeInfo::String
-                | AggroTypeInfo::Int
-                | AggroTypeInfo::Boolean
-                | AggroTypeInfo::Float
-        )
-    }
+    // fn is_scalar(&self) -> bool {
+    //     matches!(
+    //         self,
+    //         AggroTypeInfo::String
+    //             | AggroTypeInfo::Int
+    //             | AggroTypeInfo::Boolean
+    //             | AggroTypeInfo::Float
+    //     )
+    // }
     // fn is_object(&self) -> bool {
     //     matches!(self, AggroTypeInfo::Object(_))
     // }
@@ -354,8 +353,7 @@ fn input_to_python(
                 Ok(v.into_py_dict(py).into_py(py))
             }
             _ => bail!("Input non-bool to a bool input"),
-        },
-        _ => bail!("Input non-list to a list input")
+        }
     }
 }
 
@@ -705,20 +703,6 @@ pub enum LookAheadFields {
     Nested(BTreeMap<Text, PyObject>, BTreeMap<Text, LookAheadFields>),
 }
 
-impl LookAheadFields {
-    fn is_empty(&self) -> bool {
-        matches!(self, Terminal(..))
-    }
-
-    fn arguments(&self, py: Python) -> Py<PyDict> {
-        let args = match self {
-            Terminal(args) => args,
-            Nested(args, _) => args,
-        };
-        args.into_py_dict(py).into_py(py)
-    }
-}
-
 pub fn selection_to_fields(
     py: Python,
     field: &AggroField,
@@ -739,7 +723,7 @@ pub fn selection_to_fields(
                 }
             },
             _ => {
-                return bail!(
+                bail!(
                     "Input with children passed an object when none was expected.",
                 )
             }
@@ -783,21 +767,6 @@ fn collect_arguments_for_python(
         }
     }
     Ok(ret)
-}
-
-enum ReturnedValues {
-    ComputedRowReturn(Arc<dyn RowReturn + Sync + Send>),
-    PostgresQuery {
-        query: String,
-        args: Vec<AggroSqlValue>,
-    },
-}
-
-fn convert_args(args: &PyList) -> Vec<AggroSqlValue> {
-    args.into_iter()
-        .map(|py_obj| convert_pyany_to_jupiter(py_obj))
-        .map(|sql_arg| AggroSqlValue::new(sql_arg))
-        .collect()
 }
 
 #[pyclass]

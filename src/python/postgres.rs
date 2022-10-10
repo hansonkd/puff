@@ -9,7 +9,7 @@ use bb8_postgres::bb8::Pool;
 
 use bb8_postgres::PostgresConnectionManager;
 use chrono::{DateTime, NaiveDateTime, Utc};
-use futures_util::{FutureExt, StreamExt};
+use futures_util::StreamExt;
 use pyo3::create_exception;
 
 use pyo3::prelude::*;
