@@ -1,14 +1,13 @@
 use axum::extract::{FromRequest, Query, WebSocketUpgrade};
-use axum::http::{HeaderMap, Method, Request, StatusCode};
+use axum::http::{Method, Request, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
 use juniper::{
-    BoxFuture, GraphQLSubscriptionType, GraphQLType, GraphQLTypeAsync, GraphQLValue, InputValue,
-    LocalBoxFuture, RootNode, ScalarValue,
+    BoxFuture, GraphQLSubscriptionType, GraphQLTypeAsync, InputValue, RootNode, ScalarValue,
 };
 use std::future;
-use std::future::Future;
-use std::pin::Pin;
+
+
 use std::sync::Arc;
 
 use crate::graphql::scalar::AggroScalarValue;
@@ -269,7 +268,7 @@ impl TryFromRequest for Request<Body> {
 impl<S: Send + Sync> FromRequest<S, Body> for JuniperPuffRequest {
     type Rejection = (StatusCode, &'static str);
 
-    async fn from_request(req: Request<Body>, state: &S) -> Result<Self, Self::Rejection> {
+    async fn from_request(req: Request<Body>, _state: &S) -> Result<Self, Self::Rejection> {
         let content_type = req.try_get_content_type_header()?;
 
         // Convert `req` to JuniperRequest based on request method and content-type header

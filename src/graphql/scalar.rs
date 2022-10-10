@@ -1,14 +1,14 @@
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow};
 use juniper::{graphql_scalar, FromInputValue, InputValue, ScalarValue, Value as JuniperValue};
-use serde::de::{EnumAccess, MapAccess, SeqAccess};
-use serde::{de, ser, Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::Value as JsonValue;
+
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::ops::Deref;
+
 use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type};
 
@@ -63,7 +63,7 @@ impl GenericScalar {
     // }
 
     fn parse_token<'a>(
-        value: juniper::ScalarToken<'a>,
+        _value: juniper::ScalarToken<'a>,
     ) -> juniper::ParseScalarResult<AggroScalarValue> {
         panic!("Shouldn't from_str");
     }
@@ -260,7 +260,7 @@ impl ToSql for AggroScalarValue {
             AggroScalarValue::Float(i) => i.to_sql(ty, out),
             AggroScalarValue::String(i) => i.to_sql(ty, out),
             AggroScalarValue::Boolean(i) => i.to_sql(ty, out),
-            AggroScalarValue::Generic(i) => Err(anyhow!("Cannot convert generic to sql").into()),
+            AggroScalarValue::Generic(_i) => Err(anyhow!("Cannot convert generic to sql").into()),
         }
     }
     fn accepts(ty: &Type) -> bool

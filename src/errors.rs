@@ -5,7 +5,7 @@
 use crate::python::log_traceback_with_label;
 use axum::response::{IntoResponse, Response};
 use pyo3::exceptions::PyException;
-use pyo3::{PyErr, PyResult, Python};
+use pyo3::{PyErr, PyResult};
 use tracing::error;
 
 pub type Result<T> = anyhow::Result<T>;
@@ -48,7 +48,7 @@ pub fn log_puff_error<T>(label: &str, r: PuffResult<T>) -> PuffResult<T> {
     }
 }
 
-pub fn to_py_error<T>(label: &str, r: PuffResult<T>) -> PyResult<T> {
+pub fn to_py_error<T>(_label: &str, r: PuffResult<T>) -> PyResult<T> {
     match r {
         Ok(v) => Ok(v),
         Err(e) => match e.downcast::<PyErr>() {

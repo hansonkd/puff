@@ -1,27 +1,27 @@
 use crate::context::with_puff_context;
 use async_trait::async_trait;
-use axum::headers::Te;
+
 use juniper::executor::LookAheadMethods;
 use juniper::meta::{Argument, Field, MetaType};
 use juniper::{
-    Arguments, BoxFuture, DefaultScalarValue, ExecutionResult, Executor, FieldError,
+    Arguments, BoxFuture, ExecutionResult, Executor, FieldError,
     FromInputValue, GraphQLSubscriptionValue, GraphQLType, GraphQLValue, GraphQLValueAsync,
     InputValue, Registry, Value, ValuesStream,
 };
 use pyo3::types::PyDict;
 use pyo3::Python;
-use serde_json::{Map, Value as JsonValue};
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::mpsc::unbounded_channel;
-use tokio_stream::wrappers::{ReceiverStream, UnboundedReceiverStream};
+use tokio_stream::wrappers::{UnboundedReceiverStream};
 use crate::errors::log_puff_error;
 
 use crate::graphql::puff_schema::{
     returned_values_into_stream, selection_to_fields, AggroArgument, AggroContext, AggroField,
     AggroObject, AggroTypeInfo, SubscriptionSender,
 };
-use crate::graphql::row_return::{ExtractorRootNode, RootNode};
+use crate::graphql::row_return::{ExtractorRootNode};
 use crate::graphql::scalar::{AggroScalarValue, AggroValue, GenericScalar};
 use crate::types::text::ToText;
 use crate::types::Text;
@@ -473,7 +473,7 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
 
 impl FromInputValue<AggroScalarValue> for PuffGqlObject {
     type Error = String;
-    fn from_input_value(v: &InputValue<AggroScalarValue>) -> Result<Self, String> {
+    fn from_input_value(_v: &InputValue<AggroScalarValue>) -> Result<Self, String> {
         Ok(PuffGqlObject)
     }
 }

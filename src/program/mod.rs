@@ -44,7 +44,7 @@ use clap::{ArgMatches, Command};
 
 use crate::databases::redis::{add_redis_command_arguments, new_redis_async};
 
-use anyhow::bail;
+
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;

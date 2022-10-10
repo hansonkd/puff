@@ -7,7 +7,7 @@ use clap::{ArgMatches, Command};
 
 use crate::program::commands::HttpServerConfig;
 use axum::ServiceExt;
-use std::net::SocketAddr;
+
 use std::process::ExitCode;
 use std::sync::Arc;
 

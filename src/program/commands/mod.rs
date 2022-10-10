@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::process::ExitCode;
 use std::sync::Mutex;
 use tracing::info;
-use tracing::log::log;
+
 
 pub mod django_management;
 pub mod http;

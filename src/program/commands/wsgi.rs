@@ -17,7 +17,7 @@ use pyo3::prelude::*;
 
 use crate::program::commands::HttpServerConfig;
 use crate::types::text::ToText;
-use tracing::info;
+
 
 struct WSGIConstructor<F: Fn() -> Router + 'static> {
     config: HttpServerConfig,

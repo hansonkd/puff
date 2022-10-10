@@ -1,39 +1,38 @@
-use crate::context::{with_puff_context, PuffContext};
+use crate::context::{with_puff_context};
 use crate::errors::{to_py_error, PuffResult};
 use crate::graphql::puff_schema::LookAheadFields::{Nested, Terminal};
 use crate::graphql::row_return::{
-    convert_postgres_to_juniper, convert_pyany_to_jupiter, ExtractValues, ExtractorRootNode,
-    PostgresResultRows, PostgresRows, PythonResultRows, PythonReturnValues, PythonRows, RowReturn,
+    convert_pyany_to_jupiter, ExtractValues,
+    PostgresResultRows, PythonResultRows, RowReturn,
 };
-use crate::graphql::scalar::{AggroScalarValue, AggroSqlValue, AggroValue, AlignedValues};
+use crate::graphql::scalar::{AggroScalarValue, AggroSqlValue, AggroValue};
 use crate::python::greenlet::greenlet_async;
 use crate::python::postgres::PythonSqlValue;
 use crate::types::text::ToText;
 use crate::types::Text;
 use anyhow::{anyhow, bail};
-use bb8_postgres::bb8::Pool;
-use bb8_postgres::PostgresConnectionManager;
-use futures::future::try_join_all;
-use futures::{pin_mut, Stream, TryStreamExt};
-use futures_util::{stream, FutureExt};
+
+
+
+use futures::{TryStreamExt};
+use futures_util::{FutureExt};
 use juniper::{
-    BoxFuture, ExecutionError, ExecutionResult, LocalBoxFuture, LookAheadArgument,
-    LookAheadMethods, LookAheadSelection, LookAheadValue, Object as JuniperObject, Object, Value,
-    ValuesStream,
+    BoxFuture, ExecutionError, LookAheadArgument,
+    LookAheadMethods, LookAheadSelection, LookAheadValue, Object, Value,
 };
-use pyo3::basic::CompareOp::Ne;
-use pyo3::exceptions::{PyException, PyKeyError};
+
+
 use pyo3::prelude::*;
-use pyo3::types::{IntoPyDict, PyDict, PyList, PyString, PyTuple};
+use pyo3::types::{IntoPyDict, PyDict, PyList, PyString};
 use std::collections::{BTreeMap, HashSet};
-use std::future::Future;
-use std::pin::Pin;
+
+
 use std::sync::Arc;
-use std::task::{Context, Poll};
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::{Sender, UnboundedSender};
-use tokio_postgres::{Client, NoTls, Row, Transaction};
-use tokio_stream::wrappers::{ReceiverStream, UnboundedReceiverStream};
+
+
+use tokio::sync::mpsc::{UnboundedSender};
+use tokio_postgres::{Transaction};
+
 use tokio_stream::StreamExt;
 
 static NUMBERS: &'static [&'static str] = &["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
@@ -360,7 +359,7 @@ fn input_to_python(
     }
 }
 
-fn key_from_extracted<I: Iterator<Item = AggroValue>>(mut row_iter: &mut I, len: usize) -> Vec<u8> {
+fn key_from_extracted<I: Iterator<Item = AggroValue>>(row_iter: &mut I, len: usize) -> Vec<u8> {
     let v = if len == 1 {
         row_iter.next().unwrap_or(AggroValue::Null)
     } else {
@@ -565,7 +564,7 @@ pub async fn do_returned_values_into_stream(
 
                     Ok(final_vec)
                 }
-                Some((parent_cor, mut cor)) => {
+                Some((parent_cor, cor)) => {
                     let parent_vals = rows.extract_values(&parent_cor)?;
                     let mapped_children = if child_fields.is_empty() {
                         let mut rows_to_get = cor.clone();
