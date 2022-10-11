@@ -38,7 +38,7 @@ impl<F: Future<Output=Result<ExitCode>> + Send + Sync + 'static> RunnableCommand
         Command::new(self.name.to_string())
     }
 
-    fn runnable_from_args(&self, _args: &ArgMatches, _context: PuffContext) -> Result<Runnable> {
+    fn make_runnable(&mut self, _args: &ArgMatches, _context: PuffContext) -> Result<Runnable> {
         let this_self_func = self
             .inner_func
             .lock()

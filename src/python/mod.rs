@@ -16,11 +16,13 @@ use tracing::error;
 use crate::python::postgres::{add_pg_puff_exceptions, PostgresGlobal};
 pub use pyo3::prelude::*;
 use tracing::log::info;
+use crate::python::graphql::PythonGraphql;
 
 pub mod greenlet;
 pub mod postgres;
 pub mod redis;
 pub mod wsgi;
+pub mod graphql;
 
 
 #[pyclass]
@@ -74,6 +76,7 @@ pub(crate) fn bootstrap_puff_globals(config: RuntimeConfig) -> PuffResult<()> {
         puff_rust_functions.setattr("is_puff", true)?;
         puff_rust_functions.setattr("global_redis_getter", RedisGlobal)?;
         puff_rust_functions.setattr("global_postgres_getter", PostgresGlobal)?;
+        puff_rust_functions.setattr("global_gql", PythonGraphql)?;
         add_pg_puff_exceptions(py)?;
         puff_rust_functions.setattr("global_state", global_state)?;
         puff_rust_functions.setattr("read_file_bytes", ReadFileBytes.into_py(py))?;

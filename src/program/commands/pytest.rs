@@ -42,7 +42,7 @@ impl RunnableCommand for PytestCommand {
             .disable_help_flag(true)
     }
 
-    fn runnable_from_args(&self, args: &ArgMatches, context: PuffContext) -> PuffResult<Runnable> {
+    fn make_runnable(&mut self, args: &ArgMatches, context: PuffContext) -> PuffResult<Runnable> {
         let (pytest_args, python_function) = Python::with_gil(|py| {
             let pytest_args = PyList::empty(py);
             pytest_args.append(format!(

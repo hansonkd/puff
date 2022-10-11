@@ -29,7 +29,7 @@ impl RunnableCommand for DjangoManagementCommand {
         )
     }
 
-    fn runnable_from_args(&self, args: &ArgMatches, context: PuffContext) -> PuffResult<Runnable> {
+    fn make_runnable(&mut self, args: &ArgMatches, context: PuffContext) -> PuffResult<Runnable> {
         let subcommand = args.subcommand_name().unwrap_or("django");
 
         let (django_args, python_function) = Python::with_gil(|py| {

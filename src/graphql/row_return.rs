@@ -2,12 +2,12 @@ use crate::graphql::scalar::{AggroScalarValue, AggroValue};
 
 use crate::types::Text;
 use anyhow::{anyhow, bail, Result};
-use juniper::Object;
+use juniper::{InputValue, Object};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString};
 use std::collections::HashMap;
 use tokio_postgres::{Column, Row, Statement};
-
+use crate::errors::PuffResult;
 
 pub fn convert_pyany_to_jupiter(attribute_val: &PyAny) -> AggroValue {
     if let Ok(s) = attribute_val.extract() {

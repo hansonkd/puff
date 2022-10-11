@@ -1,5 +1,5 @@
-use crate::context::{with_puff_context};
-use crate::errors::{to_py_error, PuffResult};
+use crate::context::with_puff_context;
+use crate::errors::{PuffResult, to_py_error};
 use crate::graphql::puff_schema::LookAheadFields::{Nested, Terminal};
 use crate::graphql::row_return::{
     ExtractValues,
@@ -14,8 +14,8 @@ use anyhow::{anyhow, bail};
 
 
 
-use futures::{TryStreamExt};
-use futures_util::{FutureExt};
+use futures::TryStreamExt;
+use futures_util::FutureExt;
 use juniper::{
     BoxFuture, ExecutionError, LookAheadArgument,
     LookAheadMethods, LookAheadSelection, LookAheadValue, Object, Value,
@@ -30,8 +30,9 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 
-use tokio::sync::mpsc::{UnboundedSender};
-use tokio_postgres::{Transaction};
+use tokio::sync::mpsc::UnboundedSender;
+use tokio_postgres::Transaction;
+use crate::graphql;
 
 
 static NUMBERS: &'static [&'static str] = &["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
@@ -215,42 +216,11 @@ impl PyExtract {
         for row in rows {
             let py_row = PyList::empty(py);
             for val in row {
-                py_row.append(to_py_error("Gql Extract", value_to_python(py, &val))?)?
+                py_row.append(to_py_error("Gql Extract", graphql::juniper_value_to_python(py, &val))?)?
             }
             ret_list.append(py_row)?
         }
         Ok(ret_list.into_py(py))
-    }
-}
-
-fn value_to_python(py: Python, v: &AggroValue) -> PuffResult<Py<PyAny>> {
-    match v {
-        AggroValue::List(inner) => {
-            let mut val_vec: Vec<PyObject> = Vec::with_capacity(inner.len());
-            for iv in inner {
-                val_vec.push(value_to_python(py, iv)?);
-            }
-            Ok(PyList::new(py, val_vec).into())
-        }
-        AggroValue::Object(inner) => {
-            let mut val_vec: Vec<(PyObject, PyObject)> = Vec::with_capacity(inner.field_count());
-            for (k, iv) in inner.iter() {
-                val_vec.push((PyString::new(py, k).into(), value_to_python(py, iv)?));
-            }
-            Ok(PyDict::from_sequence(py, PyList::new(py, val_vec).into())?.into())
-        }
-        AggroValue::Scalar(s) => scalar_to_python(py, s),
-        AggroValue::Null => Ok(Python::None(py)),
-    }
-}
-
-fn scalar_to_python(py: Python, v: &AggroScalarValue) -> PuffResult<Py<PyAny>> {
-    match v {
-        AggroScalarValue::String(s) => Ok(s.into_py(py)),
-        AggroScalarValue::Int(s) => Ok(s.into_py(py)),
-        AggroScalarValue::Float(s) => Ok(s.into_py(py)),
-        AggroScalarValue::Boolean(s) => Ok(s.into_py(py)),
-        AggroScalarValue::Generic(s) => value_to_python(py, s),
     }
 }
 
@@ -337,7 +307,7 @@ fn input_to_python(
         },
         AggroTypeInfo::Any => match v {
             LookAheadValue::Null => Ok(py.None()),
-            LookAheadValue::Scalar(s) => scalar_to_python(py, s),
+            LookAheadValue::Scalar(s) => graphql::scalar_to_python(py, s),
             LookAheadValue::List(vals) => {
                 let mut v = Vec::with_capacity(vals.len());
                 for val in vals {

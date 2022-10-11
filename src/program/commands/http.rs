@@ -26,7 +26,7 @@ impl<F: Fn() -> Router + 'static> RunnableCommand for ServerCommand<F> {
         HttpServerConfig::add_command_options(Command::new("runserver"))
     }
 
-    fn runnable_from_args(&self, args: &ArgMatches, context: PuffContext) -> Result<Runnable> {
+    fn make_runnable(&mut self, args: &ArgMatches, context: PuffContext) -> Result<Runnable> {
         let config = HttpServerConfig::new_from_args(args);
         let router_fn = self.0.clone();
         let fut = async move {

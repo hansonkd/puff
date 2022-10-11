@@ -29,7 +29,7 @@ impl RunnableCommand for PythonCommand {
         Command::new(self.command_name.to_string())
     }
 
-    fn runnable_from_args(&self, _args: &ArgMatches, context: PuffContext) -> PuffResult<Runnable> {
+    fn make_runnable(&mut self, _args: &ArgMatches, context: PuffContext) -> PuffResult<Runnable> {
         let python_function = Python::with_gil(|py| {
             let puff_mod = py.import("puff")?;
             let f = puff_mod

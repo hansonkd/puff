@@ -21,7 +21,7 @@
 //!         Command::new("my_custom_command")
 //!     }
 //!
-//!     fn runnable_from_args(&self, args: &ArgMatches, context: PuffContext) -> puff::errors::Result<Runnable> {
+//!     fn make_runnable(&self, args: &ArgMatches, context: PuffContext) -> puff::errors::Result<Runnable> {
 //!         Ok(Runnable::new(async {
 //!             println!("hello from rust!");
 //!             Ok(ExitCode::SUCCESS)
@@ -95,7 +95,7 @@ impl Runnable {
 ///         Command::new("my_custom_command")
 ///     }
 ///
-///     fn runnable_from_args(&self, _args: &ArgMatches, context: PuffContext) -> puff::errors::Result<Runnable> {
+///     fn make_runnable(self, _args: &ArgMatches, context: PuffContext) -> puff::errors::Result<Runnable> {
 ///         Ok(Runnable::new(context.dispatcher().dispatch(|| {
 ///             // Do something in a Puff coroutine
 ///             Ok(ExitCode::SUCCESS)
@@ -108,23 +108,23 @@ pub trait RunnableCommand: 'static {
     fn cli_parser(&self) -> Command;
 
     /// Converts parsed matches from the command line into a Runnable future.
-    fn runnable_from_args(&self, args: &ArgMatches, dispatcher: PuffContext) -> Result<Runnable>;
+    fn make_runnable(&mut self, args: &ArgMatches, dispatcher: PuffContext) -> Result<Runnable>;
 }
 
-#[derive(Clone)]
-struct PackedCommand(Arc<dyn RunnableCommand>);
+
+struct PackedCommand(Box<dyn RunnableCommand>);
 
 impl PackedCommand {
     pub fn cli_parser(&self) -> Command {
         self.0.cli_parser()
     }
 
-    pub fn runnable_from_args(
-        &self,
+    pub fn make_runnable(
+        &mut self,
         args: &ArgMatches,
         dispatcher: PuffContext,
     ) -> Result<Runnable> {
-        self.0.runnable_from_args(args, dispatcher)
+        self.0.make_runnable(args, dispatcher)
     }
 }
 
@@ -139,7 +139,6 @@ pub fn handle_puff_exit(label: &str, r: PuffResult<ExitCode>) -> ExitCode {
 }
 
 /// A Puff Program that is responsible for parsing CLI arguments and starting the Runtime.
-#[derive(Clone)]
 pub struct Program {
     name: Text,
     author: Option<Text>,
@@ -201,10 +200,10 @@ impl Program {
 
     /// Adds a new command to be available to the `Program`.
     pub fn command<C: RunnableCommand>(self, command: C) -> Self {
-        let arc_command = Arc::new(command);
+        let box_command = Box::new(command);
         let mut new_self = self;
 
-        new_self.commands.push(PackedCommand(arc_command));
+        new_self.commands.push(PackedCommand(box_command));
         new_self
     }
 
@@ -245,58 +244,60 @@ impl Program {
         Ok(rt)
     }
 
-    /// Run the program and panics if it fails.
+    /// Run the program, handle and log the error if it fails.
     ///
     /// See [Self::try_run] for more information.
-    pub fn run(&self) -> ExitCode {
+    pub fn run(self) -> ExitCode {
         handle_puff_exit("Program", self.try_run())
     }
 
     /// Tries to run the program and returns an Error if it fails.
     ///
-    /// This will parse the command line arguments, start a new runtimeand blocks until
+    /// This will parse the command line arguments, start a new runtime and blocks until
     /// the command finishes.
-    pub fn try_run(&self) -> Result<ExitCode> {
+    pub fn try_run(self) -> Result<ExitCode> {
         tracing_subscriber::fmt::init();
 
         let mut top_level = self.clap_command();
+        let rt_config = self.runtime_config.clone();
 
-        if self.runtime_config.postgres() {
+        if rt_config.postgres() {
             top_level = add_postgres_command_arguments(top_level)
         }
 
-        if self.runtime_config.redis() {
+        if rt_config.redis() {
             top_level = add_redis_command_arguments(top_level)
         }
 
-        if self.runtime_config.pubsub() {
+        if rt_config.pubsub() {
             top_level = add_pubsub_command_arguments(top_level)
         }
 
-        self.runtime_config.apply_env_vars();
+        rt_config.apply_env_vars();
         let mutex_switcher = Arc::new(Mutex::new(None::<PuffContext>));
-        let python_dispatcher = if self.runtime_config.python() {
+        let python_dispatcher = if rt_config.python() {
             pyo3::prepare_freethreaded_python();
-            bootstrap_puff_globals(self.runtime_config.clone())?;
-            let dispatcher = setup_greenlet(self.runtime_config.clone(), mutex_switcher.clone())?;
+            bootstrap_puff_globals(rt_config.clone())?;
+            let dispatcher = setup_greenlet(rt_config.clone(), mutex_switcher.clone())?;
             Some(dispatcher)
         } else {
             None
         };
 
+        let mut builder = self.runtime()?;
+
         let mut hm: HashMap<Text, PackedCommand> = HashMap::with_capacity(self.commands.len());
-        for packed_command in &self.commands {
+        for packed_command in self.commands {
             let parser = packed_command.cli_parser();
             let name = parser.get_name().to_owned();
             top_level = top_level.subcommand(parser);
-            hm.insert(name.into(), packed_command.clone());
+            hm.insert(name.into(), packed_command);
         }
 
         let arg_matches = top_level.get_matches();
 
         if let Some((command, args)) = arg_matches.subcommand() {
-            if let Some(runner) = hm.remove(&command.to_string().into()) {
-                let mut builder = self.runtime()?;
+            if let Some(mut runner) = hm.remove(&command.to_string().into()) {
 
                 let thread_mutex = mutex_switcher.clone();
 
@@ -306,7 +307,7 @@ impl Program {
 
                 let rt = builder.build()?;
                 let mut redis = None;
-                if self.runtime_config.redis() {
+                if rt_config.redis() {
                     redis = Some(rt.block_on(new_redis_async(
                         arg_matches.get_one::<String>("redis_url").unwrap().as_str(),
                         true,
@@ -314,7 +315,7 @@ impl Program {
                 }
 
                 let mut pubsub_client = None;
-                if self.runtime_config.pubsub() {
+                if rt_config.pubsub() {
                     pubsub_client = Some(
                         rt.block_on(new_pubsub_async(
                             arg_matches
@@ -327,7 +328,7 @@ impl Program {
                 }
 
                 let mut postgres = None;
-                if self.runtime_config.postgres() {
+                if rt_config.postgres() {
                     postgres = Some(
                         rt.block_on(new_postgres_async(
                             arg_matches
@@ -340,7 +341,7 @@ impl Program {
                 }
 
                 let mut gql_root = None;
-                if let Some(mod_path) = self.runtime_config.gql_module() {
+                if let Some(mod_path) = rt_config.gql_module() {
                     gql_root = Some(load_schema(mod_path.as_str())?);
                 }
 
@@ -363,7 +364,7 @@ impl Program {
                     *borrowed = Some(context_to_set);
                 }
 
-                let runnable = runner.runnable_from_args(args, context)?;
+                let runnable = runner.make_runnable(args, context)?;
 
                 let main_fut = async {
                     let shutdown = tokio::signal::ctrl_c();

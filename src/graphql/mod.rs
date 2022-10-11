@@ -1,6 +1,7 @@
-use juniper::{RootNode};
-use pyo3::{PyAny, PyResult, Python};
+use juniper::{InputValue, RootNode, Spanning};
+use pyo3::{IntoPy, Py, PyAny, PyObject, PyResult, Python};
 use std::sync::Arc;
+use anyhow::bail;
 
 pub mod handlers;
 mod puff_schema;
@@ -8,8 +9,10 @@ mod row_return;
 mod scalar;
 mod schema;
 pub use puff_schema::AggroContext;
+use pyo3::types::{PyDict, PyList, PyString};
+use crate::errors::PuffResult;
 
-use crate::graphql::scalar::AggroScalarValue;
+use crate::graphql::scalar::{AggroScalarValue, AggroValue};
 use crate::graphql::schema::PuffGqlObject;
 use crate::types::text::ToText;
 
@@ -61,4 +64,67 @@ pub fn load_schema(module: &str) -> PyResult<PuffGraphqlRoot> {
     );
 
     Ok(Arc::new(schema))
+}
+
+pub fn juniper_value_to_python(py: Python, v: &AggroValue) -> PuffResult<Py<PyAny>> {
+    match v {
+        AggroValue::List(inner) => {
+            let mut val_vec: Vec<PyObject> = Vec::with_capacity(inner.len());
+            for iv in inner {
+                val_vec.push(juniper_value_to_python(py, iv)?);
+            }
+            Ok(PyList::new(py, val_vec).into())
+        }
+        AggroValue::Object(inner) => {
+            let mut val_vec: Vec<(PyObject, PyObject)> = Vec::with_capacity(inner.field_count());
+            for (k, iv) in inner.iter() {
+                val_vec.push((PyString::new(py, k).into(), juniper_value_to_python(py, iv)?));
+            }
+            Ok(PyDict::from_sequence(py, PyList::new(py, val_vec).into())?.into())
+        }
+        AggroValue::Scalar(s) => scalar_to_python(py, s),
+        AggroValue::Null => Ok(Python::None(py)),
+    }
+}
+
+fn scalar_to_python(py: Python, v: &AggroScalarValue) -> PuffResult<Py<PyAny>> {
+    match v {
+        AggroScalarValue::String(s) => Ok(s.into_py(py)),
+        AggroScalarValue::Int(s) => Ok(s.into_py(py)),
+        AggroScalarValue::Float(s) => Ok(s.into_py(py)),
+        AggroScalarValue::Boolean(s) => Ok(s.into_py(py)),
+        AggroScalarValue::Generic(s) => juniper_value_to_python(py, s),
+    }
+}
+
+
+pub fn convert_pyany_to_input(attribute_val: &PyAny) -> PuffResult<InputValue<AggroScalarValue>> {
+    if let Ok(s) = attribute_val.extract() {
+        return Ok(InputValue::Scalar(AggroScalarValue::String(s)));
+    }
+    if let Ok(s) = attribute_val.extract() {
+        return Ok(InputValue::Scalar(AggroScalarValue::Boolean(s)));
+    }
+    if let Ok(s) = attribute_val.extract() {
+        return Ok(InputValue::Scalar(AggroScalarValue::Int(s)));
+    }
+    if let Ok(s) = attribute_val.extract() {
+        return Ok(InputValue::Scalar(AggroScalarValue::Float(s)));
+    }
+    if let Ok(l) = attribute_val.extract::<&PyList>() {
+        let mut vec = Vec::with_capacity(l.len());
+        for item in l.into_iter() {
+            vec.push(Spanning::unlocated(convert_pyany_to_input(item)?));
+        }
+        return Ok(InputValue::List(vec));
+    }
+    if let Ok(l) = attribute_val.extract::<&PyDict>() {
+        let mut vec = Vec::with_capacity(l.len());
+        for (k, s) in l.into_iter() {
+            vec.push((Spanning::unlocated(k.to_string()), Spanning::unlocated(convert_pyany_to_input(s)?)));
+        }
+
+        return Ok(InputValue::Object(vec));
+    }
+    bail!("Expected a simple python type, list or dict.")
 }
