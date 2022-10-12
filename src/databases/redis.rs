@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use crate::context::with_puff_context;
 use crate::types::Puff;
-pub use bb8_redis::redis::Cmd;
+pub use bb8_redis;
+use bb8_redis::redis::Cmd;
 use clap::{Arg, Command};
 use tracing::info;
 

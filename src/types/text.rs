@@ -23,7 +23,7 @@ use std::str::{from_utf8, FromStr};
 /// for better string memory management comes at the cost of mutability. `Text` types are immutable.
 ///
 /// ```
-/// use puff::types::Text;
+/// use puff_rs::types::Text;
 ///
 /// let text = Text::from("Hello");
 /// ```
@@ -31,7 +31,7 @@ use std::str::{from_utf8, FromStr};
 /// Standard rust `Strings` are meant to be mutable. They are available as a `TextBuilder`:
 ///
 /// ```
-/// use puff::types::{TextBuilder, Text};
+/// use puff_rs::types::{TextBuilder, Text};
 ///
 /// let mut buff = TextBuilder::new();
 /// buff.push_str("hello");

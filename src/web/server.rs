@@ -19,11 +19,11 @@
 //!
 //! ```no_run
 //! use std::process::ExitCode;
-//! use puff::program::commands::http::ServerCommand;
-//! use puff::program::Program;
-//! use puff::errors::Result;
-//! use puff::types::text::{Text, ToText};
-//! use puff::web::server::{Request, Response, ResponseBuilder, Router, Json, body_text};
+//! use puff_rs::program::commands::http::ServerCommand;
+//! use puff_rs::program::Program;
+//! use puff_rs::errors::Result;
+//! use puff_rs::types::text::{Text, ToText};
+//! use puff_rs::web::server::{Request, Response, ResponseBuilder, Router, Json, body_text};
 //! use axum::extract::Path;
 //! use std::time::Duration;
 //! use serde_json::{Value, json};
@@ -33,7 +33,6 @@
 //!     // build our application with a route
 //!     let app = Router::new()
 //!                 .get("/", root)
-//!                 .get("/user/", get_users)
 //!                 .get("/user/:id", get_user);
 //!
 //!     Program::new("my_first_app")
@@ -43,19 +42,15 @@
 //! }
 //!
 //! // basic handler that responds with a static string
-//! fn root() -> Result<Text> {
-//!     Ok("ok".to_text())
+//! async fn root() -> Text {
+//!     "ok".to_text()
 //! }
 //!
 //! // basic handler that uses an Axum extractor. We must use a FromRequest Extractor as the final argument.
-//! fn get_user(Path(user_id): Path<String>, _: Request) -> Result<Json<Value>> {
-//!     Ok(Json(json!({ "data": 42 })))
+//! async fn get_user(Path(user_id): Path<String>, _: Request) -> Json<Value> {
+//!     Json(json!({ "data": 42 }))
 //! }
 //!
-//! // basic handler that uses an Axum FromRequest Extractor
-//! fn get_users(request: Request) -> Result<Response> {
-//!     Ok(ResponseBuilder::builder().body(body_text("ok"))?)
-//! }
 //! ```
 //!
 use std::convert::Infallible;
@@ -68,7 +63,7 @@ use axum::{self, Extension};
 use std::net::SocketAddr;
 
 
-use axum::body::{Body, Bytes};
+use axum::body::{Body, BoxBody, Bytes};
 use axum::handler::Handler;
 use axum::routing::{any_service, on, IntoMakeService, MethodFilter, MethodRouter};
 
@@ -85,7 +80,7 @@ use crate::types::text::Text;
 
 pub use axum::response::Json;
 pub type Request = AxumRequest<Body>;
-pub type Response = AxumResponse<Body>;
+pub type Response = AxumResponse<BoxBody>;
 pub type ResponseBuilder = AxumResponse<()>;
 
 /// Router for building a web application. Uses Axum router underneath and supports using handlers
@@ -276,7 +271,7 @@ mod tests {
 
     #[test]
     fn check_router() {
-        let router: Router<()> = Router::new().get("/", || Ok("ok".to_text()));
+        let router: Router<()> = Router::new().get("/", || async { "ok".to_text() });
 
         let rt = Runtime::new().unwrap();
         let puff_context = PuffContext::default();

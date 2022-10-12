@@ -14,9 +14,10 @@ use tokio::sync::oneshot;
 use tracing::error;
 
 use crate::python::postgres::{add_pg_puff_exceptions, PostgresGlobal};
-pub use pyo3::prelude::*;
 use tracing::log::info;
 use crate::python::graphql::PythonGraphql;
+
+pub use pyo3::prelude::*;
 
 pub mod greenlet;
 pub mod postgres;
@@ -31,8 +32,7 @@ struct ReadFileBytes;
 #[pymethods]
 impl ReadFileBytes {
     pub fn __call__(&self, return_func: PyObject, file_name: String) {
-        let ctx = with_puff_context(|ctx| ctx);
-        greenlet_async(ctx, return_func, async move {
+        greenlet_async(return_func, async move {
             let contents = tokio::fs::read(&file_name).await?;
             Ok(Python::with_gil(|py| contents.into_py(py)))
         })

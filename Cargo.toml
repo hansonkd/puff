@@ -1,5 +1,5 @@
 [package]
-name = "puff"
+name = "puff-rs"
 version = "0.1.0"
 edition = "2021"
 
@@ -55,6 +55,11 @@ path = "examples/puff_django.rs"
 [[example]]
 name = "gql"
 path = "examples/gql.rs"
+
+[[example]]
+name = "websockets"
+path = "examples/websockets.rs"
+
 
 #[profile.release]
 #opt-level = 3

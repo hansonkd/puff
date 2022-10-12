@@ -1,3 +1,4 @@
+//! Exposes Django management commands (createsuperuser, migrate, etc) to Puff.
 use crate::context::PuffContext;
 use crate::errors::PuffResult;
 use crate::program::{Runnable, RunnableCommand};

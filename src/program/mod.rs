@@ -9,10 +9,10 @@
 //! # Example
 //!
 //! ```no_run
-//! use std::process::ExitCode;
-//! use clap::{ArgMatches, Command};
-//! use puff::program::{Program, Runnable, RunnableCommand};
-//! use puff::context::PuffContext;
+//! use puff_rs::prelude::*;
+//! use puff_rs::program::clap::{ArgMatches, Command};
+//! use puff_rs::program::{Program, Runnable, RunnableCommand};
+//! use puff_rs::context::PuffContext;
 //!
 //! struct MyCommand;
 //!
@@ -21,7 +21,10 @@
 //!         Command::new("my_custom_command")
 //!     }
 //!
-//!     fn make_runnable(&self, args: &ArgMatches, context: PuffContext) -> puff::errors::Result<Runnable> {
+//!     fn make_runnable(&mut self, args: &ArgMatches, context: PuffContext) -> puff_rs::errors::Result<Runnable> {
+//!         // Do some setup like extract args from ArgMatches.
+//!         // ...
+//!         // Then return a future to run.
 //!         Ok(Runnable::new(async {
 //!             println!("hello from rust!");
 //!             Ok(ExitCode::SUCCESS)
@@ -64,7 +67,7 @@ use crate::runtime::RuntimeConfig;
 use crate::types::text::Text;
 use crate::types::Puff;
 use tracing::info;
-
+pub use clap;
 pub mod commands;
 
 /// A wrapper for a boxed future that is able to be run by a Puff Program.
@@ -84,9 +87,8 @@ impl Runnable {
 ///
 /// ```no_run
 /// use std::process::ExitCode;
-/// use clap::{ArgMatches, Command};
-/// use puff::program::{Runnable, RunnableCommand};
-/// use puff::context::PuffContext;
+/// use puff_rs::program::{clap:: {ArgMatches, Command}, Runnable, RunnableCommand};
+/// use puff_rs::context::PuffContext;
 ///
 /// struct MyCommand;
 ///
@@ -95,11 +97,12 @@ impl Runnable {
 ///         Command::new("my_custom_command")
 ///     }
 ///
-///     fn make_runnable(self, _args: &ArgMatches, context: PuffContext) -> puff::errors::Result<Runnable> {
-///         Ok(Runnable::new(context.dispatcher().dispatch(|| {
-///             // Do something in a Puff coroutine
+///     fn make_runnable(&mut self, _args: &ArgMatches, context: PuffContext) -> puff_rs::errors::Result<Runnable> {
+///         // Setup code.
+///         Ok(Runnable::new(async {
+///             // Do something in async context.
 ///             Ok(ExitCode::SUCCESS)
-///         })))
+///         }))
 ///     }
 /// }
 /// ```
@@ -128,7 +131,7 @@ impl PackedCommand {
     }
 }
 
-pub fn handle_puff_exit(label: &str, r: PuffResult<ExitCode>) -> ExitCode {
+fn handle_puff_exit(label: &str, r: PuffResult<ExitCode>) -> ExitCode {
     match r {
         Ok(exit) => exit,
         Err(e) => {

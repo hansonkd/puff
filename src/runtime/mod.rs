@@ -41,7 +41,7 @@ pub enum Strategy {
 /// # Examples
 ///
 /// ```
-/// use puff::runtime::{RuntimeConfig, Strategy};
+/// use puff_rs::runtime::{RuntimeConfig, Strategy};
 /// let config = RuntimeConfig::default().set_strategy(Strategy::Random);
 /// ```
 #[derive(Clone)]
@@ -62,6 +62,10 @@ pub struct RuntimeConfig {
 }
 
 impl RuntimeConfig {
+    /// Create a new default config.
+    pub fn new() -> Self {
+        Self::default()
+    }
     /// Get the current strategy.
     ///
     /// See [Strategy] for more information about choosing a strategy.

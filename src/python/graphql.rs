@@ -21,14 +21,13 @@ impl ToPyObject for PythonGraphql {
 #[pymethods]
 impl PythonGraphql {
     fn query(&self, py: Python, return_fun: PyObject, query: String, variables: &PyDict) -> PyResult<()> {
-        let ctx = with_puff_context(|ctx| ctx);
         let mut hm = HashMap::with_capacity(variables.len());
         for (k, v) in variables {
             let variables = to_py_error("GQL Inputs", convert_pyany_to_input(v))?;
             hm.insert(k.to_string(), variables);
         }
-        greenlet_async(ctx.clone(), return_fun, async move {
-            let gql = ctx.gql();
+        greenlet_async(return_fun, async move {
+            let gql = with_puff_context(|ctx| ctx.gql());
             let (value, errors) = execute(query.as_str(), None, &gql, &hm, &AggroContext::new()).await?;
             Python::with_gil(|py| {
                 let pydict = PyDict::new(py);

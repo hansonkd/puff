@@ -3,6 +3,7 @@ use pyo3::{IntoPy, Py, PyAny, PyObject, PyResult, Python};
 use std::sync::Arc;
 use anyhow::bail;
 
+pub use handlers::{handle_graphql, handle_subscriptions};
 pub mod handlers;
 mod puff_schema;
 mod row_return;

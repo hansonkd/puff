@@ -1,4 +1,4 @@
-use crate::context::PuffContext;
+use crate::context::{PuffContext, with_puff_context};
 use crate::errors::PuffResult;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
@@ -85,10 +85,9 @@ pub fn greenlet_async<
     F: Future<Output = PuffResult<R>> + Send + 'static,
     R: ToPyObject + 'static,
 >(
-    ctx: PuffContext,
     return_fun: PyObject,
     f: F,
 ) {
-    let h = ctx.handle();
+    let h = with_puff_context(|ctx| ctx.handle());
     h.spawn(handle_return(return_fun, f));
 }

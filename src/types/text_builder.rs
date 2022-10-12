@@ -8,7 +8,7 @@ use std::ops::Deref;
 /// `TextBuilder` uses a standard Rust `String` under the hood. It can efficiently build UTF-8 strings.
 ///
 /// ```
-/// use puff::types::{TextBuilder, Text};
+/// use puff_rs::types::{TextBuilder, Text};
 ///
 /// let mut buff = TextBuilder::new();
 /// buff.push_str("hello");
@@ -59,7 +59,7 @@ impl TextBuilder {
     /// Basic usage:
     ///
     /// ```
-    /// use puff::types::TextBuilder;
+    /// use puff_rs::types::TextBuilder;
     /// let mut s = TextBuilder::from_text("foo");
     /// ```
     pub fn from_text<T: Into<Text>>(s: T) -> TextBuilder {
@@ -73,7 +73,7 @@ impl TextBuilder {
     /// Basic usage:
     ///
     /// ```
-    /// use puff::types::TextBuilder;
+    /// use puff_rs::types::TextBuilder;
     /// let mut s = TextBuilder::from_text("foo");
     ///
     /// s.push_str("bar");
@@ -92,7 +92,7 @@ impl TextBuilder {
     /// Basic usage:
     ///
     /// ```
-    /// use puff::types::TextBuilder;
+    /// use puff_rs::types::TextBuilder;
     /// let mut s = TextBuilder::from_text("foo");
     ///
     /// s.push_text("bar");
@@ -111,7 +111,7 @@ impl TextBuilder {
     /// Basic usage:
     ///
     /// ```
-    /// use puff::types::{Text, TextBuilder};
+    /// use puff_rs::types::{Text, TextBuilder};
     /// let mut s = TextBuilder::from_text("foo");
     ///
     /// s.push_text("bar");

@@ -8,18 +8,31 @@ use pyo3::exceptions::PyException;
 use pyo3::{PyErr, PyResult};
 use tracing::error;
 
+pub use anyhow;
+use crate::web::server::StatusCode;
+
 pub type Result<T> = anyhow::Result<T>;
 pub type Error = anyhow::Error;
 pub type PuffResult<T> = Result<T>;
+pub type RequestResult<T> = std::result::Result<T, RequestError>;
 
+/// An error structure to use in Axum requests.
 pub struct RequestError(Error);
 
 impl IntoResponse for RequestError {
     fn into_response(self) -> Response {
-        todo!()
+        handle_puff_error("Axum Request", self.0);
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
     }
 }
 
+impl From<Error> for RequestError {
+    fn from(e: Error) -> Self {
+        RequestError(e)
+    }
+}
+
+/// Consume an error and log it.
 pub fn handle_puff_error(label: &str, e: Error) {
     match e.downcast::<PyErr>() {
         Ok(pye) => log_traceback_with_label(label, &pye),
@@ -29,6 +42,12 @@ pub fn handle_puff_error(label: &str, e: Error) {
     }
 }
 
+/// Consume a PuffResult and log it if it has an error.
+pub fn handle_puff_result(label: &str, r: PuffResult<()>) {
+    let _ = log_puff_error(label, r);
+}
+
+/// Log a puff error if it exists for the result, and return the result back.
 pub fn log_puff_error<T>(label: &str, r: PuffResult<T>) -> PuffResult<T> {
     match r {
         Ok(pye) => Ok(pye),
@@ -48,6 +67,7 @@ pub fn log_puff_error<T>(label: &str, r: PuffResult<T>) -> PuffResult<T> {
     }
 }
 
+/// Convert a PuffError to a PyError
 pub fn to_py_error<T>(_label: &str, r: PuffResult<T>) -> PyResult<T> {
     match r {
         Ok(v) => Ok(v),
@@ -58,9 +78,3 @@ pub fn to_py_error<T>(_label: &str, r: PuffResult<T>) -> PyResult<T> {
     }
 }
 
-pub fn handle_puff_result(label: &str, r: PuffResult<()>) {
-    match r {
-        Ok(()) => (),
-        Err(e) => handle_puff_error(label, e),
-    }
-}

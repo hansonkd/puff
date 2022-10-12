@@ -1,12 +1,13 @@
-use crate::databases::redis::{with_redis, Cmd, RedisClient};
+use crate::databases::redis::{with_redis, RedisClient};
 
 use crate::python::greenlet::greenlet_async;
 use crate::types::Bytes;
-use bb8_redis::redis::{FromRedisValue, Value};
+use bb8_redis::redis::{FromRedisValue, Value, Cmd, RedisResult};
 
 use crate::context::with_puff_context;
 
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 
 
 #[pyclass]
@@ -29,15 +30,33 @@ impl RedisGlobal {
 struct RedisOk;
 
 #[pyclass]
+struct PyRedisValue(PyObject);
+
+impl ToPyObject for PyRedisValue {
+    fn to_object(&self, _py: Python<'_>) -> PyObject {
+        self.0.clone()
+    }
+}
+
+
+impl FromRedisValue for PyRedisValue {
+    fn from_redis_value(v: &Value) -> RedisResult<Self> {
+        Python::with_gil(|py| {
+            Ok(PyRedisValue(extract_redis_to_python(py, v)))
+        })
+    }
+}
+
+#[pyclass]
 pub struct PythonRedis(RedisClient);
 
-fn extract_redis_to_python(py: Python, val: Value) -> PyObject {
+fn extract_redis_to_python(py: Python, val: &Value) -> PyObject {
     match val {
         Value::Int(i) => i.into_py(py),
-        Value::Data(v) => v.into_py(py),
-        Value::Nil => py.None().into_py(py),
+        Value::Data(v) => PyBytes::new(py, v.as_slice()).into_py(py),
+        Value::Nil => py.None(),
         Value::Bulk(vec) => vec
-            .into_iter()
+            .iter()
             .map(|v| extract_redis_to_python(py, v))
             .collect::<Vec<PyObject>>()
             .into_py(py),
@@ -54,8 +73,7 @@ impl PythonRedis {
         command: Cmd,
     ) -> PyResult<PyObject> {
         let client = self.0.pool();
-        let ctx = with_puff_context(|ctx| ctx);
-        greenlet_async(ctx, return_fun, async move {
+        greenlet_async(return_fun, async move {
             let mut conn = client.get().await?;
             let res: T = command.query_async(&mut *conn).await?;
             Ok(res)
@@ -72,5 +90,13 @@ impl PythonRedis {
 
     fn set(&self, py: Python, return_fun: PyObject, key: &str, val: &str) -> PyResult<PyObject> {
         self.run_command::<()>(py, return_fun, Cmd::set(key, val))
+    }
+
+    fn command(&self, py: Python, return_fun: PyObject, command: Vec<&PyBytes>) -> PyResult<PyObject> {
+        let mut cmd = Cmd::new();
+        for part in command {
+            cmd.arg(part.as_bytes());
+        }
+        self.run_command::<PyRedisValue>(py, return_fun, cmd)
     }
 }

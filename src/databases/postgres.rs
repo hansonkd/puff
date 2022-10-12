@@ -1,7 +1,8 @@
 use crate::errors::PuffResult;
 
+pub use bb8_postgres;
 use bb8_postgres::PostgresConnectionManager;
-use bb8_redis::bb8::Pool;
+use bb8_postgres::bb8::Pool;
 
 use std::time::Duration;
 

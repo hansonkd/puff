@@ -16,7 +16,7 @@ use std::sync::Arc;
 /// Maps can only be constructed from types implementing `IntoMapBuilder`.
 ///
 /// ```
-/// use puff::types::Map;
+/// use puff_rs::types::Map;
 ///
 /// let map = Map::from_builder(vec![(123, 456)]);
 /// assert_eq!(map.get(123), Some(456))
@@ -55,7 +55,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::Map;
+    /// use puff_rs::types::Map;
     /// let map: Map<u32, u32> = Map::new();
     /// ```
     pub fn new() -> Map<K, T> {
@@ -67,7 +67,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::Map;
+    /// use puff_rs::types::Map;
     /// let map = Map::from_builder(vec![(123, 456)]);
     /// ```
     pub fn from_builder<B: IntoMapBuilder<K, T>>(builder: B) -> Map<K, T> {
@@ -80,7 +80,7 @@ where
     ///
     /// ```
     /// use std::collections::HashMap;
-    /// use puff::types::Map;
+    /// use puff_rs::types::Map;
     /// let map: Map<i32, i32> = Map::from_hash_map(HashMap::new());
     /// ```
     pub fn from_hash_map(hm: HashMap<K, T>) -> Map<K, T> {
@@ -92,7 +92,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::Map;
+    /// use puff_rs::types::Map;
     /// let map: Map<i32, i32> = Map::new();
     /// assert!(map.is_empty())
     /// ```
@@ -105,7 +105,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::Map;
+    /// use puff_rs::types::Map;
     /// let map = Map::from_builder(vec![(123, 456)]);
     /// assert_eq!(map.get(123), Some(456))
     /// ```
@@ -118,7 +118,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::Map;
+    /// use puff_rs::types::Map;
     /// let map = Map::from_builder(vec![(123, 456)]);
     /// assert_eq!(map.get_key_value(123), Some((123, 456)))
     /// ```
@@ -133,7 +133,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::Map;
+    /// use puff_rs::types::Map;
     /// let map: Map<i32, i32> = Map::new();
     /// assert_eq!(map.len(), 0)
     /// ```

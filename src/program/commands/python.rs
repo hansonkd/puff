@@ -1,3 +1,4 @@
+//! Run a Python function on Puff Greenlet.
 use crate::context::PuffContext;
 use crate::errors::PuffResult;
 use crate::program::{Runnable, RunnableCommand};

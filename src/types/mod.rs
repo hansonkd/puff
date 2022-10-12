@@ -26,7 +26,7 @@
 //! # Example
 //!
 //! ```
-//! use puff::types::{Puff, Text};
+//! use puff_rs::types::{Puff, Text};
 //! let my_str = String::from("wow!");
 //! let other_str = my_str.clone(); // Potentially expensive because it will copy memory
 //!
@@ -73,7 +73,7 @@ pub trait Puff: Clone + Send + Sync + 'static {
     }
 }
 
-/// A Puff Date for UTC.
+/// A Puff Structure for Binary Data.
 #[derive(Clone)]
 pub struct Bytes(AxumBytes);
 

@@ -14,7 +14,7 @@ use std::hash::Hash;
 /// # Examples
 ///
 /// ```
-/// use puff::types::MapBuilder;
+/// use puff_rs::types::MapBuilder;
 ///
 /// let mut builder = MapBuilder::new();
 /// builder.insert(42, 0);
@@ -37,7 +37,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::{Text, MapBuilder};
+    /// use puff_rs::types::{Text, MapBuilder};
     /// let mut map: MapBuilder<Text, i32> = MapBuilder::new();
     /// ```
     pub fn new() -> MapBuilder<K, T> {
@@ -52,7 +52,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::{Text, MapBuilder};
+    /// use puff_rs::types::{Text, MapBuilder};
     /// let mut map: MapBuilder<Text, i32> = MapBuilder::with_capacity(10);
     /// ```
     pub fn with_capacity(capacity: usize) -> MapBuilder<K, T> {
@@ -71,7 +71,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::MapBuilder;
+    /// use puff_rs::types::MapBuilder;
     ///
     /// let mut map = MapBuilder::new();
     /// assert_eq!(map.insert(37, 42), None);
@@ -90,7 +90,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::MapBuilder;
+    /// use puff_rs::types::MapBuilder;
     ///
     /// let mut map = MapBuilder::new();
     /// map.insert(1, 2);
@@ -106,7 +106,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::MapBuilder;
+    /// use puff_rs::types::MapBuilder;
     /// let map: MapBuilder<usize, usize> = MapBuilder::new();
     /// assert!(map.is_empty())
     /// ```
@@ -119,7 +119,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::MapBuilder;
+    /// use puff_rs::types::MapBuilder;
     ///
     /// let mut map = MapBuilder::new();
     /// assert_eq!(map.len(), 0);

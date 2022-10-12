@@ -9,7 +9,7 @@
 /// # Examples
 ///
 /// ```
-/// use puff::types::BytesBuilder;
+/// use puff_rs::types::BytesBuilder;
 ///
 /// let mut builder = BytesBuilder::new();
 /// builder.put("hello_world");
@@ -28,7 +28,7 @@ impl BytesBuilder {
     /// # Examples
     ///
     /// ```
-    /// use puff::types::{Text, BytesBuilder};
+    /// use puff_rs::types::{Text, BytesBuilder};
     /// let mut builder = BytesBuilder::new();
     /// ```
     pub fn new() -> Self {
@@ -43,7 +43,7 @@ impl BytesBuilder {
     /// # Examples
     ///
     /// ```
-    /// use puff::types::BytesBuilder;
+    /// use puff_rs::types::BytesBuilder;
     /// let mut builder = BytesBuilder::with_capacity(10);
     /// ```
     pub fn with_capacity(capacity: usize) -> Self {
@@ -55,7 +55,7 @@ impl BytesBuilder {
     /// # Examples
     ///
     /// ```
-    /// use puff::types::BytesBuilder;
+    /// use puff_rs::types::BytesBuilder;
     /// let mut builder = BytesBuilder::new();
     /// builder.put("Hi");
     /// ```
@@ -68,7 +68,7 @@ impl BytesBuilder {
     /// # Examples
     ///
     /// ```
-    /// use puff::types::BytesBuilder;
+    /// use puff_rs::types::BytesBuilder;
     /// let mut builder = BytesBuilder::new();
     /// builder.put_slice("Hi".as_bytes());
     /// ```

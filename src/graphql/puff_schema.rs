@@ -773,7 +773,7 @@ impl SubscriptionSender {
         let all_objects = self.all_objs.clone();
         let this_sender = self.sender.clone();
         let py_list = PyList::new(py, vec![val]).into_py(py);
-        greenlet_async(ctx, ret_func, async move {
+        greenlet_async(ret_func, async move {
             let pool = postgres.pool();
             let mut conn = pool.get().await?;
             let txn = conn.transaction().await?;

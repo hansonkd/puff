@@ -16,7 +16,7 @@ use std::sync::Arc;
 /// Vectors can only be constructed from types implementing `IntoVectorBuilder`.
 ///
 /// ```
-/// use puff::types::Vector;
+/// use puff_rs::types::Vector;
 ///
 /// let vector = Vector::from_vec(vec![123]);
 /// assert_eq!(vector.get(0), Some(123));
@@ -69,7 +69,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::Vector;
+    /// use puff_rs::types::Vector;
     /// let map: Vector<i32> = Vector::new();
     /// ```
     pub fn new() -> Vector<T> {
@@ -81,7 +81,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::Vector;
+    /// use puff_rs::types::Vector;
     /// let map: Vector<i32> = Vector::from_vec(Vec::new());
     /// ```
     pub fn from_vec(hm: Vec<T>) -> Vector<T> {
@@ -93,7 +93,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::Vector;
+    /// use puff_rs::types::Vector;
     /// let map: Vector<i32> = Vector::from_vector_builder(Vec::new());
     /// ```
     pub fn from_vector_builder<V: IntoVectorBuilder<T>>(hm: V) -> Vector<T> {
@@ -105,7 +105,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::Vector;
+    /// use puff_rs::types::Vector;
     /// let v: Vector<i32> = Vector::new();
     /// assert!(v.is_empty());
     /// ```
@@ -121,7 +121,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::Vector;
+    /// use puff_rs::types::Vector;
     /// let v = Vector::from_vec(vec![10, 40, 30]);
     /// assert_eq!(Some(40), v.get(1));
     /// assert_eq!(None, v.get(3));
@@ -138,7 +138,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::Vector;
+    /// use puff_rs::types::Vector;
     /// let v = Vector::from_vec(vec![10, 40, 30]);
     /// assert_eq!(Some(Vector::from_vec(vec![10, 40])), v.slice(0..2));
     /// assert_eq!(None, v.slice(0..4));
@@ -158,7 +158,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::Vector;
+    /// use puff_rs::types::Vector;
     /// let v: Vector<i32> = Vector::new();
     /// assert_eq!(v.len(), 0);
     /// ```

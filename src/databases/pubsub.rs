@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::context::{supervised_task, with_puff_context};
-use crate::errors::PuffResult;
+use crate::errors::{log_puff_error, PuffResult};
 use crate::types::{Bytes, Puff, Text};
 use anyhow::anyhow;
 use bb8_redis::bb8::Pool;
@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Sender, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 
-type ConnectionId = uuid::Uuid;
+pub type ConnectionId = uuid::Uuid;
 
 enum PubSubEvent {
     Sub(Text, ConnectionId, UnboundedSender<PubSubMessage>),
@@ -228,7 +228,7 @@ impl PubSubConnection {
     }
 
     /// Subscribe to the channel. Queues the command even if you don't await the handle.
-    pub fn subscribe<T: Into<Text>>(&self, channel: T) -> JoinHandle<PuffResult<()>> {
+    pub fn subscribe<T: Into<Text>>(&self, channel: T) -> JoinHandle<bool> {
         let new_sender = self.sender.clone();
         let event = PubSubEvent::Sub(channel.into(), self.connection_id.clone(), new_sender);
         let inner_sender = self.events_sender.clone();
@@ -239,13 +239,13 @@ impl PubSubConnection {
                     (*m).clone().expect("Pub loop not started yet.")
                 };
                 let r = s.send(event).await;
-                r.map_err(|_| anyhow!("Could not send subscribe message"))
+                r.is_ok()
             })
         })
     }
 
     /// Unsubscribe from the channel. Queues the command even if you don't await the handle.
-    pub fn unsubscribe<T: Into<Text>>(&self, channel: T) -> JoinHandle<PuffResult<()>> {
+    pub fn unsubscribe<T: Into<Text>>(&self, channel: T) -> JoinHandle<bool> {
         let event = PubSubEvent::UnSub(channel.into(), self.connection_id.clone());
         let inner_sender = self.events_sender.clone();
         with_puff_context(move |ctx| {
@@ -256,7 +256,7 @@ impl PubSubConnection {
                 };
 
                 let r = s.send(event).await;
-                r.map_err(|_| anyhow!("Could not send subscribe message"))
+                r.is_ok()
             })
         })
     }
@@ -266,7 +266,7 @@ impl PubSubConnection {
         &self,
         channel: T,
         body: M,
-    ) -> JoinHandle<PuffResult<()>> {
+    ) -> JoinHandle<bool> {
         let channel_text = channel.into();
         let message = PubSubMessage::new(
             channel_text.clone(),
@@ -277,13 +277,16 @@ impl PubSubConnection {
         with_puff_context(|ctx| {
             let inner_client = self.client.clone();
             ctx.handle().spawn(async move {
-                let inner_client = inner_client.clone();
-                let body_bytes = bincode::serialize(&message)?;
-                let mut conn = inner_client.get().await?;
-                info!("Publishing to Redis...");
-                let r: () = conn.publish(channel_text, body_bytes).await?;
-                info!("Done.");
-                Ok(r)
+                let fut = async move {
+                    let inner_client = inner_client.clone();
+                    let body_bytes = bincode::serialize(&message)?;
+                    let mut conn = inner_client.get().await?;
+                    Ok(conn.publish::<_, _, ()>(channel_text, body_bytes).await?)
+                };
+
+                let r = log_puff_error("PubSub publish", fut.await);
+
+                r.is_ok()
             })
         })
     }

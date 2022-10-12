@@ -12,23 +12,26 @@ use std::sync::Arc;
 /// The ServerCommand.
 ///
 /// Exposes options to the command line to set the port and host of the server.
-#[derive(Clone)]
-pub struct ServerCommand<F: Fn() -> Router + 'static>(Arc<F>);
+pub struct ServerCommand(Option<Box<dyn FnOnce() -> Router + 'static>>);
 
-impl<F: Fn() -> Router + 'static> ServerCommand<F> {
-    pub fn new(s: F) -> Self {
-        Self(Arc::new(s))
+impl ServerCommand {
+    pub fn new(r: Router) -> Self {
+        Self(Some(Box::new(|| r)))
     }
+    pub fn new_with_router_init<F: FnOnce() -> Router + 'static>(f: F) -> Self {
+        Self(Some(Box::new(f)))
+    }
+
 }
 
-impl<F: Fn() -> Router + 'static> RunnableCommand for ServerCommand<F> {
+impl RunnableCommand for ServerCommand {
     fn cli_parser(&self) -> Command {
         HttpServerConfig::add_command_options(Command::new("runserver"))
     }
 
     fn make_runnable(&mut self, args: &ArgMatches, context: PuffContext) -> Result<Runnable> {
         let config = HttpServerConfig::new_from_args(args);
-        let router_fn = self.0.clone();
+        let router_fn = self.0.take().expect("Already ran.");
         let fut = async move {
             let app = router_fn().into_axum_router(context);
             let server = config.server_builder().serve(app.into_make_service());

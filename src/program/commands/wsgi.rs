@@ -1,4 +1,4 @@
-//! Convert a `Router` into a `RunnableCommand`
+//! Convert a `Router` into a `RunnableCommand` and run Python WSGI as a fallback.
 use crate::context::PuffContext;
 use crate::errors::Result;
 use crate::program::{Runnable, RunnableCommand};

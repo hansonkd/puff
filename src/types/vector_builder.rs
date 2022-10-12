@@ -12,7 +12,7 @@ use crate::types::{Puff, Vector};
 /// # Examples
 ///
 /// ```
-/// use puff::types::VectorBuilder;
+/// use puff_rs::types::VectorBuilder;
 ///
 /// let mut builder = VectorBuilder::new();
 /// builder.push(0);
@@ -34,7 +34,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::VectorBuilder;
+    /// use puff_rs::types::VectorBuilder;
     /// let mut vector: VectorBuilder<i32> = VectorBuilder::new();
     /// ```
     pub fn new() -> VectorBuilder<T> {
@@ -49,7 +49,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::{Text, VectorBuilder};
+    /// use puff_rs::types::{Text, VectorBuilder};
     /// let mut vector: VectorBuilder<i32> = VectorBuilder::with_capacity(10);
     /// ```
     pub fn with_capacity(capacity: usize) -> VectorBuilder<T> {
@@ -61,7 +61,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::VectorBuilder;
+    /// use puff_rs::types::VectorBuilder;
     ///
     /// let mut vector = VectorBuilder::new();
     /// assert_eq!(vector.is_empty(), true);
@@ -78,7 +78,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::{VectorBuilder};
+    /// use puff_rs::types::{VectorBuilder};
     /// let vector: VectorBuilder<usize> = VectorBuilder::new();
     /// assert!(vector.is_empty())
     /// ```
@@ -94,7 +94,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::VectorBuilder;
+    /// use puff_rs::types::VectorBuilder;
     /// let v = VectorBuilder::from(vec![10, 40, 30]);
     /// assert_eq!(Some(40), v.get(1));
     /// assert_eq!(None, v.get(3));
@@ -108,7 +108,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use puff::types::VectorBuilder;
+    /// use puff_rs::types::VectorBuilder;
     ///
     /// let mut vector = VectorBuilder::new();
     /// assert_eq!(vector.len(), 0);

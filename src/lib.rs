@@ -6,6 +6,11 @@
 //!
 //! # Puff Benefits
 //!
+//! * Integrations:
+//!     * PubSub
+//!     * Redis
+//!     * Postgres
+//!     * GraphQL
 //! * Rust Compatible
 //!     * Axum Compatible
 //!     * Tokio Compatible
@@ -14,45 +19,20 @@
 //!     * WSGI Compatible
 //!     * Django Compatible
 //!     * Flask Compatible
-//! * Easy-To-Use Interface
-//!     * Rust Types optimized for easy sharing with Python
-//!     * Sync-Code, Write highly concurrent programs without using `async`... in Python or Rust.
-//!     * Clear idioms for sharable read-only structures and mutable builders.
-//!         * Text
-//!         * Vector
-//!         * Map
-//!         * Bytes
-//!         * Datetime
-//!         * Date
-//!     * Tightly Integrated Standard Library
-//!         * Postgres Pools
-//!         * Redis Connections
-//!         * Pub-Sub Channels across microservices
-//!         * Async Job Queue
-//!         * MPSC and Oneshot Channels
-//!         * Fast memory efficient Bytes, Map, Vector, Datetime, and Text types.
 //! * Quick Escape Hatches
 //!     * Switch to Python to handle jobs that don't fit well in the Rust paradigm.
-//!     * Drop down to pure Rust or Assembly to handle the most performance critical paths of your app.
-//! * Cargo
-//!     * Use Crates package management for Puff packages
-//!     * Use Cargo build system for reliable deployments
+//!     * Drop down to pure Rust or even Assembly to handle the most performance critical paths of your app.
 //!
 //! ## Basic Example
 //!
 //! This example shows how to make a simple Puff web service.
 //!
 //! ```no_run
-//! use std::process::ExitCode;
-//! use puff::program::commands::http::ServerCommand;
-//! use puff::program::Program;
-//! use puff::types::text::{Text, ToText};
-//! use puff::web::server::Router;
-//! use puff::errors::Result;
-//! use std::time::Duration;
+//! use puff_rs::program::commands::ServerCommand;
+//! use puff_rs::prelude::*;
 //!
 //! fn main() -> ExitCode {
-//!     // build our application with a route//!
+//!     // build our axum application with a route.
 //!     let app = Router::new().get("/", root);
 //!
 //!     Program::new("my_first_app")
@@ -61,15 +41,14 @@
 //!         .run()
 //! }
 //!
-//! // Basic handler that responds with a static string
-//! fn root() -> Result<Text> {
-//!     // Puff functions don't block even though they are sync!
-//!     puff::tasks::sleep(Duration::from_secs(1));
-//!     Ok("ok".to_text())
+//! // Basic handler that responds with a static text
+//! async fn root() -> Text {
+//!     // Puff handlers are based on Axum.
+//!     "ok".to_text()
 //! }
 //! ```
 //!
-//! Run with `cargo run server` or use `cargo run help` to show all CLI options of your Puff program.
+//! Run with `cargo run runserver` or use `cargo run help` to show all CLI options of your Puff program.
 //!
 //!
 extern crate core;
@@ -84,5 +63,7 @@ pub mod rand;
 pub mod runtime;
 pub mod types;
 pub mod web;
+pub mod prelude;
 
 pub use tracing;
+pub use axum;
