@@ -53,7 +53,7 @@ impl RunnableCommand for DjangoManagementCommand {
                 )
             })?;
             let r = res.await??;
-            let exit_status = Python::with_gil(|py| r.extract::<u8>(py))?;
+            let exit_status = Python::with_gil(|py| r.extract::<u8>(py)).unwrap_or_default();
             Ok(ExitCode::from(exit_status))
         };
         Ok(Runnable::new(fut))

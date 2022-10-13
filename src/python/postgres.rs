@@ -9,22 +9,25 @@ use bb8_postgres::bb8::Pool;
 
 use bb8_postgres::PostgresConnectionManager;
 use chrono::{DateTime, NaiveDateTime, Utc};
-use futures_util::StreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use pyo3::create_exception;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyList, PyString, PyTuple};
 use pythonize::depythonize;
 use std::error::Error;
+use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::pin::Pin;
 
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::oneshot;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type};
 use tokio_postgres::{Client, Column, NoTls, Portal, Row, RowStream, Statement, Transaction};
+use uuid::Uuid;
 
 create_exception!(module, PgError, pyo3::exceptions::PyException);
 create_exception!(module, Warning, pyo3::exceptions::PyException);
@@ -54,8 +57,9 @@ impl PostgresGlobal {
     }
 }
 
+#[derive(Clone)]
 #[pyclass]
-struct Connection {
+pub struct Connection {
     pool: Pool<PostgresConnectionManager<NoTls>>,
     transaction_loop: Arc<Mutex<Option<Sender<TxnCommand>>>>,
     closed: bool,
@@ -76,6 +80,15 @@ fn get_sender(
         sender
     }
 }
+
+pub async  fn execute_rust(conn: &Connection, q: String, params: Vec<PythonSqlValue>) -> PuffResult<(Statement, Vec<Row>)> {
+    let transaction_loop_inner = conn.transaction_loop.clone();
+    let sender = get_sender(conn.pool.clone(), transaction_loop_inner);
+    let (one_sender, rec) = oneshot::channel();
+    sender.send(TxnCommand::ExecuteRust(one_sender, q, params)).await?;
+    rec.await?
+}
+
 
 impl Connection {
     pub fn new(pool: Pool<PostgresConnectionManager<NoTls>>) -> Self {
@@ -166,7 +179,7 @@ impl Connection {
 }
 
 #[pyclass]
-struct Cursor {
+pub struct Cursor {
     pool: Pool<PostgresConnectionManager<NoTls>>,
     transaction_loop: Arc<Mutex<Option<Sender<TxnCommand>>>>,
     is_closed: bool,
@@ -344,6 +357,7 @@ pub(crate) fn column_to_python(
         Type::FLOAT8 => row.get::<_, Option<f64>>(ix).into_py(py),
         Type::OID => row.get::<_, Option<u32>>(ix).into_py(py),
         Type::BYTEA => row.get::<_, Option<&[u8]>>(ix).into_py(py),
+        Type::UUID => pythonize::pythonize(py, &row.get::<_, Option<Uuid>>(ix))?,
         Type::JSON => pythonize::pythonize(py, &row.get::<_, Option<serde_json::Value>>(ix))?,
         Type::JSONB => pythonize::pythonize(py, &row.get::<_, Option<serde_json::Value>>(ix))?,
         Type::BOOL_ARRAY => row.get::<_, Option<Vec<bool>>>(ix).into_py(py),
@@ -358,6 +372,7 @@ pub(crate) fn column_to_python(
         Type::FLOAT8_ARRAY => row.get::<_, Option<Vec<f64>>>(ix).into_py(py),
         Type::OID_ARRAY => row.get::<_, Option<Vec<u32>>>(ix).into_py(py),
         Type::BYTEA_ARRAY => row.get::<_, Option<Vec<&[u8]>>>(ix).into_py(py),
+        Type::UUID_ARRAY => pythonize::pythonize(py, &row.get::<_, Vec<Uuid>>(ix))?,
 
         t => {
             return Err(NotSupportedError::new_err(format!(
@@ -379,9 +394,9 @@ fn row_to_pyton(py: Python, row: Row) -> PyResult<Py<PyTuple>> {
     Ok(PyTuple::new(py, row_vec).into_py(py))
 }
 
-#[derive(Debug)]
 enum TxnCommand {
     Execute(PyObject, String, Vec<PythonSqlValue>),
+    ExecuteRust(oneshot::Sender<PuffResult<(Statement, Vec<Row>)>>, String, Vec<PythonSqlValue>),
     ExecuteMany(PyObject, String, PyObject),
     FetchOne(PyObject),
     FetchMany(PyObject, i32),
@@ -393,6 +408,11 @@ enum TxnCommand {
     Close(Arc<Mutex<Option<Sender<TxnCommand>>>>),
 }
 
+impl Debug for TxnCommand {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        "TxnCommand".fmt(f)
+    }
+}
 #[derive(Debug, Clone)]
 pub struct PythonSqlValue(PyObject);
 
@@ -495,6 +515,7 @@ impl ToSql for PythonSqlValue {
             | Type::FLOAT4
             | Type::FLOAT8
             | Type::OID
+            | Type::UUID
             | Type::BYTEA
             | Type::BOOL_ARRAY
             | Type::TEXT_ARRAY
@@ -507,6 +528,7 @@ impl ToSql for PythonSqlValue {
             | Type::FLOAT4_ARRAY
             | Type::FLOAT8_ARRAY
             | Type::OID_ARRAY
+            | Type::UUID_ARRAY
             | Type::BYTEA_ARRAY => true,
             _ => false,
         }
@@ -598,11 +620,13 @@ async fn run_loop(
     client_pool: Pool<PostgresConnectionManager<NoTls>>,
     mut rec: Receiver<TxnCommand>,
 ) -> PuffResult<()> {
+    println!("Running loop!");
     let mut auto_commit = false;
     let mut running = true;
     let mut client_conn = client_pool.get().await?;
     while running {
         if let Some(msg) = rec.recv().await {
+            println!("new msg!");
             let new_result = if auto_commit {
                 run_autocommit_loop(msg, &mut *client_conn, &mut rec).await?
             } else {
@@ -663,6 +687,15 @@ async fn run_txn_loop<'a>(
                 } else {
                     handle_python_return(ret, async { Ok(true) }).await;
                 }
+            }
+            TxnCommand::ExecuteRust(sender, q, params) => {
+                let fut = async {
+                    let statement = txn.prepare(&q).await?;
+                    let rowstream = txn.query_raw(&statement, &params).await?;
+                    let rows = rowstream.try_collect().await?;
+                    Ok((statement, rows))
+                };
+                sender.send(fut.await).unwrap_or(())
             }
             TxnCommand::Execute(ret, q, params) => {
                 row_count = 0;
@@ -812,6 +845,15 @@ async fn run_autocommit_loop<'a>(
             }
             TxnCommand::Rollback(ret) => {
                 handle_python_return(ret, async { Ok(false) }).await;
+            }
+            TxnCommand::ExecuteRust(sender, q, params) => {
+                let fut = async {
+                    let statement = client.prepare(&q).await?;
+                    let rowstream = client.query_raw(&statement, &params).await?;
+                    let rows = rowstream.try_collect().await?;
+                    Ok((statement, rows))
+                };
+                sender.send(fut.await).unwrap_or(())
             }
             TxnCommand::Execute(ret, q, params) => {
                 row_count = 0;

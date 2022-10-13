@@ -22,6 +22,7 @@ use crate::graphql::puff_schema::{
 };
 use crate::graphql::row_return::ExtractorRootNode;
 use crate::graphql::scalar::{AggroScalarValue, AggroValue, GenericScalar};
+use crate::python::postgres::Connection;
 use crate::types::text::ToText;
 use crate::types::Text;
 
@@ -357,12 +358,13 @@ impl GraphQLValueAsync<AggroScalarValue> for PuffGqlObject {
         _args: &'a Arguments<'a, AggroScalarValue>,
         executor: &'a Executor<'_, '_, Self::Context, AggroScalarValue>,
     ) -> BoxFuture<'a, ExecutionResult<AggroScalarValue>> {
-        let bearer = executor.context().token();
+        let context = executor.context();
+        let bearer = context.token();
+        let conn = context.connection();
         Box::pin(async move {
             let fut = async move {
                 let look_ahead = executor.look_ahead();
                 let look_ahead_slice = &look_ahead;
-
                 let this_obj = info
                     .all_objs
                     .get(&info.name)
@@ -372,19 +374,15 @@ impl GraphQLValueAsync<AggroScalarValue> for PuffGqlObject {
                     .get(&field_name.to_text())
                     .expect(format!("Could not find field {}", field_name).as_str());
                 // let ctx = executor.context();
-                let pool = with_puff_context(|ctx| ctx.postgres().pool());
                 let all_objects = info.all_objs.clone();
                 let input_objs = &info.input_objs;
-                let mut client = pool.get().await?;
                 let look_ahead = Python::with_gil(|py| {
                     selection_to_fields(py, aggro_field, look_ahead_slice, input_objs, &all_objects)
                 })?;
                 // let field_obj = info.all_objs.get(field.return_type.primary_type.as_str()).unwrap();
-                let txn = client.transaction().await?;
                 let rows = Arc::new(ExtractorRootNode);
-                let python_context = PyContext::new(rows.clone(), bearer);
+                let python_context = PyContext::new(rows.clone(), bearer, conn);
                 let res = returned_values_into_stream(
-                    &txn,
                     rows,
                     &look_ahead,
                     aggro_field,
@@ -392,12 +390,6 @@ impl GraphQLValueAsync<AggroScalarValue> for PuffGqlObject {
                     python_context,
                 )
                 .await?;
-
-                if info.commit {
-                    txn.commit().await?;
-                } else {
-                    txn.rollback().await?;
-                }
 
                 for s in res {
                     return Ok(s);
@@ -431,7 +423,9 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
         'res: 'f,
         'e: 'res,
     {
-        let bearer = executor.context().token();
+        let context = executor.context();
+        let bearer = context.token();
+        let conn = context.connection();
         Box::pin(async move {
             let fut = async move {
                 let look_ahead = executor.look_ahead();
@@ -455,9 +449,8 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                     let args = laf.arguments().to_object(py);
                     PuffResult::Ok((laf, args))
                 })?;
-
                 let parents = Arc::new(ExtractorRootNode);
-                let python_context = PyContext::new(parents.clone(), bearer);
+                let python_context = PyContext::new(parents.clone(), bearer, conn);
                 let ss = SubscriptionSender::new(
                     sender,
                     look_ahead_fields,

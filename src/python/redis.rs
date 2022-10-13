@@ -78,14 +78,72 @@ impl PythonRedis {
     }
 }
 
+
 #[pymethods]
 impl PythonRedis {
-    fn get(&self, py: Python, return_fun: PyObject, val: &str) -> PyResult<PyObject> {
+    fn get(&self, py: Python, return_fun: PyObject, val: &[u8]) -> PyResult<PyObject> {
         self.run_command::<Bytes>(py, return_fun, Cmd::get(val))
     }
 
-    fn set(&self, py: Python, return_fun: PyObject, key: &str, val: &str) -> PyResult<PyObject> {
-        self.run_command::<()>(py, return_fun, Cmd::set(key, val))
+    fn set(&self, py: Python, return_fun: PyObject, key: &[u8], val: &[u8], ex: Option<usize>, nx: Option<bool>) -> PyResult<PyObject> {
+        let nx = nx.unwrap_or_default();
+        if nx {
+            match ex {
+                Some(seconds) => {
+                    let mut command = Cmd::set(key, val);
+                    command.arg("NX").arg("EX").arg(seconds);
+                    self.run_command::<()>(py, return_fun, command)
+                },
+                None => self.run_command::<()>(py, return_fun, Cmd::set_nx(key, val))
+            }
+        } else {
+            match ex {
+                Some(seconds) => self.run_command::<()>(py, return_fun, Cmd::set_ex(key, val, seconds)),
+                None => self.run_command::<()>(py, return_fun, Cmd::set(key, val))
+            }
+        }
+
+    }
+
+    fn mget(&self, py: Python, return_fun: PyObject, keys: Vec<&[u8]>) -> PyResult<PyObject> {
+        self.run_command::<Vec<Option<Bytes>>>(py, return_fun, Cmd::get(keys))
+    }
+
+    fn mset(&self, py: Python, return_fun: PyObject, vals: Vec<(&[u8], &[u8])>, nx: Option<bool>) -> PyResult<PyObject> {
+        let nx = nx.unwrap_or_default();
+        if nx {
+            let mut command  = Cmd::set_multiple(vals.as_slice());
+            command.arg("NX");
+            self.run_command::<()>(py, return_fun, command)
+        } else {
+            self.run_command::<()>(py, return_fun, Cmd::set_multiple(vals.as_slice()))
+        }
+    }
+
+    fn persist(&self, py: Python, return_fun: PyObject, key: &[u8]) -> PyResult<PyObject> {
+        self.run_command::<bool>(py, return_fun, Cmd::persist(key))
+    }
+
+    fn expire(&self, py: Python, return_fun: PyObject, key: &[u8], seconds: usize) -> PyResult<PyObject> {
+        self.run_command::<bool>(py, return_fun, Cmd::expire(key, seconds))
+    }
+
+    fn delete(&self, py: Python, return_fun: PyObject, key: &[u8]) -> PyResult<PyObject> {
+        self.run_command::<bool>(py, return_fun, Cmd::del(key))
+    }
+
+    fn incr(&self, py: Python, return_fun: PyObject, key: &[u8], delta: i64) -> PyResult<PyObject> {
+        self.run_command::<i64>(py, return_fun, Cmd::incr(key, delta))
+    }
+
+    fn decr(&self, py: Python, return_fun: PyObject, key: &[u8], delta: i64) -> PyResult<PyObject> {
+        self.run_command::<i64>(py, return_fun, Cmd::decr(key, delta))
+    }
+
+    fn flushdb(&self, py: Python, return_fun: PyObject) -> PyResult<PyObject> {
+        let mut command = Cmd::new();
+        command.arg("FLUSHDB");
+        self.run_command::<bool>(py, return_fun, command)
     }
 
     fn command(

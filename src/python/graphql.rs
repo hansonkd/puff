@@ -11,6 +11,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString};
 use pyo3::{PyObject, PyResult, Python};
 use std::collections::HashMap;
+use crate::python::postgres::Connection;
 
 /// Access the Global graphql context
 #[pyclass]
@@ -48,8 +49,10 @@ impl PythonGraphql {
         return_fun: PyObject,
         query: String,
         variables: &PyDict,
+        conn: Option<&Connection>,
         auth_token: Option<&PyString>,
     ) -> PyResult<()> {
+        println!("{} conn", conn.is_some());
         let bearer = auth_token.map(|t| t.to_text());
         let mut hm = HashMap::with_capacity(variables.len());
         for (k, v) in variables {
@@ -57,13 +60,17 @@ impl PythonGraphql {
             hm.insert(k.to_string(), variables);
         }
         let this_root = self.0.clone();
+        let this_conn = conn.map(|f| f.clone()).unwrap_or_else(|| {
+            let pool  = with_puff_context(|ctx| ctx.postgres().pool());
+            Connection::new(pool)
+        });
         greenlet_async(return_fun, async move {
             let (value, errors) = execute(
                 query.as_str(),
                 None,
                 &this_root,
                 &hm,
-                &AggroContext::new(bearer),
+                &AggroContext::new_with_connection(bearer, this_conn),
             )
             .await?;
             Python::with_gil(|py| {

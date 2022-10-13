@@ -180,7 +180,7 @@ def hello_world():
 
 ## Puff ♥ Django
 
-While it can run any WSGI app, Puff has a special affection for Django. Puff believes that business logic should be implemented on a higher level layer and Rust should be used as an optimization. Django is a perfect high level framework to use with Puff as it handles migrations, admin, etc. Puff mimics the psycopg2 drivers so that Django uses the Puff Database pool.
+While it can run any WSGI app, Puff has a special affection for Django. Puff believes that business logic should be implemented on a higher level layer and Rust should be used as an optimization. Django is a perfect high level framework to use with Puff as it handles migrations, admin, etc. Puff mimics the psycopg2 drivers and cache so that Django uses the Puff Database and Redis pool.
 
 Transform your sync Django project into a highly concurrent Puff program with a few lines of code. Puff wraps the management commands so migrate, etc. all work as expected. Simply run `cargo run django [command]` instead of using `./manage.py [command]`. For example `cargo run django migrate`. Don't use django's dev server, instead use Puff's with `cargo run runserver`
 

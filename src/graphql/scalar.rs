@@ -9,6 +9,7 @@ use std::hash::{Hash, Hasher};
 
 use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type};
+use crate::prelude::{Text, ToText};
 
 pub type AggroValue = JuniperValue<AggroScalarValue>;
 
@@ -59,7 +60,7 @@ pub enum AggroScalarValue {
     Int(i32),
     // Long(i64),
     Float(f64),
-    String(String),
+    String(Text),
     Boolean(bool),
     Generic(Box<AggroValue>),
 }
@@ -121,7 +122,7 @@ impl<'de> Deserialize<'de> for AggroScalarValue {
             }
 
             fn visit_string<E: de::Error>(self, s: String) -> Result<Self::Value, E> {
-                Ok(AggroScalarValue::String(s))
+                Ok(AggroScalarValue::String(s.to_text()))
             }
         }
 
@@ -193,7 +194,7 @@ impl ToSql for AggroScalarValue {
         match self {
             AggroScalarValue::Int(i) => i.to_sql(ty, out),
             AggroScalarValue::Float(i) => i.to_sql(ty, out),
-            AggroScalarValue::String(i) => i.to_sql(ty, out),
+            AggroScalarValue::String(i) => i.as_str().to_sql(ty, out),
             AggroScalarValue::Boolean(i) => i.to_sql(ty, out),
             AggroScalarValue::Generic(_i) => Err(anyhow!("Cannot convert generic to sql").into()),
         }
@@ -274,9 +275,16 @@ impl Serialize for AggroScalarValue {
     }
 }
 
+impl From<Text> for AggroScalarValue {
+    fn from(s: Text) -> Self {
+        AggroScalarValue::String(s)
+    }
+}
+
+
 impl From<String> for AggroScalarValue {
     fn from(s: String) -> Self {
-        AggroScalarValue::String(s)
+        AggroScalarValue::String(s.to_text())
     }
 }
 
@@ -310,14 +318,14 @@ impl ScalarValue for AggroScalarValue {
 
     fn as_string(&self) -> Option<String> {
         match *self {
-            Self::String(ref s) => Some(s.clone()),
+            Self::String(ref s) => Some(s.to_string()),
             _ => None,
         }
     }
 
     fn into_string(self) -> Option<String> {
         match self {
-            Self::String(s) => Some(s),
+            Self::String(s) => Some(s.to_string()),
             _ => None,
         }
     }
@@ -348,7 +356,7 @@ impl ScalarValue for AggroScalarValue {
         match self {
             Self::Int(i) => S::from(i),
             Self::Float(f) => S::from(f),
-            Self::String(s) => S::from(s),
+            Self::String(s) => S::from(s.to_string()),
             Self::Boolean(b) => S::from(b),
             Self::Generic(_b) => panic!("Cannot convert generic into another"),
         }
@@ -425,6 +433,6 @@ impl<'de> de::Visitor<'de> for AggroScalarValueVisitor {
     }
 
     fn visit_string<E>(self, value: String) -> Result<AggroScalarValue, E> {
-        Ok(AggroScalarValue::String(value))
+        Ok(AggroScalarValue::String(value.to_text()))
     }
 }

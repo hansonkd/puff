@@ -103,7 +103,7 @@ pub(crate) fn juniper_value_to_python(py: Python, v: &AggroValue) -> PuffResult<
 
 fn scalar_to_python(py: Python, v: &AggroScalarValue) -> PuffResult<Py<PyAny>> {
     match v {
-        AggroScalarValue::String(s) => Ok(s.into_py(py)),
+        AggroScalarValue::String(s) => Ok(s.clone().into_py(py)),
         AggroScalarValue::Int(s) => Ok(s.into_py(py)),
         AggroScalarValue::Float(s) => Ok(s.into_py(py)),
         AggroScalarValue::Boolean(s) => Ok(s.into_py(py)),
