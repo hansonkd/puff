@@ -21,7 +21,6 @@ impl ServerCommand {
     pub fn new_with_router_init<F: FnOnce() -> Router + 'static>(f: F) -> Self {
         Self(Some(Box::new(f)))
     }
-
 }
 
 impl RunnableCommand for ServerCommand {

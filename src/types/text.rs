@@ -8,7 +8,7 @@ use bb8_redis::redis::{
 };
 use compact_str::{CompactString, ToCompactString};
 use pyo3::types::PyString;
-use pyo3::{FromPyObject, PyAny, PyObject, PyResult, Python, ToPyObject};
+use pyo3::{FromPyObject, IntoPy, Py, PyAny, PyObject, PyResult, Python, ToPyObject};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cmp::Ordering;
@@ -75,6 +75,12 @@ impl Text {
 
     pub fn as_str(&self) -> &str {
         self.0.as_str()
+    }
+}
+
+impl IntoPy<Py<PyAny>> for Text {
+    fn into_py(self, py: Python<'_>) -> Py<PyAny> {
+        PyString::new(py, self.0.as_str()).into_py(py)
     }
 }
 

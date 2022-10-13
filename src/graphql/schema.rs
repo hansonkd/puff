@@ -3,28 +3,27 @@ use async_trait::async_trait;
 
 use juniper::meta::{Argument, Field, MetaType};
 use juniper::{
-    Arguments, BoxFuture, ExecutionResult, Executor, FieldError,
-    FromInputValue, GraphQLSubscriptionValue, GraphQLType, GraphQLValue, GraphQLValueAsync,
-    InputValue, Registry, Value, ValuesStream,
+    Arguments, BoxFuture, ExecutionResult, Executor, FieldError, FromInputValue,
+    GraphQLSubscriptionValue, GraphQLType, GraphQLValue, GraphQLValueAsync, InputValue, Registry,
+    Value, ValuesStream,
 };
 use pyo3::types::PyDict;
-use pyo3::Python;
+use pyo3::{PyResult, Python, ToPyObject};
 
+use crate::errors::{log_puff_error, PuffResult};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::mpsc::unbounded_channel;
-use tokio_stream::wrappers::{UnboundedReceiverStream};
-use crate::errors::log_puff_error;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::graphql::puff_schema::{
     returned_values_into_stream, selection_to_fields, AggroArgument, AggroContext, AggroField,
-    AggroObject, AggroTypeInfo, SubscriptionSender,
+    AggroObject, AggroTypeInfo, PyContext, SubscriptionSender,
 };
-use crate::graphql::row_return::{ExtractorRootNode};
+use crate::graphql::row_return::ExtractorRootNode;
 use crate::graphql::scalar::{AggroScalarValue, AggroValue, GenericScalar};
 use crate::types::text::ToText;
 use crate::types::Text;
-
 
 #[derive(Debug, Clone)]
 pub struct SchemaInfo {
@@ -358,6 +357,7 @@ impl GraphQLValueAsync<AggroScalarValue> for PuffGqlObject {
         _args: &'a Arguments<'a, AggroScalarValue>,
         executor: &'a Executor<'_, '_, Self::Context, AggroScalarValue>,
     ) -> BoxFuture<'a, ExecutionResult<AggroScalarValue>> {
+        let bearer = executor.context().token();
         Box::pin(async move {
             let fut = async move {
                 let look_ahead = executor.look_ahead();
@@ -382,10 +382,16 @@ impl GraphQLValueAsync<AggroScalarValue> for PuffGqlObject {
                 // let field_obj = info.all_objs.get(field.return_type.primary_type.as_str()).unwrap();
                 let txn = client.transaction().await?;
                 let rows = Arc::new(ExtractorRootNode);
-
-                let res =
-                    returned_values_into_stream(&txn, rows, &look_ahead, aggro_field, all_objects)
-                        .await?;
+                let python_context = PyContext::new(rows.clone(), bearer);
+                let res = returned_values_into_stream(
+                    &txn,
+                    rows,
+                    &look_ahead,
+                    aggro_field,
+                    all_objects,
+                    python_context,
+                )
+                .await?;
 
                 if info.commit {
                     txn.commit().await?;
@@ -425,6 +431,7 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
         'res: 'f,
         'e: 'res,
     {
+        let bearer = executor.context().token();
         Box::pin(async move {
             let fut = async move {
                 let look_ahead = executor.look_ahead();
@@ -442,18 +449,34 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                 let (sender, ret) = unbounded_channel();
                 let all_objects = info.all_objs.clone();
                 let input_objs = &info.input_objs;
-                let look_ahead = Python::with_gil(|py| {
-                    selection_to_fields(py, field, look_ahead_slice, input_objs, &all_objects)
+                let (look_ahead_fields, args) = Python::with_gil(|py| {
+                    let laf =
+                        selection_to_fields(py, field, look_ahead_slice, input_objs, &all_objects)?;
+                    let args = laf.arguments().to_object(py);
+                    PuffResult::Ok((laf, args))
                 })?;
 
-                let ss = SubscriptionSender::new(sender, look_ahead, field.clone(), all_objects);
+                let parents = Arc::new(ExtractorRootNode);
+                let python_context = PyContext::new(parents.clone(), bearer);
+                let ss = SubscriptionSender::new(
+                    sender,
+                    look_ahead_fields,
+                    field.clone(),
+                    all_objects,
+                    python_context.clone(),
+                    parents.clone(),
+                );
 
                 let py_dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
                 let acceptor_method = field
                     .acceptor_method
                     .clone()
                     .expect("Subscription field needs an acceptor");
-                py_dispatcher.dispatch::<_, &PyDict>(acceptor_method, (ss, ), None)?;
+                py_dispatcher.dispatch::<_, &PyDict>(
+                    acceptor_method,
+                    (ss, python_context, args),
+                    None,
+                )?;
                 let stream: ValuesStream<AggroScalarValue> =
                     Box::pin(UnboundedReceiverStream::new(ret));
                 Ok(Value::Scalar(stream))

@@ -1,13 +1,15 @@
 use crate::graphql::scalar::{AggroScalarValue, AggroValue};
 
+use crate::errors::PuffResult;
+use crate::python::postgres::column_to_python;
 use crate::types::Text;
 use anyhow::{anyhow, bail, Result};
 use juniper::{InputValue, Object};
+use pyo3::exceptions::PyKeyError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString};
 use std::collections::HashMap;
 use tokio_postgres::{Column, Row, Statement};
-use crate::errors::PuffResult;
 
 pub fn convert_pyany_to_jupiter(attribute_val: &PyAny) -> AggroValue {
     if let Ok(s) = attribute_val.extract() {
@@ -83,6 +85,7 @@ pub fn convert_postgres_to_juniper(
 pub trait ExtractValues {
     fn len(&self) -> usize;
     fn extract_values(&self, names: &[Text]) -> Result<Vec<Vec<AggroValue>>>;
+    fn extract_py_values(&self, py: Python, names: &[&PyString]) -> PuffResult<Py<PyList>>;
     fn extract_first(&self) -> Result<Vec<AggroValue>>;
 }
 
@@ -132,6 +135,42 @@ impl ExtractValues for PostgresResultRows {
         Ok(ret_vec)
     }
 
+    fn extract_py_values(&self, py: Python, names: &[&PyString]) -> PuffResult<Py<PyList>> {
+        let field_mapping: HashMap<&str, (usize, &Column)> = names
+            .iter()
+            .flat_map(|field_name| {
+                self.statement
+                    .columns()
+                    .iter()
+                    .enumerate()
+                    .find_map(|(ix, c)| {
+                        if c.name() == field_name.to_str().expect("Expected string") {
+                            Some((c.name(), (ix, c)))
+                        } else {
+                            None
+                        }
+                    })
+            })
+            .collect();
+
+        let ret_vec = PyList::empty(py);
+        for row in &self.rows {
+            let mut row_vec = PyList::empty(py);
+            for name in names {
+                let (column_ix, c) = if let Some((column_ix, c)) = field_mapping.get(name.to_str()?)
+                {
+                    (column_ix, *c)
+                } else {
+                    bail!("Could not find {} in Postgres row", name)
+                };
+                let field_val = column_to_python(py, *column_ix, c, row)?;
+                row_vec.append(field_val)?;
+            }
+            ret_vec.append(row_vec)?;
+        }
+        Ok(ret_vec.into_py(py))
+    }
+
     fn extract_first(&self) -> Result<Vec<AggroValue>> {
         let mut ret_vec = Vec::with_capacity(self.rows.len());
         for row in &self.rows {
@@ -155,6 +194,9 @@ impl ExtractValues for ExtractorRootNode {
     fn extract_values(&self, _names: &[Text]) -> Result<Vec<Vec<AggroValue>>> {
         bail!("Cannot extract values from the Root")
     }
+    fn extract_py_values(&self, py: Python, names: &[&PyString]) -> Result<Py<PyList>> {
+        bail!("Cannot extract values from the Root")
+    }
     fn extract_first(&self) -> Result<Vec<AggroValue>> {
         Ok(vec![AggroValue::Null])
     }
@@ -164,7 +206,6 @@ pub struct PythonResultRows {
     pub py_list: Py<PyList>,
 }
 
-
 impl ExtractValues for PythonResultRows {
     fn len(&self) -> usize {
         Python::with_gil(|py| self.py_list.as_ref(py).len())
@@ -173,16 +214,18 @@ impl ExtractValues for PythonResultRows {
         Python::with_gil(|py| {
             let l = self.py_list.as_ref(py);
             let mut ret_vec = Vec::with_capacity(l.len());
-            let py_none = py.None();
-            let none = py_none.as_ref(py);
 
             for row in l {
                 let mut row_vec = Vec::with_capacity(names.len());
                 for name in names {
                     let val = if let Ok(d) = row.downcast::<PyDict>() {
-                        d.getattr(name.as_str()).unwrap_or(none)
+                        d.get_item(name.as_str())
+                            .ok_or(PyKeyError::new_err(format!(
+                                "Could not find {} in parent",
+                                name
+                            )))?
                     } else {
-                        row.getattr(name.as_str()).unwrap_or(none)
+                        row.getattr(name.as_str())?
                     };
                     let jupiter_val = convert_pyany_to_jupiter(val);
                     row_vec.push(jupiter_val)
@@ -192,6 +235,29 @@ impl ExtractValues for PythonResultRows {
             Ok(ret_vec)
         })
     }
+
+    fn extract_py_values(&self, py: Python, names: &[&PyString]) -> PuffResult<Py<PyList>> {
+        let l = self.py_list.as_ref(py);
+        let final_list = PyList::empty(py);
+        for row in l {
+            let row_vec = PyList::empty(py);
+            for name in names {
+                let val = if let Ok(d) = row.downcast::<PyDict>() {
+                    d.get_item(name.to_str()?)
+                        .ok_or(PyKeyError::new_err(format!(
+                            "Could not find {} in parent",
+                            name.to_string()
+                        )))?
+                } else {
+                    row.getattr(name.to_str()?)?
+                };
+                row_vec.append(val)?
+            }
+            final_list.append(row_vec)?;
+        }
+        Ok(final_list.into_py(py))
+    }
+
     fn extract_first(&self) -> Result<Vec<AggroValue>> {
         Python::with_gil(|py| {
             let l = self.py_list.as_ref(py);

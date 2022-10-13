@@ -1,5 +1,4 @@
 //! Commands to build a program.
-use std::future::Future;
 use crate::context::PuffContext;
 use crate::errors::{PuffResult, Result};
 use crate::program::{Runnable, RunnableCommand};
@@ -8,6 +7,7 @@ use anyhow::anyhow;
 use clap::{Arg, ArgMatches, Command};
 use hyper::server::conn::AddrIncoming;
 use hyper::server::Builder;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::process::ExitCode;
 use std::sync::Mutex;
@@ -26,12 +26,12 @@ pub mod python;
 pub mod wsgi;
 
 /// Expose a future to the command line.
-pub struct BasicCommand<F: Future<Output=PuffResult<ExitCode>> + 'static> {
+pub struct BasicCommand<F: Future<Output = PuffResult<ExitCode>> + 'static> {
     name: Text,
     inner_func: Mutex<Option<F>>,
 }
 
-impl<Fut: Future<Output=PuffResult<ExitCode>> + 'static> BasicCommand<Fut> {
+impl<Fut: Future<Output = PuffResult<ExitCode>> + 'static> BasicCommand<Fut> {
     pub fn new<T: Into<Text>>(name: T, f: Fut) -> Self {
         Self {
             name: name.into(),
@@ -40,7 +40,7 @@ impl<Fut: Future<Output=PuffResult<ExitCode>> + 'static> BasicCommand<Fut> {
     }
 }
 
-impl<F: Future<Output=PuffResult<ExitCode>> + 'static> RunnableCommand for BasicCommand<F> {
+impl<F: Future<Output = PuffResult<ExitCode>> + 'static> RunnableCommand for BasicCommand<F> {
     fn cli_parser(&self) -> Command {
         Command::new(self.name.to_string())
     }

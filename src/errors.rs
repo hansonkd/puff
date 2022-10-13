@@ -8,8 +8,8 @@ use pyo3::exceptions::PyException;
 use pyo3::{PyErr, PyResult};
 use tracing::error;
 
-pub use anyhow;
 use crate::web::server::StatusCode;
+pub use anyhow;
 
 pub type Result<T> = anyhow::Result<T>;
 pub type Error = anyhow::Error;
@@ -51,19 +51,16 @@ pub fn handle_puff_result(label: &str, r: PuffResult<()>) {
 pub fn log_puff_error<T>(label: &str, r: PuffResult<T>) -> PuffResult<T> {
     match r {
         Ok(pye) => Ok(pye),
-        Err(e) => {
-            match e.downcast::<PyErr>() {
-                Ok(pye) => {
-                    log_traceback_with_label(label, &pye);
-                    Err(pye.into())
-                }
-                Err(e) => {
-                    error!("Encountered {label} Error: {}", &e);
-                    Err(e)
-                }
+        Err(e) => match e.downcast::<PyErr>() {
+            Ok(pye) => {
+                log_traceback_with_label(label, &pye);
+                Err(pye.into())
             }
-
-        }
+            Err(e) => {
+                error!("Encountered {label} Error: {}", &e);
+                Err(e)
+            }
+        },
     }
 }
 
@@ -77,4 +74,3 @@ pub fn to_py_error<T>(_label: &str, r: PuffResult<T>) -> PyResult<T> {
         },
     }
 }
-

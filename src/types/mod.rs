@@ -51,7 +51,7 @@ use bb8_redis::redis::{
 pub use bytes_builder::BytesBuilder;
 use chrono::{Date, DateTime, Utc};
 use pyo3::types::PyBytes;
-use pyo3::{IntoPy, Py, PyObject, Python, ToPyObject};
+use pyo3::{IntoPy, Py, PyAny, PyObject, Python, ToPyObject};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::ops::Deref;
 
@@ -76,6 +76,12 @@ pub trait Puff: Clone + Send + Sync + 'static {
 /// A Puff Structure for Binary Data.
 #[derive(Clone)]
 pub struct Bytes(AxumBytes);
+
+impl Bytes {
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0[..]
+    }
+}
 
 impl Serialize for Bytes {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -151,9 +157,15 @@ impl IntoPy<Py<PyBytes>> for Bytes {
     }
 }
 
+impl IntoPy<Py<PyAny>> for Bytes {
+    fn into_py(self, py: Python<'_>) -> Py<PyAny> {
+        PyBytes::new(py, &self).to_object(py)
+    }
+}
+
 impl ToPyObject for Bytes {
     fn to_object(&self, py: Python<'_>) -> PyObject {
-        self.clone().into_py(py).to_object(py)
+        self.clone().into_py(py)
     }
 }
 

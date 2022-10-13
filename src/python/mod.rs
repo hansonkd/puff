@@ -1,11 +1,10 @@
 use crate::errors::PuffResult;
 use crate::python::redis::RedisGlobal;
 
-
 use crate::context::{set_puff_context, set_puff_context_waiting, with_puff_context, PuffContext};
 use crate::python::greenlet::{greenlet_async, GreenletReturn};
 use crate::runtime::RuntimeConfig;
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyTuple};
 
 use std::os::raw::c_int;
 
@@ -13,18 +12,19 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 use tracing::error;
 
+use crate::python::graphql::{GlobalGraphQL, PythonGraphql};
 use crate::python::postgres::{add_pg_puff_exceptions, PostgresGlobal};
 use tracing::log::info;
-use crate::python::graphql::PythonGraphql;
 
+use crate::python::pubsub::GlobalPubSub;
 pub use pyo3::prelude::*;
 
+pub mod graphql;
 pub mod greenlet;
 pub mod postgres;
+pub mod pubsub;
 pub mod redis;
 pub mod wsgi;
-pub mod graphql;
-
 
 #[pyclass]
 struct ReadFileBytes;
@@ -34,7 +34,9 @@ impl ReadFileBytes {
     pub fn __call__(&self, return_func: PyObject, file_name: String) {
         greenlet_async(return_func, async move {
             let contents = tokio::fs::read(&file_name).await?;
-            Ok(Python::with_gil(|py| contents.into_py(py)))
+            Ok(Python::with_gil(|py| {
+                PyBytes::new(py, contents.as_slice()).to_object(py)
+            }))
         })
     }
 }
@@ -76,7 +78,8 @@ pub(crate) fn bootstrap_puff_globals(config: RuntimeConfig) -> PuffResult<()> {
         puff_rust_functions.setattr("is_puff", true)?;
         puff_rust_functions.setattr("global_redis_getter", RedisGlobal)?;
         puff_rust_functions.setattr("global_postgres_getter", PostgresGlobal)?;
-        puff_rust_functions.setattr("global_gql", PythonGraphql)?;
+        puff_rust_functions.setattr("global_pubsub_getter", GlobalPubSub)?;
+        puff_rust_functions.setattr("global_gql_getter", GlobalGraphQL)?;
         add_pg_puff_exceptions(py)?;
         puff_rust_functions.setattr("global_state", global_state)?;
         puff_rust_functions.setattr("read_file_bytes", ReadFileBytes.into_py(py))?;

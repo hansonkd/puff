@@ -1,14 +1,12 @@
+use puff_rs::axum::extract::ws::{Message, WebSocket};
+use puff_rs::axum::extract::WebSocketUpgrade;
 use puff_rs::prelude::*;
-use puff_rs::axum::extract::{WebSocketUpgrade, ws::{Message, WebSocket}};
 use puff_rs::program::commands::ServerCommand;
 
 fn main() -> ExitCode {
-    let app = Router::new()
-        .get("/", root)
-        .get("/ws", ws_handler);
+    let app = Router::new().get("/", root).get("/ws", ws_handler);
 
-    let rc = RuntimeConfig::default()
-        .set_pubsub(true);
+    let rc = RuntimeConfig::default().set_pubsub(true);
 
     Program::new("my_first_ws_app")
         .about("This is my first websocket app")
@@ -16,7 +14,6 @@ fn main() -> ExitCode {
         .command(ServerCommand::new(app))
         .run()
 }
-
 
 async fn root() -> Text {
     "Ok".to_text()

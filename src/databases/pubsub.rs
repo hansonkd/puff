@@ -17,6 +17,7 @@ use std::time::Duration;
 use tracing::{error, info, warn};
 
 use futures_util::FutureExt;
+use juniper::BoxFuture;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Sender, UnboundedReceiver, UnboundedSender};
@@ -200,20 +201,56 @@ impl PubSubClient {
         }
     }
 
-    /// Create a connection that can subscribe to channels.
-    pub fn connection(&self) -> PuffResult<(PubSubConnection, UnboundedReceiver<PubSubMessage>)> {
+    /// Create a connection that can subscribe to channels with a specific ConnectionId
+    pub fn connection_with_id(
+        &self,
+        connection_id: ConnectionId,
+    ) -> PuffResult<(PubSubConnection, UnboundedReceiver<PubSubMessage>)> {
         let (sender, receiver) = mpsc::unbounded_channel();
         let conn = PubSubConnection {
-            connection_id: uuid::Uuid::new_v4(),
+            connection_id,
             sender,
             client: self.client.clone(),
             events_sender: self.events_sender.clone(),
         };
         Ok((conn, receiver))
     }
+
+    /// Create a connection that can subscribe to channels.
+    pub fn connection(&self) -> PuffResult<(PubSubConnection, UnboundedReceiver<PubSubMessage>)> {
+        self.connection_with_id(self.new_connection_id())
+    }
+
+    /// Generate a new connection ID
+    pub fn new_connection_id(&self) -> ConnectionId {
+        uuid::Uuid::new_v4()
+    }
+
+    /// Try to broadcast a message to the channel.
+    pub fn publish_as<T: Into<Text>, M: Into<Bytes>>(
+        &self,
+        connection_id: ConnectionId,
+        channel: T,
+        body: M,
+    ) -> BoxFuture<PuffResult<()>> {
+        let channel_text = channel.into();
+        let message = PubSubMessage::new(channel_text.clone(), connection_id, body.into());
+
+        with_puff_context(|ctx| {
+            let inner_client = self.client.clone();
+            let fut = async move {
+                let inner_client = inner_client.clone();
+                let body_bytes = bincode::serialize(&message)?;
+                let mut conn = inner_client.get().await?;
+                Ok(conn.publish::<_, _, ()>(channel_text, body_bytes).await?)
+            };
+            fut.boxed()
+        })
+    }
 }
 
 /// A connection that can subscribe to new messages.
+#[derive(Clone)]
 pub struct PubSubConnection {
     connection_id: ConnectionId,
     client: Pool<RedisConnectionManager>,
@@ -228,28 +265,29 @@ impl PubSubConnection {
     }
 
     /// Subscribe to the channel. Queues the command even if you don't await the handle.
-    pub fn subscribe<T: Into<Text>>(&self, channel: T) -> JoinHandle<bool> {
+    pub fn subscribe<T: Into<Text>>(&self, channel: T) -> BoxFuture<bool> {
         let new_sender = self.sender.clone();
         let event = PubSubEvent::Sub(channel.into(), self.connection_id.clone(), new_sender);
         let inner_sender = self.events_sender.clone();
         with_puff_context(move |ctx| {
-            ctx.handle().spawn(async move {
+            let fut = async move {
                 let s = {
                     let m = inner_sender.lock().unwrap();
                     (*m).clone().expect("Pub loop not started yet.")
                 };
                 let r = s.send(event).await;
                 r.is_ok()
-            })
+            };
+            fut.boxed()
         })
     }
 
     /// Unsubscribe from the channel. Queues the command even if you don't await the handle.
-    pub fn unsubscribe<T: Into<Text>>(&self, channel: T) -> JoinHandle<bool> {
+    pub fn unsubscribe<T: Into<Text>>(&self, channel: T) -> BoxFuture<bool> {
         let event = PubSubEvent::UnSub(channel.into(), self.connection_id.clone());
         let inner_sender = self.events_sender.clone();
         with_puff_context(move |ctx| {
-            ctx.handle().spawn(async move {
+            let fut = async move {
                 let s = {
                     let m = inner_sender.lock().unwrap();
                     (*m).clone().expect("Sub loop not started yet.")
@@ -257,16 +295,17 @@ impl PubSubConnection {
 
                 let r = s.send(event).await;
                 r.is_ok()
-            })
+            };
+            fut.boxed()
         })
     }
 
-    /// Try to broadcast. Will run whether you await result or not.
+    /// Try to broadcast a message to the channel.
     pub fn publish<T: Into<Text>, M: Into<Bytes>>(
         &self,
         channel: T,
         body: M,
-    ) -> JoinHandle<bool> {
+    ) -> BoxFuture<PuffResult<()>> {
         let channel_text = channel.into();
         let message = PubSubMessage::new(
             channel_text.clone(),
@@ -276,18 +315,13 @@ impl PubSubConnection {
 
         with_puff_context(|ctx| {
             let inner_client = self.client.clone();
-            ctx.handle().spawn(async move {
-                let fut = async move {
-                    let inner_client = inner_client.clone();
-                    let body_bytes = bincode::serialize(&message)?;
-                    let mut conn = inner_client.get().await?;
-                    Ok(conn.publish::<_, _, ()>(channel_text, body_bytes).await?)
-                };
-
-                let r = log_puff_error("PubSub publish", fut.await);
-
-                r.is_ok()
-            })
+            let fut = async move {
+                let inner_client = inner_client.clone();
+                let body_bytes = bincode::serialize(&message)?;
+                let mut conn = inner_client.get().await?;
+                Ok(conn.publish::<_, _, ()>(channel_text, body_bytes).await?)
+            };
+            fut.boxed()
         })
     }
 }

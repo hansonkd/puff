@@ -1,10 +1,7 @@
 use crate::context::with_puff_context;
-use crate::errors::{PuffResult, to_py_error};
+use crate::errors::{to_py_error, PuffResult};
 use crate::graphql::puff_schema::LookAheadFields::{Nested, Terminal};
-use crate::graphql::row_return::{
-    ExtractValues,
-    PostgresResultRows, PythonResultRows,
-};
+use crate::graphql::row_return::{ExtractValues, PostgresResultRows, PythonResultRows};
 use crate::graphql::scalar::{AggroScalarValue, AggroValue};
 use crate::python::greenlet::greenlet_async;
 use crate::python::postgres::PythonSqlValue;
@@ -12,39 +9,37 @@ use crate::types::text::ToText;
 use crate::types::Text;
 use anyhow::{anyhow, bail};
 
-
-
 use futures::TryStreamExt;
 use futures_util::FutureExt;
 use juniper::{
-    BoxFuture, ExecutionError, LookAheadArgument,
-    LookAheadMethods, LookAheadSelection, LookAheadValue, Object, Value,
+    BoxFuture, ExecutionError, LookAheadArgument, LookAheadMethods, LookAheadSelection,
+    LookAheadValue, Object, Value,
 };
-
 
 use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyDict, PyList, PyString};
 use std::collections::{BTreeMap, HashSet};
 
-
 use std::sync::Arc;
 
-
+use crate::graphql;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_postgres::Transaction;
-use crate::graphql;
-
 
 static NUMBERS: &'static [&'static str] = &["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
 
-#[derive(Copy, Clone, Debug)]
-pub struct AggroContext;
+#[derive(Clone, Debug)]
+pub struct AggroContext(Option<Text>);
 
 impl juniper::Context for AggroContext {}
 
 impl AggroContext {
-    pub fn new() -> Self {
-        Self
+    pub fn new(bearer: Option<Text>) -> Self {
+        Self(bearer)
+    }
+
+    pub fn token(&self) -> Option<Text> {
+        self.0.clone()
     }
 }
 
@@ -190,7 +185,9 @@ pub fn convert_obj(name: &str, desc: BTreeMap<String, &PyAny>) -> PyResult<Aggro
             return_type: decode_type(field_description.getattr("return_type")?)?,
             producer_method: field_description.getattr("producer")?.extract()?,
             acceptor_method: field_description.getattr("acceptor")?.extract()?,
-            safe_without_context: field_description.getattr("safe_without_context")?.extract()?,
+            safe_without_context: field_description
+                .getattr("safe_without_context")?
+                .extract()?,
             default: field_description.getattr("default")?.extract()?,
             arguments: final_arguments,
         };
@@ -203,24 +200,37 @@ pub fn convert_obj(name: &str, desc: BTreeMap<String, &PyAny>) -> PyResult<Aggro
     });
 }
 
+#[derive(Clone)]
 #[pyclass]
-struct PyExtract {
+pub struct PyContext {
     extractor: Arc<dyn ExtractValues + Send + Sync>,
+    bearer: Option<Text>,
+}
+
+impl PyContext {
+    pub fn new(extractor: Arc<dyn ExtractValues + Send + Sync>, bearer: Option<Text>) -> Self {
+        Self { extractor, bearer }
+    }
+
+    fn replace_extractor(&self, extractor: Arc<dyn ExtractValues + Send + Sync>) -> Self {
+        Self {
+            extractor,
+            bearer: self.bearer.clone(),
+        }
+    }
 }
 
 #[pymethods]
-impl PyExtract {
-    fn __call__(&self, py: Python, names: Vec<Text>) -> PyResult<PyObject> {
-        let rows = to_py_error("Gql Extract", self.extractor.extract_values(&names))?;
-        let ret_list = PyList::empty(py);
-        for row in rows {
-            let py_row = PyList::empty(py);
-            for val in row {
-                py_row.append(to_py_error("Gql Extract", graphql::juniper_value_to_python(py, &val))?)?
-            }
-            ret_list.append(py_row)?
-        }
-        Ok(ret_list.into_py(py))
+impl PyContext {
+    fn parent_values(&self, py: Python, names: Vec<&PyString>) -> PyResult<PyObject> {
+        let rows = to_py_error("Gql Extract", self.extractor.extract_py_values(py, &names))?;
+        Ok(rows.into_py(py))
+    }
+
+    fn auth_token(&self, py: Python) -> Option<Py<PyString>> {
+        self.bearer
+            .as_ref()
+            .map(|f| PyString::new(py, f.as_str()).into_py(py))
     }
 }
 
@@ -273,18 +283,12 @@ fn input_to_python(
                         }
                     }
                     if required.len() > 0 {
-                        bail!(
-                            "Missing required fields {:?}",
-                            required
-                        )
+                        bail!("Missing required fields {:?}", required)
                     } else {
                         Ok(val_vec.into_py_dict(py).into_py(py))
                     }
                 } else {
-                    bail!(
-                        "Could not find type {}",
-                        inner_t_name
-                    )
+                    bail!("Could not find type {}", inner_t_name)
                 }
             }
             _ => bail!("Input non-object to a object input"),
@@ -323,7 +327,7 @@ fn input_to_python(
                 Ok(v.into_py_dict(py).into_py(py))
             }
             _ => bail!("Input non-bool to a bool input"),
-        }
+        },
     }
 }
 
@@ -355,8 +359,10 @@ pub fn returned_values_into_stream<'a>(
     look_ahead: &'a LookAheadFields,
     aggro_field: &'a AggroField,
     all_objects: Arc<BTreeMap<Text, AggroObject>>,
+    py_context: PyContext,
 ) -> BoxFuture<'a, PuffResult<Vec<AggroValue>>> {
-    do_returned_values_into_stream(txn, rows, look_ahead, aggro_field, all_objects).boxed()
+    do_returned_values_into_stream(txn, rows, look_ahead, aggro_field, all_objects, py_context)
+        .boxed()
 }
 
 pub async fn do_returned_values_into_stream(
@@ -365,6 +371,7 @@ pub async fn do_returned_values_into_stream(
     look_ahead: &'_ LookAheadFields,
     aggro_field: &AggroField,
     all_objects: Arc<BTreeMap<Text, AggroObject>>,
+    py_context: PyContext,
 ) -> PuffResult<Vec<AggroValue>> {
     let type_info = aggro_field.return_type.type_info.clone();
     let class_method = aggro_field.producer_method.clone();
@@ -420,19 +427,17 @@ pub async fn do_returned_values_into_stream(
 
     match class_method {
         Some(cm) => {
-            let py_extractor = PyExtract {
-                extractor: rows.clone(),
-            };
+            let py_extractor = py_context.replace_extractor(rows.clone());
             let result = if aggro_field.safe_without_context {
                 Python::with_gil(|py| {
                     let arg_dict = args.into_py_dict(py);
-                    cm.call(py, ("wow", py_extractor), Some(arg_dict))
+                    cm.call(py, (py_extractor.clone(),), Some(arg_dict))
                 })?
             } else {
                 let py_dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
                 let rec = Python::with_gil(|py| {
                     let arg_dict = args.into_py_dict(py);
-                    py_dispatcher.dispatch(cm, ("wow", py_extractor), Some(arg_dict))
+                    py_dispatcher.dispatch(cm, (py_extractor.clone(),), Some(arg_dict))
                 })?;
 
                 rec.await??
@@ -445,7 +450,7 @@ pub async fn do_returned_values_into_stream(
                         .into_iter()
                         .map(|f| PythonSqlValue::new(f.to_object(py)))
                         .collect::<Vec<_>>();
-                    PyResult::Ok((PythonMethodResult::SqlQuery(q.to_string(), v), None))
+                    PuffResult::Ok((PythonMethodResult::SqlQuery(q.to_string(), v), None))
                 } else if let Ok((_elp, q, l, parent_cor, child_cor)) =
                     py_res.extract::<(&PyAny, &PyString, &PyList, Vec<Text>, Vec<Text>)>()
                 {
@@ -467,12 +472,26 @@ pub async fn do_returned_values_into_stream(
                         Some((parent_cor, child_cor)),
                     ))
                 } else {
-                    Ok((
-                        PythonMethodResult::PythonList(
-                            PyList::new(py, vec![py_res.into_py(py)]).into_py(py),
-                        ),
-                        None,
-                    ))
+                    if aggro_value_is_list {
+                        if let Ok(l) = py_res.downcast::<PyList>() {
+                            Ok((
+                                PythonMethodResult::PythonList(
+                                    l.into_py(py),
+                                ),
+                                None,
+                            ))
+                        } else {
+                            bail!("Expected to return a list.")
+                        }
+                    } else {
+                        Ok((
+                            PythonMethodResult::PythonList(
+                                PyList::new(py, vec![py_res.into_py(py)]).into_py(py),
+                            ),
+                            None,
+                        ))
+                    }
+
                 }
             })?;
 
@@ -514,6 +533,7 @@ pub async fn do_returned_values_into_stream(
                                 new_lookahead,
                                 &child,
                                 all_objects.clone(),
+                                py_extractor.clone(),
                             )
                             .await?;
                             for (obj, new_value) in objs.iter_mut().zip(children) {
@@ -524,10 +544,18 @@ pub async fn do_returned_values_into_stream(
                     };
                     let mut final_vec = Vec::with_capacity(parent_row_len);
 
-                    let mut child_iter = children_vec.into_iter();
+                    if aggro_value_is_list {
+                        final_vec.push(AggroValue::List(children_vec));
 
-                    for _ in 0..parent_row_len {
-                        final_vec.push(child_iter.next().unwrap_or(AggroValue::Null));
+                        for _ in 1..parent_row_len {
+                            final_vec.push(AggroValue::List(vec![]));
+                        }
+                    } else {
+                        let mut child_iter = children_vec.into_iter();
+
+                        for _ in 0..parent_row_len {
+                            final_vec.push(child_iter.next().unwrap_or(AggroValue::Null));
+                        }
                     }
 
                     Ok(final_vec)
@@ -569,6 +597,7 @@ pub async fn do_returned_values_into_stream(
                                 new_lookahead,
                                 &child,
                                 all_objects.clone(),
+                                py_extractor.clone(),
                             )
                             .await?;
                             for (obj, new_value) in objs.iter_mut().zip(children) {
@@ -614,7 +643,7 @@ pub async fn do_returned_values_into_stream(
                             if aggro_value_optional {
                                 r.unwrap_or(AggroValue::Null)
                             } else {
-                                bail!("In field")
+                                r.ok_or(anyhow!("Missing field {}", aggro_field.name))?
                             }
                         };
                         final_vec.push(val)
@@ -651,6 +680,7 @@ pub async fn do_returned_values_into_stream(
                         new_lookahead,
                         &child,
                         all_objects.clone(),
+                        py_context.clone(),
                     )
                     .await?;
                     for (obj, new_value) in objs.iter_mut().zip(children) {
@@ -673,6 +703,16 @@ pub enum LookAheadFields {
     Nested(BTreeMap<Text, PyObject>, BTreeMap<Text, LookAheadFields>),
 }
 
+impl LookAheadFields {
+    /// Extract python arguments from lookahead.
+    pub fn arguments(&self) -> &BTreeMap<Text, PyObject> {
+        match self {
+            Terminal(args) => args,
+            Nested(args, _) => args,
+        }
+    }
+}
+
 pub fn selection_to_fields(
     py: Python,
     field: &AggroField,
@@ -687,15 +727,11 @@ pub fn selection_to_fields(
             AggroTypeInfo::List(inner) => match &inner.type_info {
                 AggroTypeInfo::Object(t) => t,
                 _ => {
-                    bail!(
-                        "Input with children passed an object when none was expected.",
-                    )
+                    bail!("Input with children passed an object when none was expected.",)
                 }
             },
             _ => {
-                bail!(
-                    "Input with children passed an object when none was expected.",
-                )
+                bail!("Input with children passed an object when none was expected.",)
             }
         };
 
@@ -745,6 +781,8 @@ pub struct SubscriptionSender {
     look_ahead: LookAheadFields,
     field: AggroField,
     all_objs: Arc<BTreeMap<Text, AggroObject>>,
+    python_context: PyContext,
+    rows: Arc<dyn ExtractValues + Send + Sync>,
 }
 
 impl SubscriptionSender {
@@ -753,38 +791,50 @@ impl SubscriptionSender {
         look_ahead: LookAheadFields,
         field: AggroField,
         all_objs: Arc<BTreeMap<Text, AggroObject>>,
+        python_context: PyContext,
+        rows: Arc<dyn ExtractValues + Send + Sync>,
     ) -> Self {
         Self {
             sender,
             look_ahead,
             field,
             all_objs,
+            python_context,
+            rows,
         }
     }
 }
 
 #[pymethods]
 impl SubscriptionSender {
-    fn __call__(&self, py: Python, ret_func: PyObject, val: &PyAny) {
+    fn __call__(&self, py: Python, ret_func: PyObject, new_function: PyObject) {
         let ctx = with_puff_context(|ctx| ctx);
         let postgres = ctx.postgres();
         let this_lookahead = self.look_ahead.clone();
         let this_field = self.field.clone();
         let all_objects = self.all_objs.clone();
+        let python_context = self.python_context.clone();
         let this_sender = self.sender.clone();
-        let py_list = PyList::new(py, vec![val]).into_py(py);
+        let rows = self.rows.clone();
         greenlet_async(ret_func, async move {
+            let mut my_field = this_field;
+            my_field.producer_method = Some(new_function);
             let pool = postgres.pool();
             let mut conn = pool.get().await?;
             let txn = conn.transaction().await?;
-            let rows = Arc::new(PythonResultRows { py_list });
-            let res =
-                returned_values_into_stream(&txn, rows, &this_lookahead, &this_field, all_objects)
-                    .await?;
+            let res = returned_values_into_stream(
+                &txn,
+                rows,
+                &this_lookahead,
+                &my_field,
+                all_objects,
+                python_context,
+            )
+            .await?;
             for r in res {
                 if !this_sender.send(Ok(r)).is_ok() {
                     txn.rollback().await?;
-                    return Ok(false);
+                    return Err(anyhow!("Subscription websocket has closed."));
                 }
             }
             txn.rollback().await?;

@@ -51,19 +51,16 @@
 //! Run with `cargo run runserver` or use `cargo run help` to show all CLI options of your Puff program.
 //!
 //!
-extern crate core;
-
 pub mod context;
 pub mod databases;
 pub mod errors;
 pub mod graphql;
+pub mod prelude;
 pub mod program;
 pub mod python;
 pub mod rand;
 pub mod runtime;
 pub mod types;
 pub mod web;
-pub mod prelude;
 
-pub use tracing;
-pub use axum;
+pub use {axum, tracing};

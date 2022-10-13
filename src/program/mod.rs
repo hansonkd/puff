@@ -47,7 +47,6 @@ use clap::{ArgMatches, Command};
 
 use crate::databases::redis::{add_redis_command_arguments, new_redis_async};
 
-
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -55,7 +54,6 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
 use tokio::runtime::Builder;
-
 
 use crate::context::{set_puff_context, set_puff_context_waiting, PuffContext};
 use crate::databases::postgres::{add_postgres_command_arguments, new_postgres_async};
@@ -66,8 +64,8 @@ use crate::python::{bootstrap_puff_globals, setup_greenlet};
 use crate::runtime::RuntimeConfig;
 use crate::types::text::Text;
 use crate::types::Puff;
-use tracing::info;
 pub use clap;
+use tracing::info;
 pub mod commands;
 
 /// A wrapper for a boxed future that is able to be run by a Puff Program.
@@ -113,7 +111,6 @@ pub trait RunnableCommand: 'static {
     /// Converts parsed matches from the command line into a Runnable future.
     fn make_runnable(&mut self, args: &ArgMatches, dispatcher: PuffContext) -> Result<Runnable>;
 }
-
 
 struct PackedCommand(Box<dyn RunnableCommand>);
 
@@ -301,7 +298,6 @@ impl Program {
 
         if let Some((command, args)) = arg_matches.subcommand() {
             if let Some(mut runner) = hm.remove(&command.to_string().into()) {
-
                 let thread_mutex = mutex_switcher.clone();
 
                 builder.on_thread_start(move || {
@@ -345,7 +341,11 @@ impl Program {
 
                 let mut gql_root = None;
                 if let Some(mod_path) = rt_config.gql_module() {
-                    gql_root = Some(load_schema(mod_path.as_str())?);
+                    let res = rt.block_on(load_schema(
+                        mod_path,
+                        python_dispatcher.clone().expect("GQL needs Python"),
+                    ))?;
+                    gql_root = Some(res);
                 }
 
                 let context = PuffContext::new_with_options(

@@ -2,13 +2,12 @@ use crate::databases::redis::{with_redis, RedisClient};
 
 use crate::python::greenlet::greenlet_async;
 use crate::types::Bytes;
-use bb8_redis::redis::{FromRedisValue, Value, Cmd, RedisResult};
+use bb8_redis::redis::{Cmd, FromRedisValue, RedisResult, Value};
 
 use crate::context::with_puff_context;
 
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
-
 
 #[pyclass]
 pub struct RedisGlobal;
@@ -38,12 +37,9 @@ impl ToPyObject for PyRedisValue {
     }
 }
 
-
 impl FromRedisValue for PyRedisValue {
     fn from_redis_value(v: &Value) -> RedisResult<Self> {
-        Python::with_gil(|py| {
-            Ok(PyRedisValue(extract_redis_to_python(py, v)))
-        })
+        Python::with_gil(|py| Ok(PyRedisValue(extract_redis_to_python(py, v))))
     }
 }
 
@@ -92,7 +88,12 @@ impl PythonRedis {
         self.run_command::<()>(py, return_fun, Cmd::set(key, val))
     }
 
-    fn command(&self, py: Python, return_fun: PyObject, command: Vec<&PyBytes>) -> PyResult<PyObject> {
+    fn command(
+        &self,
+        py: Python,
+        return_fun: PyObject,
+        command: Vec<&PyBytes>,
+    ) -> PyResult<PyObject> {
         let mut cmd = Cmd::new();
         for part in command {
             cmd.arg(part.as_bytes());

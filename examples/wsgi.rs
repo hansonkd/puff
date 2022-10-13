@@ -1,14 +1,13 @@
 use futures_util::future::join_all;
 
-use puff_rs::databases::redis::with_redis;
-use puff_rs::prelude::*;
-use puff_rs::databases::redis::bb8_redis::redis::Cmd;
-use puff_rs::program::commands::wsgi::WSGIServerCommand;
-use puff_rs::python::greenlet::greenlet_async;
 use puff_rs::axum::extract::ws::{Message, WebSocket};
 use puff_rs::axum::extract::WebSocketUpgrade;
 use puff_rs::axum::response::Response;
-
+use puff_rs::databases::redis::bb8_redis::redis::Cmd;
+use puff_rs::databases::redis::with_redis;
+use puff_rs::prelude::*;
+use puff_rs::program::commands::wsgi::WSGIServerCommand;
+use puff_rs::python::greenlet::greenlet_async;
 
 #[pyclass]
 #[derive(Clone)]
@@ -27,7 +26,6 @@ impl MyState {
         Ok(py.None())
     }
 }
-
 
 async fn get_many(key: Text, num: usize) -> PuffResult<Bytes> {
     let pool = with_redis(|r| r.pool());
@@ -58,8 +56,7 @@ async fn handle_root() -> RequestResult<Bytes> {
 }
 
 fn main() -> ExitCode {
-    let router = Router::new()
-        .get("/", handle_root);
+    let router = Router::new().get("/", handle_root);
 
     let rc = RuntimeConfig::default()
         .set_postgres(true)
@@ -70,6 +67,9 @@ fn main() -> ExitCode {
     Program::new("my_first_app")
         .about("This is my first app")
         .runtime_config(rc)
-        .command(WSGIServerCommand::new_with_router("flask_example.app", router))
+        .command(WSGIServerCommand::new_with_router(
+            "flask_example.app",
+            router,
+        ))
         .run()
 }

@@ -56,12 +56,10 @@
 use std::convert::Infallible;
 use std::future::Future;
 
-
 use axum::http::Request as AxumRequest;
 use axum::response::{IntoResponse, Response as AxumResponse};
 use axum::{self, Extension};
 use std::net::SocketAddr;
-
 
 use axum::body::{Body, BoxBody, Bytes};
 use axum::handler::Handler;
@@ -71,8 +69,6 @@ use hyper::server::conn::AddrIncoming;
 use tower_service::Service;
 
 pub use axum::http::StatusCode;
-
-
 
 use crate::context::PuffContext;
 
@@ -88,7 +84,6 @@ pub type ResponseBuilder = AxumResponse<()>;
 /// Run with [crate::program::commands::http::ServerCommand]
 #[derive(Clone)]
 pub struct Router<S = ()>(axum::Router<S>);
-
 
 pub trait PuffHandler<Inp, S, Res> {
     fn into_handler(self, filter: MethodFilter) -> MethodRouter<S>;
@@ -107,7 +102,6 @@ where
         on(filter, self)
     }
 }
-
 
 impl<S> Router<S>
 where

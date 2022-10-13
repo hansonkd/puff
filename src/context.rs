@@ -1,10 +1,8 @@
 use crate::databases::redis::RedisClient;
 use crate::errors::{handle_puff_result, PuffResult};
 
-
 use crate::types::{Puff, Text};
 use futures_util::future::BoxFuture;
-
 
 use std::cell::RefCell;
 
@@ -14,7 +12,6 @@ use crate::graphql::PuffGraphqlRoot;
 use crate::python::PythonDispatcher;
 use std::sync::{Arc, Mutex};
 use tokio::runtime::{Handle, Runtime};
-
 
 use tracing::{error, info};
 

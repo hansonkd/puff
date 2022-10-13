@@ -1,7 +1,8 @@
-use juniper::{InputValue, RootNode, Spanning};
-use pyo3::{IntoPy, Py, PyAny, PyObject, PyResult, Python};
-use std::sync::Arc;
+//! Use Python Dataclasses to Define a GQL Schema
 use anyhow::bail;
+use juniper::{InputValue, RootNode, Spanning};
+use pyo3::{IntoPy, Py, PyAny, PyObject, PyResult, Python, ToPyObject};
+use std::sync::Arc;
 
 pub use handlers::{handle_graphql, handle_subscriptions};
 pub mod handlers;
@@ -9,29 +10,38 @@ mod puff_schema;
 mod row_return;
 mod scalar;
 mod schema;
+use crate::errors::PuffResult;
 pub use puff_schema::AggroContext;
 use pyo3::types::{PyDict, PyList, PyString};
-use crate::errors::PuffResult;
 
 use crate::graphql::scalar::{AggroScalarValue, AggroValue};
 use crate::graphql::schema::PuffGqlObject;
+use crate::python::PythonDispatcher;
 use crate::types::text::ToText;
+use crate::types::Text;
 
-
-pub type PuffGraphqlRoot =
+pub(crate) type PuffGraphqlRoot =
     Arc<RootNode<'static, PuffGqlObject, PuffGqlObject, PuffGqlObject, AggroScalarValue>>;
 
-pub fn load_schema(module: &str) -> PyResult<PuffGraphqlRoot> {
-    let (converted_objs, input_objs) = Python::with_gil(|py| -> PyResult<_> {
+pub(crate) async fn load_schema(
+    module: Text,
+    py_dispatcher: PythonDispatcher,
+) -> PyResult<PuffGraphqlRoot> {
+    let import_string_fn = Python::with_gil(|py| -> PyResult<_> {
         let puff = py.import("puff")?;
+        let import_string_fn = puff.getattr("import_string")?.to_object(py);
+        Ok(import_string_fn)
+    })?;
+
+    let schema = py_dispatcher
+        .dispatch1(import_string_fn, (module,))?
+        .await
+        .unwrap()?;
+    let (converted_objs, input_objs) = Python::with_gil(|py| -> PyResult<_> {
         let puff_gql = py.import("puff.graphql")?;
-        let service_description_function = puff.call_method1("import_string", (module,))?;
         let t2d = puff_gql.getattr("type_to_description")?;
 
-        let schema: &PyAny = service_description_function.call0()?;
-
-        let (converted_objs, input_objs) = puff_schema::convert(schema, t2d)?;
-
+        let (converted_objs, input_objs) = puff_schema::convert(schema.as_ref(py), t2d)?;
         Ok((converted_objs, input_objs))
     })?;
 
@@ -67,7 +77,7 @@ pub fn load_schema(module: &str) -> PyResult<PuffGraphqlRoot> {
     Ok(Arc::new(schema))
 }
 
-pub fn juniper_value_to_python(py: Python, v: &AggroValue) -> PuffResult<Py<PyAny>> {
+pub(crate) fn juniper_value_to_python(py: Python, v: &AggroValue) -> PuffResult<Py<PyAny>> {
     match v {
         AggroValue::List(inner) => {
             let mut val_vec: Vec<PyObject> = Vec::with_capacity(inner.len());
@@ -79,7 +89,10 @@ pub fn juniper_value_to_python(py: Python, v: &AggroValue) -> PuffResult<Py<PyAn
         AggroValue::Object(inner) => {
             let mut val_vec: Vec<(PyObject, PyObject)> = Vec::with_capacity(inner.field_count());
             for (k, iv) in inner.iter() {
-                val_vec.push((PyString::new(py, k).into(), juniper_value_to_python(py, iv)?));
+                val_vec.push((
+                    PyString::new(py, k).into(),
+                    juniper_value_to_python(py, iv)?,
+                ));
             }
             Ok(PyDict::from_sequence(py, PyList::new(py, val_vec).into())?.into())
         }
@@ -98,8 +111,9 @@ fn scalar_to_python(py: Python, v: &AggroScalarValue) -> PuffResult<Py<PyAny>> {
     }
 }
 
-
-pub fn convert_pyany_to_input(attribute_val: &PyAny) -> PuffResult<InputValue<AggroScalarValue>> {
+pub(crate) fn convert_pyany_to_input(
+    attribute_val: &PyAny,
+) -> PuffResult<InputValue<AggroScalarValue>> {
     if let Ok(s) = attribute_val.extract() {
         return Ok(InputValue::Scalar(AggroScalarValue::String(s)));
     }
@@ -122,7 +136,10 @@ pub fn convert_pyany_to_input(attribute_val: &PyAny) -> PuffResult<InputValue<Ag
     if let Ok(l) = attribute_val.extract::<&PyDict>() {
         let mut vec = Vec::with_capacity(l.len());
         for (k, s) in l.into_iter() {
-            vec.push((Spanning::unlocated(k.to_string()), Spanning::unlocated(convert_pyany_to_input(s)?)));
+            vec.push((
+                Spanning::unlocated(k.to_string()),
+                Spanning::unlocated(convert_pyany_to_input(s)?),
+            ));
         }
 
         return Ok(InputValue::Object(vec));

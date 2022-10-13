@@ -24,7 +24,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type};
-use tokio_postgres::{Client, NoTls, Portal, Row, RowStream, Statement, Transaction};
+use tokio_postgres::{Client, Column, NoTls, Portal, Row, RowStream, Statement, Transaction};
 
 create_exception!(module, PgError, pyo3::exceptions::PyException);
 create_exception!(module, Warning, pyo3::exceptions::PyException);
@@ -316,54 +316,64 @@ impl Cursor {
     }
 }
 
+pub(crate) fn column_to_python(
+    py: Python,
+    ix: usize,
+    c: &Column,
+    row: &Row,
+) -> PyResult<Py<PyAny>> {
+    let val = match c.type_().clone() {
+        Type::BOOL => row.get::<_, Option<bool>>(ix).into_py(py),
+        Type::TIMESTAMP => row
+            .get::<_, Option<NaiveDateTime>>(ix)
+            .map(|f| pyo3_chrono::NaiveDateTime::from(f))
+            .into_py(py),
+        Type::TIMESTAMPTZ => row
+            .get::<_, Option<DateTime<Utc>>>(ix)
+            .map(|f| pyo3_chrono::NaiveDateTime::from(f.naive_local()))
+            .into_py(py),
+        Type::TEXT => row.get::<_, Option<&str>>(ix).into_py(py),
+        Type::VARCHAR => row.get::<_, Option<&str>>(ix).into_py(py),
+        Type::NAME => row.get::<_, Option<&str>>(ix).into_py(py),
+        Type::CHAR => row.get::<_, Option<i8>>(ix).into_py(py),
+        Type::UNKNOWN => row.get::<_, Option<&str>>(ix).into_py(py),
+        Type::INT2 => row.get::<_, Option<i16>>(ix).into_py(py),
+        Type::INT4 => row.get::<_, Option<i32>>(ix).into_py(py),
+        Type::INT8 => row.get::<_, Option<i64>>(ix).into_py(py),
+        Type::FLOAT4 => row.get::<_, Option<f32>>(ix).into_py(py),
+        Type::FLOAT8 => row.get::<_, Option<f64>>(ix).into_py(py),
+        Type::OID => row.get::<_, Option<u32>>(ix).into_py(py),
+        Type::BYTEA => row.get::<_, Option<&[u8]>>(ix).into_py(py),
+        Type::JSON => pythonize::pythonize(py, &row.get::<_, Option<serde_json::Value>>(ix))?,
+        Type::JSONB => pythonize::pythonize(py, &row.get::<_, Option<serde_json::Value>>(ix))?,
+        Type::BOOL_ARRAY => row.get::<_, Option<Vec<bool>>>(ix).into_py(py),
+        Type::TEXT_ARRAY => row.get::<_, Option<Vec<&str>>>(ix).into_py(py),
+        Type::VARCHAR_ARRAY => row.get::<_, Option<Vec<&str>>>(ix).into_py(py),
+        Type::NAME_ARRAY => row.get::<_, Option<Vec<&str>>>(ix).into_py(py),
+        Type::CHAR_ARRAY => row.get::<_, Option<Vec<i8>>>(ix).into_py(py),
+        Type::INT2_ARRAY => row.get::<_, Option<Vec<i16>>>(ix).into_py(py),
+        Type::INT4_ARRAY => row.get::<_, Option<Vec<i32>>>(ix).into_py(py),
+        Type::INT8_ARRAY => row.get::<_, Option<Vec<i64>>>(ix).into_py(py),
+        Type::FLOAT4_ARRAY => row.get::<_, Option<Vec<f32>>>(ix).into_py(py),
+        Type::FLOAT8_ARRAY => row.get::<_, Option<Vec<f64>>>(ix).into_py(py),
+        Type::OID_ARRAY => row.get::<_, Option<Vec<u32>>>(ix).into_py(py),
+        Type::BYTEA_ARRAY => row.get::<_, Option<Vec<&[u8]>>>(ix).into_py(py),
+
+        t => {
+            return Err(NotSupportedError::new_err(format!(
+                "Unsupported postgres type {:?}",
+                t
+            )))
+        }
+    };
+    Ok(val)
+}
+
 fn row_to_pyton(py: Python, row: Row) -> PyResult<Py<PyTuple>> {
     let mut row_vec = Vec::with_capacity(row.len());
 
     for (ix, c) in row.columns().iter().enumerate() {
-        let val = match c.type_().clone() {
-            Type::BOOL => row.get::<_, Option<bool>>(ix).into_py(py),
-            Type::TIMESTAMP => row
-                .get::<_, Option<NaiveDateTime>>(ix)
-                .map(|f| pyo3_chrono::NaiveDateTime::from(f))
-                .into_py(py),
-            Type::TIMESTAMPTZ => row
-                .get::<_, Option<DateTime<Utc>>>(ix)
-                .map(|f| pyo3_chrono::NaiveDateTime::from(f.naive_local()))
-                .into_py(py),
-            Type::TEXT => row.get::<_, Option<&str>>(ix).into_py(py),
-            Type::VARCHAR => row.get::<_, Option<&str>>(ix).into_py(py),
-            Type::NAME => row.get::<_, Option<&str>>(ix).into_py(py),
-            Type::CHAR => row.get::<_, Option<i8>>(ix).into_py(py),
-            Type::UNKNOWN => row.get::<_, Option<&str>>(ix).into_py(py),
-            Type::INT2 => row.get::<_, Option<i16>>(ix).into_py(py),
-            Type::INT4 => row.get::<_, Option<i32>>(ix).into_py(py),
-            Type::INT8 => row.get::<_, Option<i64>>(ix).into_py(py),
-            Type::FLOAT4 => row.get::<_, Option<f32>>(ix).into_py(py),
-            Type::FLOAT8 => row.get::<_, Option<f64>>(ix).into_py(py),
-            Type::OID => row.get::<_, Option<u32>>(ix).into_py(py),
-            Type::BYTEA => row.get::<_, Option<&[u8]>>(ix).into_py(py),
-            Type::JSON => pythonize::pythonize(py, &row.get::<_, Option<serde_json::Value>>(ix))?,
-            Type::JSONB => pythonize::pythonize(py, &row.get::<_, Option<serde_json::Value>>(ix))?,
-            Type::BOOL_ARRAY => row.get::<_, Option<Vec<bool>>>(ix).into_py(py),
-            Type::TEXT_ARRAY => row.get::<_, Option<Vec<&str>>>(ix).into_py(py),
-            Type::VARCHAR_ARRAY => row.get::<_, Option<Vec<&str>>>(ix).into_py(py),
-            Type::NAME_ARRAY => row.get::<_, Option<Vec<&str>>>(ix).into_py(py),
-            Type::CHAR_ARRAY => row.get::<_, Option<Vec<i8>>>(ix).into_py(py),
-            Type::INT2_ARRAY => row.get::<_, Option<Vec<i16>>>(ix).into_py(py),
-            Type::INT4_ARRAY => row.get::<_, Option<Vec<i32>>>(ix).into_py(py),
-            Type::INT8_ARRAY => row.get::<_, Option<Vec<i64>>>(ix).into_py(py),
-            Type::FLOAT4_ARRAY => row.get::<_, Option<Vec<f32>>>(ix).into_py(py),
-            Type::FLOAT8_ARRAY => row.get::<_, Option<Vec<f64>>>(ix).into_py(py),
-            Type::OID_ARRAY => row.get::<_, Option<Vec<u32>>>(ix).into_py(py),
-            Type::BYTEA_ARRAY => row.get::<_, Option<Vec<&[u8]>>>(ix).into_py(py),
-
-            t => {
-                return Err(NotSupportedError::new_err(format!(
-                    "Unsupported postgres type {:?}",
-                    t
-                )))
-            }
-        };
+        let val = column_to_python(py, ix, c, &row)?;
         row_vec.push(val)
     }
     Ok(PyTuple::new(py, row_vec).into_py(py))

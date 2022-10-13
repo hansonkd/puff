@@ -1,12 +1,11 @@
 use axum::extract::{FromRequest, Query, WebSocketUpgrade};
 use axum::http::{Method, Request, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
-use axum::Json;
+use axum::{Json, TypedHeader};
 use juniper::{
     BoxFuture, GraphQLSubscriptionType, GraphQLTypeAsync, InputValue, RootNode, ScalarValue,
 };
 use std::future;
-
 
 use std::sync::Arc;
 
@@ -15,8 +14,11 @@ use juniper::http::{GraphQLBatchRequest, GraphQLBatchResponse, GraphQLRequest};
 
 use crate::context::with_puff_context;
 use crate::graphql::AggroContext;
+use crate::prelude::ToText;
 use async_trait::async_trait;
 use axum::extract::ws::{Message, WebSocket};
+use axum::headers::authorization::Bearer;
+use axum::headers::Authorization;
 use hyper::Body;
 use juniper::futures::{SinkExt, StreamExt, TryStreamExt};
 use juniper_graphql_ws::{ClientMessage, Connection, ConnectionConfig, Schema, WebsocketError};
@@ -260,7 +262,6 @@ impl<S: ScalarValue> TryFrom<AxumMessage> for ClientMessage<S> {
     }
 }
 
-
 pub async fn handle_graphql_socket<S: Schema>(socket: WebSocket, schema: S, context: S::Context) {
     let config = ConnectionConfig::new(context);
     let (ws_tx, ws_rx) = socket.split();
@@ -334,23 +335,35 @@ where
     }
 }
 
-pub fn handle_graphql(
-) -> impl FnOnce(JuniperPuffRequest) -> BoxFuture<'static, JuniperPuffResponse> + Clone + Send + 'static
-{
-    move |JuniperPuffRequest(request): JuniperPuffRequest| {
+pub fn handle_graphql() -> impl FnOnce(
+    Option<TypedHeader<Authorization<Bearer>>>,
+    JuniperPuffRequest,
+) -> BoxFuture<'static, JuniperPuffResponse>
+       + Clone
+       + Send
+       + 'static {
+    move |bearer: Option<TypedHeader<Authorization<Bearer>>>,
+          JuniperPuffRequest(request): JuniperPuffRequest| {
         Box::pin(async move {
             let root_node = with_puff_context(|ctx| ctx.gql());
-            let new_ctx = AggroContext::new();
+            let header = bearer.map(|c| c.0 .0.token().to_text());
+            let new_ctx = AggroContext::new(header);
             JuniperPuffResponse(request.execute(&root_node, &new_ctx).await)
         })
     }
 }
 
-pub fn handle_subscriptions(
-) -> impl FnOnce(WebSocketUpgrade, ()) -> future::Ready<Response> + Clone + Send {
-    move |ws: WebSocketUpgrade, _| {
+pub fn handle_subscriptions() -> impl FnOnce(
+    Option<TypedHeader<Authorization<Bearer>>>,
+    WebSocketUpgrade,
+    (),
+) -> future::Ready<Response>
+       + Clone
+       + Send {
+    move |bearer: Option<TypedHeader<Authorization<Bearer>>>, ws: WebSocketUpgrade, _| {
         let root_node = with_puff_context(|ctx| ctx.gql());
-        let new_ctx = AggroContext::new();
+        let header = bearer.map(|c| c.0 .0.token().to_text());
+        let new_ctx = AggroContext::new(header);
 
         let s = ws
             .protocols(["graphql-ws"])

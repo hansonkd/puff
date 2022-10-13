@@ -9,9 +9,9 @@ use pyo3::types::PyList;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-/// The WSGIServerCommand.
+/// The PytestCommand.
 ///
-/// Exposes options to the command line to set the port and host of the server.
+/// Run pytest for the project.
 #[derive(Clone)]
 pub struct PytestCommand {
     path: PathBuf,

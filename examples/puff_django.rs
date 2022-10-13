@@ -19,7 +19,7 @@ fn main() -> ExitCode {
         .about("This is my first django app")
         .runtime_config(rc)
         .command(WSGIServerCommand::new(
-            "puff_django_example.wsgi.application"
+            "puff_django_example.wsgi.application",
         ))
         .command(DjangoManagementCommand::new())
         .command(PytestCommand::new("examples/puff_django_example"))

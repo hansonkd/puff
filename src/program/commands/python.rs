@@ -7,9 +7,9 @@ use clap::{ArgMatches, Command};
 use pyo3::prelude::*;
 use std::process::ExitCode;
 
-/// The WSGIServerCommand.
+/// The PythonCommand.
 ///
-/// Exposes options to the command line to set the port and host of the server.
+/// Assigns a Python function to a command name.
 #[derive(Clone)]
 pub struct PythonCommand {
     command_name: Text,

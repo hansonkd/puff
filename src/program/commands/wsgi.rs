@@ -18,7 +18,6 @@ use pyo3::prelude::*;
 use crate::program::commands::HttpServerConfig;
 use crate::types::text::ToText;
 
-
 struct WSGIConstructor {
     config: HttpServerConfig,
     router: Router,
@@ -52,7 +51,10 @@ impl WSGIServerCommand {
             app_path: app_path.into(),
         }
     }
-    pub fn new_with_router_init<M: Into<Text>, F: FnOnce() -> Router + 'static>(app_path: M, f: F) -> Self {
+    pub fn new_with_router_init<M: Into<Text>, F: FnOnce() -> Router + 'static>(
+        app_path: M,
+        f: F,
+    ) -> Self {
         Self {
             router_fn: Some(Box::new(f)),
             app_path: app_path.into(),
@@ -80,20 +82,19 @@ impl RunnableCommand for WSGIServerCommand {
         let fut = async move {
             let server_name = config.socket_addr.ip().to_text();
             let server_port = config.socket_addr.port();
-                let router = router_fn();
-                let mut ctx = create_server_context(
-                    wsgi_app,
-                    WSGIConstructor {
-                        config,
-                        router,
-                        puff_context: context.clone()
-                    },
-                    context.clone(),
-                    server_name,
-                    server_port,
-                );
-                ctx.start()?.await?;
-
+            let router = router_fn();
+            let mut ctx = create_server_context(
+                wsgi_app,
+                WSGIConstructor {
+                    config,
+                    router,
+                    puff_context: context.clone(),
+                },
+                context.clone(),
+                server_name,
+                server_port,
+            );
+            ctx.start()?.await?;
 
             Ok(ExitCode::SUCCESS)
         };

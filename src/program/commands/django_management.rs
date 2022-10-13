@@ -8,9 +8,9 @@ use clap::{Arg, ArgMatches, Command};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-/// The WSGIServerCommand.
+/// The DjangoManagementCommand.
 ///
-/// Exposes options to the command line to set the port and host of the server.
+/// Exposes ./manage.py [COMMAND] options for a Program.
 #[derive(Clone)]
 pub struct DjangoManagementCommand {}
 

@@ -1,6 +1,6 @@
 use crate::errors::PuffResult;
 use bb8_redis::bb8::Pool;
-use bb8_redis::redis::{IntoConnectionInfo};
+use bb8_redis::redis::IntoConnectionInfo;
 use bb8_redis::RedisConnectionManager;
 use std::time::Duration;
 
@@ -44,7 +44,6 @@ pub async fn new_redis_async<T: IntoConnectionInfo>(
 
     Ok(RedisClient { client: pool })
 }
-
 
 pub fn with_redis<F: FnOnce(RedisClient) -> T, T>(f: F) -> T {
     with_puff_context(move |d| f(d.redis()))

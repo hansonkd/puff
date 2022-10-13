@@ -8,9 +8,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-
-
-
 use crate::types::text::ToText;
 use crate::types::{Puff, Text};
 
@@ -218,18 +215,18 @@ impl RuntimeConfig {
         new
     }
 
-    /// If provided, will load the GraphQl configuration from the module path
+    /// If provided, will load the GraphQl configuration from the module path to the Schema.
     ///
-    /// Default: true
-    pub fn set_gql_module<T: Into<Text>>(self, gql_module: T) -> Self {
+    /// Default: None
+    pub fn set_gql_schema_class<T: Into<Text>>(self, schema_module_path: T) -> Self {
         let mut new = self;
-        new.gql_module = Some(gql_module.into());
+        new.gql_module = Some(schema_module_path.into());
         new
     }
 
     /// Run a function in a python context and set the result as the global state for Python.
     ///
-    /// Default: true
+    /// Default: None
     pub fn set_global_state_fn<F: Fn(Python) -> PyResult<PyObject> + Send + Sync + 'static>(
         self,
         f: F,

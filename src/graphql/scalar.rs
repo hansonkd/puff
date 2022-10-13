@@ -1,4 +1,4 @@
-use anyhow::{anyhow};
+use anyhow::anyhow;
 use juniper::{graphql_scalar, FromInputValue, InputValue, ScalarValue, Value as JuniperValue};
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
@@ -11,7 +11,6 @@ use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type};
 
 pub type AggroValue = JuniperValue<AggroScalarValue>;
-
 
 fn convert_from_input(value: &InputValue<AggroScalarValue>) -> AggroValue {
     match value {
@@ -130,10 +129,8 @@ impl<'de> Deserialize<'de> for AggroScalarValue {
     }
 }
 
-
 #[derive(Debug, PartialEq, Clone)]
 pub struct AggroSqlValue(JuniperValue<AggroScalarValue>);
-
 
 impl ToSql for AggroSqlValue {
     fn to_sql(&self, ty: &Type, out: &mut BytesMut) -> Result<IsNull, Box<dyn Error + Sync + Send>>
