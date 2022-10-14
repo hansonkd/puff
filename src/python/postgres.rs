@@ -717,7 +717,7 @@ async fn run_txn_loop<'a>(
                 let stmt = txn.prepare(&q).await;
                 let real_return = match stmt {
                     Ok(r) => {
-                        statement = Some(r.clone());
+                        // statement = Some(r.clone());
                         if r.columns().len() == 0 {
                             let res = txn.execute_raw(&r, &params[..]).await;
                             match res {
@@ -842,7 +842,7 @@ async fn run_autocommit_loop<'a>(
     rec: &'a mut Receiver<TxnCommand>,
 ) -> PuffResult<LoopResult> {
     let mut row_count: i32 = -1;
-    let mut statement: Option<Statement> = None;
+    // let mut statement: Option<Statement> = None;
     let mut current_stream: Option<Pin<Box<RowStream>>> = None;
     let mut next_message = Some(first_msg);
     while let Some(x) = next_message.take() {
@@ -878,7 +878,7 @@ async fn run_autocommit_loop<'a>(
                 let stmt = client.prepare(&q).await;
                 let real_return = match stmt {
                     Ok(r) => {
-                        statement = Some(r.clone());
+                        // statement = Some(r.clone());
                         if r.columns().len() == 0 {
                             let res = client.execute_raw(&r, &params[..]).await;
                             match res {

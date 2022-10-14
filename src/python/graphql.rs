@@ -1,6 +1,6 @@
 //! Call Graphql from Python
 use crate::context::with_puff_context;
-use crate::errors::{to_py_error, PuffResult};
+use crate::errors::{to_py_error};
 use crate::graphql::{
     convert_pyany_to_input, juniper_value_to_python, AggroContext, PuffGraphqlRoot,
 };

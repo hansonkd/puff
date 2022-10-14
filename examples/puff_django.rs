@@ -3,7 +3,7 @@ use puff_rs::program::commands::pytest::PytestCommand;
 use puff_rs::program::commands::wsgi::WSGIServerCommand;
 use puff_rs::program::Program;
 use puff_rs::runtime::RuntimeConfig;
-use puff_rs::web::server::Router;
+
 use std::process::ExitCode;
 
 fn main() -> ExitCode {

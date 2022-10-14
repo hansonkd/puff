@@ -1,4 +1,4 @@
-use crate::context::{with_puff_context, PuffContext};
+use crate::context::{with_puff_context};
 use crate::errors::PuffResult;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;

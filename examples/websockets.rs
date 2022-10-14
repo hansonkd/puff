@@ -28,7 +28,7 @@ async fn on_upgrade(mut socket: WebSocket) {
     let pubsub = with_puff_context(|ctx| ctx.pubsub());
     let (conn, mut rec) = pubsub.connection().expect("No connection");
     let channel_name = "my_pubsub_channel";
-    conn.subscribe(channel_name).await.unwrap();
+    conn.subscribe(channel_name).await;
 
     loop {
         tokio::select! {
@@ -42,7 +42,7 @@ async fn on_upgrade(mut socket: WebSocket) {
             },
             Some(msg) = socket.recv() => {
                 if let Ok(msg) = msg {
-                    if !conn.publish(channel_name, msg.into_data()).await.unwrap() {
+                    if !conn.publish(channel_name, msg.into_data()).await {
                         break
                     }
                 } else {

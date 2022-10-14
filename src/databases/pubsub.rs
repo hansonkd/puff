@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use crate::context::{supervised_task, with_puff_context};
-use crate::errors::{log_puff_error, PuffResult};
+use crate::errors::{PuffResult};
 use crate::types::{Bytes, Puff, Text};
-use anyhow::anyhow;
+
 use bb8_redis::bb8::Pool;
 use bb8_redis::redis::aio::PubSub;
 pub use bb8_redis::redis::Cmd;
@@ -21,7 +21,7 @@ use juniper::BoxFuture;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Sender, UnboundedReceiver, UnboundedSender};
-use tokio::task::JoinHandle;
+
 
 pub type ConnectionId = uuid::Uuid;
 
@@ -236,7 +236,7 @@ impl PubSubClient {
         let channel_text = channel.into();
         let message = PubSubMessage::new(channel_text.clone(), connection_id, body.into());
 
-        with_puff_context(|ctx| {
+        with_puff_context(|_ctx| {
             let inner_client = self.client.clone();
             let fut = async move {
                 let inner_client = inner_client.clone();
@@ -269,7 +269,7 @@ impl PubSubConnection {
         let new_sender = self.sender.clone();
         let event = PubSubEvent::Sub(channel.into(), self.connection_id.clone(), new_sender);
         let inner_sender = self.events_sender.clone();
-        with_puff_context(move |ctx| {
+        with_puff_context(move |_ctx| {
             let fut = async move {
                 let s = {
                     let m = inner_sender.lock().unwrap();
@@ -286,7 +286,7 @@ impl PubSubConnection {
     pub fn unsubscribe<T: Into<Text>>(&self, channel: T) -> BoxFuture<bool> {
         let event = PubSubEvent::UnSub(channel.into(), self.connection_id.clone());
         let inner_sender = self.events_sender.clone();
-        with_puff_context(move |ctx| {
+        with_puff_context(move |_ctx| {
             let fut = async move {
                 let s = {
                     let m = inner_sender.lock().unwrap();
@@ -313,7 +313,7 @@ impl PubSubConnection {
             body.into(),
         );
 
-        with_puff_context(|ctx| {
+        with_puff_context(|_ctx| {
             let inner_client = self.client.clone();
             let fut = async move {
                 let inner_client = inner_client.clone();

@@ -8,12 +8,12 @@ use juniper::{
     Value, ValuesStream,
 };
 use pyo3::types::PyDict;
-use pyo3::{PyResult, Python, ToPyObject};
+use pyo3::{Python, ToPyObject};
 
 use crate::errors::{log_puff_error, PuffResult};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
@@ -24,7 +24,7 @@ use crate::graphql::puff_schema::{
 };
 use crate::graphql::row_return::ExtractorRootNode;
 use crate::graphql::scalar::{AggroScalarValue, AggroValue, Binary, GenericScalar};
-use crate::python::postgres::Connection;
+
 use crate::types::text::ToText;
 use crate::types::Text;
 

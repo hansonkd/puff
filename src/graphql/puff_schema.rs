@@ -9,7 +9,7 @@ use crate::types::text::ToText;
 use crate::types::Text;
 use anyhow::{anyhow, bail};
 
-use futures::TryStreamExt;
+
 use futures_util::FutureExt;
 use juniper::{
     BoxFuture, ExecutionError, LookAheadArgument, LookAheadMethods, LookAheadSelection,
@@ -26,7 +26,7 @@ use futures_util::future::join_all;
 use crate::graphql;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Mutex;
-use tokio_postgres::Transaction;
+
 use uuid::Uuid;
 
 static NUMBERS: &'static [&'static str] = &["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
@@ -871,7 +871,7 @@ impl SubscriptionSender {
 
 #[pymethods]
 impl SubscriptionSender {
-    fn __call__(&self, py: Python, ret_func: PyObject, new_function: PyObject) {
+    fn __call__(&self, _py: Python, ret_func: PyObject, new_function: PyObject) {
         let this_lookahead = self.look_ahead.clone();
         let this_field = self.field.clone();
         let all_objects = self.all_objs.clone();

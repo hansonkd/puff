@@ -6,7 +6,7 @@ use crate::python::wsgi::{create_server_context, WsgiServerSpawner};
 use crate::web::server::Router;
 use clap::{ArgMatches, Command};
 use std::process::ExitCode;
-use std::sync::Arc;
+
 
 use crate::python::wsgi::handler::WsgiHandler;
 use crate::types::Text;

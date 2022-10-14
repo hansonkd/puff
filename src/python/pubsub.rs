@@ -1,10 +1,10 @@
 use crate::context::with_puff_context;
 use crate::databases::pubsub::{ConnectionId, PubSubClient, PubSubConnection, PubSubMessage};
-use crate::errors::{to_py_error, PuffResult};
-use crate::prelude::{greenlet_async, ToText};
+use crate::errors::{to_py_error};
+use crate::prelude::{greenlet_async};
 use crate::python::greenlet::handle_python_return;
 use crate::types::{Bytes, Text};
-use anyhow::anyhow;
+
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
@@ -37,7 +37,7 @@ struct PythonPubSubClient {
 
 #[pymethods]
 impl PythonPubSubClient {
-    fn new_connection_id(&self, py: Python) -> String {
+    fn new_connection_id(&self, _py: Python) -> String {
         self.client.new_connection_id().to_string()
     }
 
@@ -84,7 +84,7 @@ impl PythonPubSubClient {
     fn connection_with_id(&self, py: Python, connection_id: &PyString) -> PyResult<PyObject> {
         let connection_id_bytes = ConnectionId::from_str(connection_id.to_str()?)
             .map_err(|_e| PyTypeError::new_err("Invalid Connection ID"))?;
-        let (connection, mut rec) = to_py_error(
+        let (connection, rec) = to_py_error(
             "pubsub",
             self.client.connection_with_id(connection_id_bytes),
         )?;
@@ -92,7 +92,7 @@ impl PythonPubSubClient {
     }
 
     fn connection(&self, py: Python) -> PyResult<PyObject> {
-        let (connection, mut rec) = to_py_error("pubsub", self.client.connection())?;
+        let (connection, rec) = to_py_error("pubsub", self.client.connection())?;
         start_pubsub_listener_loop(py, connection, rec)
     }
 }
@@ -154,7 +154,7 @@ impl ToPyObject for PyPubSubMessage {
 
 #[pymethods]
 impl PythonPubSubConnection {
-    fn who_am_i(&self, py: Python) -> String {
+    fn who_am_i(&self, _py: Python) -> String {
         self.connection.who_am_i().to_string()
     }
 

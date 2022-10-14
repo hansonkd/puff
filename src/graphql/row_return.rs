@@ -4,7 +4,7 @@ use crate::errors::PuffResult;
 use crate::python::postgres::column_to_python;
 use crate::types::{Bytes, Text, UtcDateTime};
 use anyhow::{anyhow, bail, Result};
-use juniper::{InputValue, Object};
+use juniper::{Object};
 use pyo3::exceptions::PyKeyError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString};
@@ -179,7 +179,7 @@ impl ExtractValues for PostgresResultRows {
 
         let ret_vec = PyList::empty(py);
         for row in &self.rows {
-            let mut row_vec = PyList::empty(py);
+            let row_vec = PyList::empty(py);
             for name in names {
                 let (column_ix, c) = if let Some((column_ix, c)) = field_mapping.get(name.to_str()?)
                 {
@@ -218,7 +218,7 @@ impl ExtractValues for ExtractorRootNode {
     fn extract_values(&self, _names: &[Text]) -> Result<Vec<Vec<AggroValue>>> {
         bail!("Cannot extract values from the Root")
     }
-    fn extract_py_values(&self, py: Python, names: &[&PyString]) -> Result<Py<PyList>> {
+    fn extract_py_values(&self, _py: Python, _names: &[&PyString]) -> Result<Py<PyList>> {
         bail!("Cannot extract values from the Root")
     }
     fn extract_first(&self) -> Result<Vec<AggroValue>> {

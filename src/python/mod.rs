@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 use tracing::error;
 
-use crate::python::graphql::{GlobalGraphQL, PythonGraphql};
+use crate::python::graphql::{GlobalGraphQL};
 use crate::python::postgres::{add_pg_puff_exceptions, PostgresGlobal};
 use tracing::log::info;
 
