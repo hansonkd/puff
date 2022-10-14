@@ -17,21 +17,23 @@ use juniper::{
 };
 
 use pyo3::prelude::*;
-use pyo3::types::{IntoPyDict, PyDict, PyList, PyString};
+use pyo3::types::{IntoPyDict, PyBytes, PyDict, PyList, PyString};
 use std::collections::{BTreeMap, HashSet};
 
 use std::sync::Arc;
+use futures_util::future::join_all;
 
 use crate::graphql;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::Mutex;
 use tokio_postgres::Transaction;
+use uuid::Uuid;
 
 static NUMBERS: &'static [&'static str] = &["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
 
-#[derive(Clone)]
 pub struct AggroContext {
     bearer: Option<Text>,
-    conn: Connection
+    conn: Mutex<Connection>
 }
 
 impl juniper::Context for AggroContext {}
@@ -39,17 +41,20 @@ impl juniper::Context for AggroContext {}
 impl AggroContext {
     pub fn new(bearer: Option<Text>) -> Self {
         let pool = with_puff_context(|ctx| ctx.postgres().pool());
-        let conn = Connection::new(pool);
+        let conn = Mutex::new(Connection::new(pool));
         Self { bearer, conn }
     }
 
     pub fn new_with_connection(bearer: Option<Text>, conn: Connection) -> Self {
+        let conn = Mutex::new(conn);
         Self { bearer, conn }
     }
 
-    pub fn connection(&self) -> Connection {
-        self.conn.clone()
+    pub fn connection(&self) -> &Mutex<Connection> {
+        &self.conn
     }
+
+
 
     pub fn token(&self) -> Option<Text> {
         self.bearer.clone()
@@ -61,6 +66,9 @@ pub enum AggroTypeInfo {
     String,
     Int,
     Boolean,
+    Datetime,
+    Uuid,
+    Binary,
     Float,
     Any,
     List(Box<DecodedType>),
@@ -136,6 +144,9 @@ fn decode_type(t: &PyAny) -> PyResult<DecodedType> {
             AggroTypeInfo::List(Box::new(decode_type(inner_type_python)?))
         }
         "String" => AggroTypeInfo::String,
+        "Binary" => AggroTypeInfo::Binary,
+        "Datetime" => AggroTypeInfo::Datetime,
+        "Uuid" => AggroTypeInfo::Uuid,
         "Any" => AggroTypeInfo::Any,
         "Int" => AggroTypeInfo::Int,
         "Float" => AggroTypeInfo::Float,
@@ -216,22 +227,14 @@ pub fn convert_obj(name: &str, desc: BTreeMap<String, &PyAny>) -> PyResult<Aggro
 #[derive(Clone)]
 #[pyclass]
 pub struct PyContext {
-    conn: Connection,
+    conn: Option<Connection>,
     extractor: Arc<dyn ExtractValues + Send + Sync>,
     bearer: Option<Text>,
 }
 
 impl PyContext {
-    pub fn new(extractor: Arc<dyn ExtractValues + Send + Sync>, bearer: Option<Text>, conn: Connection) -> Self {
+    pub fn new(extractor: Arc<dyn ExtractValues + Send + Sync>, bearer: Option<Text>, conn: Option<Connection>) -> Self {
         Self { extractor, bearer, conn }
-    }
-
-    fn replace_extractor(self, extractor: Arc<dyn ExtractValues + Send + Sync>) -> Self {
-        Self {
-            extractor,
-            conn: self.conn,
-            bearer: self.bearer.clone(),
-        }
     }
 }
 
@@ -246,6 +249,10 @@ impl PyContext {
         self.bearer
             .as_ref()
             .map(|f| PyString::new(py, f.as_str()).into_py(py))
+    }
+
+    fn connection(&self, py: Python) -> Option<PyObject> {
+        self.conn.clone().map(|f| f.into_py(py))
     }
 }
 
@@ -310,6 +317,7 @@ fn input_to_python(
         },
         AggroTypeInfo::Int => match v {
             LookAheadValue::Scalar(&AggroScalarValue::Int(i)) => Ok(i.into_py(py)),
+            LookAheadValue::Scalar(&AggroScalarValue::Long(i)) => Ok(i.into_py(py)),
             _ => bail!("Input non-int to a int input"),
         },
         AggroTypeInfo::Float => match v {
@@ -318,6 +326,21 @@ fn input_to_python(
         },
         AggroTypeInfo::String => match v {
             LookAheadValue::Scalar(AggroScalarValue::String(i)) => Ok(i.clone().into_py(py)),
+            _ => bail!("Input non-string to a string input"),
+        },
+        AggroTypeInfo::Binary => match v {
+            LookAheadValue::Scalar(AggroScalarValue::String(i)) => Ok(PyBytes::new(py, &base64::decode(i.as_str())?).into_py(py)),
+            LookAheadValue::Scalar(AggroScalarValue::Binary(i)) => Ok(i.clone().into_py(py)),
+            _ => bail!("Input non-string to a string input"),
+        },
+        AggroTypeInfo::Datetime => match v {
+            LookAheadValue::Scalar(AggroScalarValue::String(i)) => Ok(PyBytes::new(py, &base64::decode(i.as_str())?).into_py(py)),
+            LookAheadValue::Scalar(AggroScalarValue::Binary(i)) => Ok(i.clone().into_py(py)),
+            _ => bail!("Input non-string to a string input"),
+        },
+        AggroTypeInfo::Uuid => match v {
+            LookAheadValue::Scalar(AggroScalarValue::String(i)) => Ok(Uuid::parse_str(i.as_str())?.to_string().into_py(py)),
+            LookAheadValue::Scalar(AggroScalarValue::Uuid(i)) => Ok(i.to_string().into_py(py)),
             _ => bail!("Input non-string to a string input"),
         },
         AggroTypeInfo::Boolean => match v {
@@ -373,18 +396,18 @@ pub fn returned_values_into_stream<'a>(
     look_ahead: &'a LookAheadFields,
     aggro_field: &'a AggroField,
     all_objects: Arc<BTreeMap<Text, AggroObject>>,
-    py_context: PyContext,
+    aggro_context: &'a AggroContext,
 ) -> BoxFuture<'a, PuffResult<Vec<AggroValue>>> {
-    do_returned_values_into_stream( rows, look_ahead, aggro_field, all_objects, py_context)
+    do_returned_values_into_stream(rows, look_ahead, aggro_field, all_objects, aggro_context)
         .boxed()
 }
 
 pub async fn do_returned_values_into_stream(
     rows: Arc<dyn ExtractValues + Send + Sync>,
     look_ahead: &'_ LookAheadFields,
-    aggro_field: &AggroField,
+    aggro_field: &'_ AggroField,
     all_objects: Arc<BTreeMap<Text, AggroObject>>,
-    py_context: PyContext,
+    aggro_context: &AggroContext,
 ) -> PuffResult<Vec<AggroValue>> {
     let type_info = aggro_field.return_type.type_info.clone();
     let class_method = aggro_field.producer_method.clone();
@@ -443,20 +466,24 @@ pub async fn do_returned_values_into_stream(
 
     match class_method {
         Some(cm) => {
-            let py_extractor = py_context.replace_extractor(rows.clone());
-            let result = if aggro_field.safe_without_context {
-                Python::with_gil(|py| {
-                    let arg_dict = args.into_py_dict(py);
-                    cm.call(py, (py_extractor.clone(),), Some(arg_dict))
-                })?
-            } else {
-                let py_dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
-                let rec = Python::with_gil(|py| {
-                    let arg_dict = args.into_py_dict(py);
-                    py_dispatcher.dispatch(cm, (py_extractor.clone(),), Some(arg_dict))
-                })?;
+            let result = {
+                if aggro_field.safe_without_context {
+                    let py_extractor = PyContext::new(rows.clone(), aggro_context.token(), None);
+                    Python::with_gil(|py| {
+                        let arg_dict = args.into_py_dict(py);
+                        cm.call(py, (py_extractor.clone(),), Some(arg_dict))
+                    })?
+                } else {
+                    let conn = aggro_context.connection().lock().await;
+                    let py_extractor = PyContext::new(rows.clone(), aggro_context.token(), Some(conn.clone()));
+                    let py_dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
+                    let rec = Python::with_gil(|py| {
+                        let arg_dict = args.into_py_dict(py);
+                        py_dispatcher.dispatch(cm, (py_extractor,), Some(arg_dict))
+                    })?;
 
-                rec.await??
+                    rec.await??
+                }
             };
 
             let (method_result, method_corr) = Python::with_gil(|py| {
@@ -514,7 +541,8 @@ pub async fn do_returned_values_into_stream(
             let rr: Arc<dyn ExtractValues + Send + Sync> = match method_result {
                 PythonMethodResult::PythonList(l) => Arc::new(PythonResultRows { py_list: l }),
                 PythonMethodResult::SqlQuery(q, params) => {
-                    let (statement, rows) = execute_rust(&py_extractor.conn, q, params).await?;
+                    let conn = aggro_context.connection().lock().await;
+                    let (statement, rows) = execute_rust(&conn, q, params).await?;
                     // let statement = txn.prepare(&q).await?;
                     // let rowstream = txn.query_raw(&statement, &params).await?;
                     // let rows = rowstream.try_collect().await?;
@@ -543,16 +571,23 @@ pub async fn do_returned_values_into_stream(
                                 child_fields.len(),
                             ))
                         }
+                        let mut to_compute = Vec::with_capacity(child_fields.len());
                         for (child, new_lookahead) in child_fields {
-                            let children = returned_values_into_stream(
-                                rr.clone(),
-                                new_lookahead,
-                                &child,
-                                all_objects.clone(),
-                                py_extractor.clone(),
-                            )
-                            .await?;
-                            for (obj, new_value) in objs.iter_mut().zip(children) {
+                            let fut = async {
+                                let children = returned_values_into_stream(
+                                    rr.clone(),
+                                    new_lookahead,
+                                    &child,
+                                    all_objects.clone(),
+                                    aggro_context,
+                                ).await;
+                                (child, children)
+                            };
+                            to_compute.push(fut)
+                        }
+                        let children_results = join_all(to_compute).await;
+                        for (child, children) in children_results {
+                            for (obj, new_value) in objs.iter_mut().zip(children?) {
                                 obj.add_field(child.name.as_str(), new_value);
                             }
                         }
@@ -606,16 +641,23 @@ pub async fn do_returned_values_into_stream(
                                 child_fields.len(),
                             ))
                         }
+                        let mut to_compute = Vec::with_capacity(child_fields.len());
                         for (child, new_lookahead) in child_fields {
-                            let children = returned_values_into_stream(
-                                rr.clone(),
-                                new_lookahead,
-                                &child,
-                                all_objects.clone(),
-                                py_extractor.clone(),
-                            )
-                            .await?;
-                            for (obj, new_value) in objs.iter_mut().zip(children) {
+                            let fut = async {
+                                let children = returned_values_into_stream(
+                                    rr.clone(),
+                                    new_lookahead,
+                                    &child,
+                                    all_objects.clone(),
+                                    aggro_context,
+                                ).await;
+                                (child, children)
+                            };
+                            to_compute.push(fut)
+                        }
+                        let children_results = join_all(to_compute).await;
+                        for (child, children) in children_results {
+                            for (obj, new_value) in objs.iter_mut().zip(children?) {
                                 obj.add_field(child.name.as_str(), new_value);
                             }
                         }
@@ -688,16 +730,24 @@ pub async fn do_returned_values_into_stream(
                         child_fields.len(),
                     ))
                 }
+
+                let mut to_compute = Vec::with_capacity(child_fields.len());
                 for (child, new_lookahead) in child_fields {
-                    let children = returned_values_into_stream(
-                        rows.clone(),
-                        new_lookahead,
-                        &child,
-                        all_objects.clone(),
-                        py_context.clone(),
-                    )
-                    .await?;
-                    for (obj, new_value) in objs.iter_mut().zip(children) {
+                    let fut = async {
+                        let children = returned_values_into_stream(
+                            rows.clone(),
+                            new_lookahead,
+                            &child,
+                            all_objects.clone(),
+                            aggro_context,
+                        ).await;
+                        (child, children)
+                    };
+                    to_compute.push(fut)
+                }
+                let children_results = join_all(to_compute).await;
+                for (child, children) in children_results {
+                    for (obj, new_value) in objs.iter_mut().zip(children?) {
                         obj.add_field(child.name.as_str(), new_value);
                     }
                 }
@@ -795,7 +845,7 @@ pub struct SubscriptionSender {
     look_ahead: LookAheadFields,
     field: AggroField,
     all_objs: Arc<BTreeMap<Text, AggroObject>>,
-    python_context: PyContext,
+    bearer: Option<Text>,
     rows: Arc<dyn ExtractValues + Send + Sync>,
 }
 
@@ -805,7 +855,7 @@ impl SubscriptionSender {
         look_ahead: LookAheadFields,
         field: AggroField,
         all_objs: Arc<BTreeMap<Text, AggroObject>>,
-        python_context: PyContext,
+        bearer: Option<Text>,
         rows: Arc<dyn ExtractValues + Send + Sync>,
     ) -> Self {
         Self {
@@ -813,7 +863,7 @@ impl SubscriptionSender {
             look_ahead,
             field,
             all_objs,
-            python_context,
+            bearer,
             rows,
         }
     }
@@ -822,11 +872,10 @@ impl SubscriptionSender {
 #[pymethods]
 impl SubscriptionSender {
     fn __call__(&self, py: Python, ret_func: PyObject, new_function: PyObject) {
-        let ctx = with_puff_context(|ctx| ctx);
         let this_lookahead = self.look_ahead.clone();
         let this_field = self.field.clone();
         let all_objects = self.all_objs.clone();
-        let python_context = self.python_context.clone();
+        let bearer = self.bearer.clone();
         let this_sender = self.sender.clone();
         let rows = self.rows.clone();
         greenlet_async(ret_func, async move {
@@ -837,7 +886,7 @@ impl SubscriptionSender {
                 &this_lookahead,
                 &my_field,
                 all_objects,
-                python_context,
+                &AggroContext::new(bearer),
             )
             .await?;
             for r in res {

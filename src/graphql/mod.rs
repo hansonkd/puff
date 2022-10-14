@@ -105,6 +105,10 @@ fn scalar_to_python(py: Python, v: &AggroScalarValue) -> PuffResult<Py<PyAny>> {
     match v {
         AggroScalarValue::String(s) => Ok(s.clone().into_py(py)),
         AggroScalarValue::Int(s) => Ok(s.into_py(py)),
+        AggroScalarValue::Long(s) => Ok(s.into_py(py)),
+        AggroScalarValue::Binary(s) => Ok(s.clone().into_py(py)),
+        AggroScalarValue::Uuid(s) => Ok(s.to_string().into_py(py)),
+        AggroScalarValue::Datetime(s) => Ok(s.clone().into_py(py)),
         AggroScalarValue::Float(s) => Ok(s.into_py(py)),
         AggroScalarValue::Boolean(s) => Ok(s.into_py(py)),
         AggroScalarValue::Generic(s) => juniper_value_to_python(py, s),
@@ -122,6 +126,9 @@ pub(crate) fn convert_pyany_to_input(
     }
     if let Ok(s) = attribute_val.extract() {
         return Ok(InputValue::Scalar(AggroScalarValue::Int(s)));
+    }
+    if let Ok(s) = attribute_val.extract() {
+        return Ok(InputValue::Scalar(AggroScalarValue::Long(s)));
     }
     if let Ok(s) = attribute_val.extract() {
         return Ok(InputValue::Scalar(AggroScalarValue::Float(s)));

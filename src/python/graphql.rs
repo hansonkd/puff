@@ -52,7 +52,6 @@ impl PythonGraphql {
         conn: Option<&Connection>,
         auth_token: Option<&PyString>,
     ) -> PyResult<()> {
-        println!("{} conn", conn.is_some());
         let bearer = auth_token.map(|t| t.to_text());
         let mut hm = HashMap::with_capacity(variables.len());
         for (k, v) in variables {

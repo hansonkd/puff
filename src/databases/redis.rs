@@ -27,9 +27,10 @@ impl RedisClient {
 pub async fn new_redis_async<T: IntoConnectionInfo>(
     conn: T,
     check: bool,
+    pool_size: u32
 ) -> PuffResult<RedisClient> {
     let manager = RedisConnectionManager::new(conn)?;
-    let pool = Pool::builder().build(manager).await?;
+    let pool = Pool::builder().max_size(pool_size).build(manager).await?;
     let local_pool = pool.clone();
     if check {
         info!("Checking redis connectivity...");

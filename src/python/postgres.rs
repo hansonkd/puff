@@ -17,7 +17,7 @@ use pyo3::types::{PyList, PyString, PyTuple};
 use pythonize::depythonize;
 use std::error::Error;
 use std::fmt::{Debug, Formatter};
-use std::future::Future;
+use std::future::{Future, ready};
 use std::pin::Pin;
 
 use std::sync::{Arc, Mutex};
@@ -81,7 +81,7 @@ fn get_sender(
     }
 }
 
-pub async  fn execute_rust(conn: &Connection, q: String, params: Vec<PythonSqlValue>) -> PuffResult<(Statement, Vec<Row>)> {
+pub async fn execute_rust(conn: &Connection, q: String, params: Vec<PythonSqlValue>) -> PuffResult<(Statement, Vec<Row>)> {
     let transaction_loop_inner = conn.transaction_loop.clone();
     let sender = get_sender(conn.pool.clone(), transaction_loop_inner);
     let (one_sender, rec) = oneshot::channel();
@@ -89,6 +89,16 @@ pub async  fn execute_rust(conn: &Connection, q: String, params: Vec<PythonSqlVa
     rec.await?
 }
 
+pub async fn close_conn(conn: &Connection) {
+    let transaction_loop_inner = &conn.transaction_loop;
+    let sender = {
+        let job_sender = transaction_loop_inner.lock().unwrap();
+        job_sender.clone()
+    };
+    if let Some(s) = sender {
+        s.send(TxnCommand::Close(transaction_loop_inner.clone())).await.unwrap_or_default();
+    }
+}
 
 impl Connection {
     pub fn new(pool: Pool<PostgresConnectionManager<NoTls>>) -> Self {
@@ -106,13 +116,13 @@ impl Connection {
     fn get_closed(&self) -> bool {
         self.closed
     }
-    fn set_auto_commit(&self, new_autocommit: bool) {
+    fn set_auto_commit(&self, ret_func: PyObject, new_autocommit: bool) {
         let ctx = with_puff_context(|ctx| ctx);
         let loop_pool = self.pool.clone();
         let transaction_loop_inner = self.transaction_loop.clone();
         ctx.handle().spawn(async move {
             let sender = get_sender(loop_pool, transaction_loop_inner);
-            sender.send(TxnCommand::SetAutoCommit(new_autocommit)).await
+            sender.send(TxnCommand::SetAutoCommit(ret_func, new_autocommit)).await
         });
     }
 
@@ -404,7 +414,7 @@ enum TxnCommand {
     Commit(PyObject),
     Rollback(PyObject),
     RowCount(PyObject),
-    SetAutoCommit(bool),
+    SetAutoCommit(PyObject, bool),
     Close(Arc<Mutex<Option<Sender<TxnCommand>>>>),
 }
 
@@ -620,13 +630,11 @@ async fn run_loop(
     client_pool: Pool<PostgresConnectionManager<NoTls>>,
     mut rec: Receiver<TxnCommand>,
 ) -> PuffResult<()> {
-    println!("Running loop!");
     let mut auto_commit = false;
     let mut running = true;
     let mut client_conn = client_pool.get().await?;
     while running {
         if let Some(msg) = rec.recv().await {
-            println!("new msg!");
             let new_result = if auto_commit {
                 run_autocommit_loop(msg, &mut *client_conn, &mut rec).await?
             } else {
@@ -657,7 +665,12 @@ async fn run_txn_loop<'a>(
     let mut is_first = true;
     while let Some(x) = next_message.take() {
         match x {
-            TxnCommand::SetAutoCommit(new) => return Ok(LoopResult::ChangeAutoCommit(new)),
+            TxnCommand::SetAutoCommit(py_obj, new) => {
+                handle_python_return(py_obj, ready(Ok(()))).await;
+                if new {
+                    return Ok(LoopResult::ChangeAutoCommit(new))
+                }
+            },
             TxnCommand::Close(txn_loop) => {
                 txn.rollback().await?;
                 let mut m = txn_loop.lock().unwrap();
@@ -692,7 +705,7 @@ async fn run_txn_loop<'a>(
                 let fut = async {
                     let statement = txn.prepare(&q).await?;
                     let rowstream = txn.query_raw(&statement, &params).await?;
-                    let rows = rowstream.try_collect().await?;
+                    let rows: Vec<Row> = rowstream.try_collect().await?;
                     Ok((statement, rows))
                 };
                 sender.send(fut.await).unwrap_or(())
@@ -834,7 +847,12 @@ async fn run_autocommit_loop<'a>(
     let mut next_message = Some(first_msg);
     while let Some(x) = next_message.take() {
         match x {
-            TxnCommand::SetAutoCommit(new) => return Ok(LoopResult::ChangeAutoCommit(new)),
+            TxnCommand::SetAutoCommit(ret, new) => {
+                handle_python_return(ret, ready(Ok(()))).await;
+                if !new {
+                    return Ok(LoopResult::ChangeAutoCommit(new))
+                }
+            },
             TxnCommand::Close(txn_loop) => {
                 let mut m = txn_loop.lock().unwrap();
                 *m = None;
@@ -850,10 +868,10 @@ async fn run_autocommit_loop<'a>(
                 let fut = async {
                     let statement = client.prepare(&q).await?;
                     let rowstream = client.query_raw(&statement, &params).await?;
-                    let rows = rowstream.try_collect().await?;
+                    let rows: Vec<Row> = rowstream.try_collect().await?;
                     Ok((statement, rows))
                 };
-                sender.send(fut.await).unwrap_or(())
+                sender.send(fut.await).unwrap_or(());
             }
             TxnCommand::Execute(ret, q, params) => {
                 row_count = 0;

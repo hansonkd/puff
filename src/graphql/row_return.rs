@@ -2,7 +2,7 @@ use crate::graphql::scalar::{AggroScalarValue, AggroValue};
 
 use crate::errors::PuffResult;
 use crate::python::postgres::column_to_python;
-use crate::types::Text;
+use crate::types::{Bytes, Text, UtcDateTime};
 use anyhow::{anyhow, bail, Result};
 use juniper::{InputValue, Object};
 use pyo3::exceptions::PyKeyError;
@@ -18,8 +18,12 @@ pub fn convert_pyany_to_jupiter(attribute_val: &PyAny) -> AggroValue {
     if let Ok(s) = attribute_val.extract() {
         return AggroValue::Scalar(AggroScalarValue::Boolean(s));
     }
-    if let Ok(s) = attribute_val.extract() {
-        return AggroValue::Scalar(AggroScalarValue::Int(s));
+    if let Ok(r) = attribute_val.extract::<i64>() {
+        return if let Ok(s) = r.try_into() {
+            AggroValue::Scalar(AggroScalarValue::Int(s))
+        } else {
+            AggroValue::Scalar(AggroScalarValue::Long(r))
+        };
     }
     if let Ok(s) = attribute_val.extract() {
         return AggroValue::Scalar(AggroScalarValue::Float(s));
@@ -59,25 +63,45 @@ pub fn convert_postgres_to_juniper(
     column_index: usize,
     t: &tokio_postgres::types::Type,
 ) -> Result<AggroValue> {
-    match *t {
-        tokio_postgres::types::Type::BOOL => {
+    match t {
+        &tokio_postgres::types::Type::BOOL => {
             let r: bool = r.get(column_index);
             Ok(AggroValue::scalar(r))
         }
-        tokio_postgres::types::Type::INT2 | tokio_postgres::types::Type::INT4 => {
+        &tokio_postgres::types::Type::INT2 | &tokio_postgres::types::Type::INT4 => {
             let r: i32 = r.get(column_index);
             Ok(AggroValue::scalar(r))
         }
-        tokio_postgres::types::Type::FLOAT4 | tokio_postgres::types::Type::FLOAT8 => {
+        &tokio_postgres::types::Type::INT8 => {
+            let r: i64 = r.get(column_index);
+            Ok(if let Ok(s) = r.try_into() {
+                AggroValue::Scalar(AggroScalarValue::Int(s))
+            } else {
+                AggroValue::Scalar(AggroScalarValue::Long(r))
+            })
+        }
+        &tokio_postgres::types::Type::BYTEA => {
+            let r = r.get(column_index);
+            Ok(AggroValue::Scalar(AggroScalarValue::Binary(Bytes::copy_from_slice(r))))
+        }
+        &tokio_postgres::types::Type::TIMESTAMP => {
+            let r = r.get(column_index);
+            Ok(AggroValue::Scalar(AggroScalarValue::Datetime(UtcDateTime::new(r))))
+        }
+        &tokio_postgres::types::Type::UUID => {
+            let r = r.get(column_index);
+            Ok(AggroValue::Scalar(AggroScalarValue::Uuid(r)))
+        }
+        &tokio_postgres::types::Type::FLOAT4 | &tokio_postgres::types::Type::FLOAT8 => {
             let r: f64 = r.get(column_index);
             Ok(AggroValue::scalar(r))
         }
-        tokio_postgres::types::Type::TEXT | tokio_postgres::types::Type::VARCHAR => {
+        &tokio_postgres::types::Type::TEXT | &tokio_postgres::types::Type::VARCHAR => {
             let r: &str = r.get(column_index);
             Ok(AggroValue::scalar(r))
         }
-        _ => {
-            panic!("Unsupported postgres type")
+        t => {
+            panic!("Unsupported postgres type {}", t)
         }
     }
 }

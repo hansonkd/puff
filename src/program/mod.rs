@@ -310,6 +310,7 @@ impl Program {
                     redis = Some(rt.block_on(new_redis_async(
                         arg_matches.get_one::<String>("redis_url").unwrap().as_str(),
                         true,
+                        rt_config.redis_pool_size()
                     ))?);
                 }
 
@@ -335,6 +336,7 @@ impl Program {
                                 .unwrap()
                                 .as_str(),
                             true,
+                            rt_config.postgres_pool_size()
                         ))?,
                     );
                 }

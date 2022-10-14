@@ -43,6 +43,7 @@ pub mod text_builder;
 pub mod vector;
 pub mod vector_builder;
 
+use std::fmt::{Debug, Formatter};
 use axum::body::Bytes as AxumBytes;
 use axum::response::{IntoResponse, Response};
 use bb8_redis::redis::{
@@ -74,8 +75,14 @@ pub trait Puff: Clone + Send + Sync + 'static {
 }
 
 /// A Puff Structure for Binary Data.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 pub struct Bytes(AxumBytes);
+
+impl Debug for Bytes {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        base64::encode(self.as_slice()).fmt(f)
+    }
+}
 
 impl Bytes {
     pub fn as_slice(&self) -> &[u8] {
@@ -178,7 +185,7 @@ impl Deref for Bytes {
 }
 
 /// A Puff Datetime for UTC.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Hash, Debug)]
 pub struct UtcDateTime(DateTime<Utc>);
 
 impl Deref for UtcDateTime {
@@ -193,11 +200,26 @@ impl UtcDateTime {
     pub fn new(dt: DateTime<Utc>) -> Self {
         Self(dt)
     }
+    pub fn to_chrono(&self) -> DateTime<Utc> {
+        self.0.clone()
+    }
+}
+
+impl IntoPy<Py<PyAny>> for UtcDateTime {
+    fn into_py(self, py: Python<'_>) -> Py<PyAny> {
+        pyo3_chrono::NaiveDateTime::from(self.0.naive_local()).into_py(py)
+    }
 }
 
 /// A Puff Date for UTC.
 #[derive(Clone)]
 pub struct UtcDate(Date<Utc>);
+
+impl IntoPy<Py<PyAny>> for UtcDate {
+    fn into_py(self, py: Python<'_>) -> Py<PyAny> {
+        pyo3_chrono::NaiveDate::from(self.0.naive_local()).into_py(py)
+    }
+}
 
 impl Deref for UtcDate {
     type Target = Date<Utc>;

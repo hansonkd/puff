@@ -182,7 +182,7 @@ def hello_world():
 
 While it can run any WSGI app, Puff has a special affection for Django. Puff believes that business logic should be implemented on a higher level layer and Rust should be used as an optimization. Django is a perfect high level framework to use with Puff as it handles migrations, admin, etc. Puff mimics the psycopg2 drivers and cache so that Django uses the Puff Database and Redis pool.
 
-Transform your sync Django project into a highly concurrent Puff program with a few lines of code. Puff wraps the management commands so migrate, etc. all work as expected. Simply run `cargo run django [command]` instead of using `./manage.py [command]`. For example `cargo run django migrate`. Don't use django's dev server, instead use Puff's with `cargo run runserver`
+Transform your sync Django project into a highly concurrent Puff program with a few lines of code. Puff wraps the management commands so migrate, etc. all work as expected. Simply run `cargo run django [command]` instead of using `./manage.py [command]`. For example `cargo run django migrate`. Don't use django's dev server, instead use Puff's with `cargo run runserver`.
 
 ```rust title="/app/src/main.rs"
 use puff_rs::program::commands::django_management::DjangoManagementCommand;
@@ -207,6 +207,9 @@ fn main() -> ExitCode {
         .run()
 }
 ```
+
+Use Puff everywhere in your Django app. Even create Django management commands that use Rust!
+
 
 ## Puff ♥ Graphql
 
@@ -275,6 +278,7 @@ class Query:
 class Mutation:
     @classmethod
     def send_message_to_channel(cls, context, /, connection_id: str, message: str) -> bool:
+        print(context.auth_token) #  Authoritzation bearer token passed in the context
         return pubsub.publish_as(connection_id, CHANNEL, message)
 
 
@@ -342,6 +346,8 @@ Produces a Graphql Schema like so:
 
 ![Schema](https://user-images.githubusercontent.com/496914/195461156-1613c3e6-7b82-4143-8796-1b95ff10f7c3.png)
 
+In addition to making it easier to write the fastest queries, a layer based design allows Puff to fully exploit the multithreaded async Rust runtime and solve branches independently. This gives you a  performance advantages out of the box.
+
 ## Puff ♥ Pytest
 
 Integrate with pytest to easily test your Graphql and Puff apps. Simply add the `PytestCommand` to your Program and write tests as normal only run them with `cargo run pytest`
@@ -373,6 +379,81 @@ def test_gql():
     assert result['data']["hello_world"][0]["was_input"] == 3
 ```
 
+##
+
+## Puff ♥ Django + Graphql
+
+Puff GraphQL integrates seamlessly with Django. Convert Django querysets to SQL to offload all computation to Rust. Or decorate with `borrow_db_context` and let Django have access to the GraphQL connection, allowing you fallback to the robustness of django for complicated lookups.
+
+```python
+from dataclasses import dataclass
+from puff import graphql
+from polls.models import Question, Choice
+from django.utils import timezone
+
+
+@dataclass
+class ChoiceObject:
+    id: int
+    question_id: int
+    choice_text: str
+    votes: int
+
+
+@dataclass
+class QuestionObject:
+    id: int
+    pub_date: str
+    question_text: str
+
+    @classmethod
+    def choices(cls, context, /) -> Tuple[List[ChoiceObject], str, List[Any], List[str], List[str]]:
+        # Extract column values from the previous layer to use in this one.
+        parent_values = [r[0] for r in context.parent_values(["id"])]
+        # Convert a Django queryset to sql and params to pass off to Puff. This function does 0 IO in Python.
+        qs = Choice.objects.filter(question_id__in=parent_values)
+        sql_q, params = puff.contrib.django.query_and_params(qs)
+        return ..., sql_q, params, ["id"], ["question_id"]
+
+
+@dataclass
+class Query:
+
+    @classmethod
+    def questions(cls, context, /) -> Tuple[List[QuestionObject], str, List[Any]]:
+        # Convert a Django queryset to sql and params to pass off to Puff. This function does 0 IO in Python.
+        qs = Question.objects.all()
+        sql_q, params = query_and_params(qs)
+        return ..., sql_q, params
+
+    @classmethod
+    @graphql.borrow_db_context  # Decorate with borrow_db_context to use same DB connection in Django as the rest of GQL
+    def question_objs(cls, context, /) -> Tuple[List[QuestionObject], List[Any]]:
+        # You can also compute the python values with Django and hand them off to Puff.
+        # This version of the same `questions` field, is slower since Django is constructing the objects.
+        objs = list(Question.objects.all())
+        return ..., objs
+
+
+@dataclass
+class Mutation:
+    @classmethod
+    @graphql.borrow_db_context  # Decorate with borrow_db_context to use same DB connection in Django as the rest of GQL
+    def create_question(cls, context, /, question_text: str) -> QuestionObject:
+        question = Question.objects.create(question_text=question_text, pub_date=timezone.now())
+        return question
+
+@dataclass
+class Subscription:
+    pass
+
+@dataclass
+class Schema:
+    query: Query
+    mutation: Mutation
+    subscription: Subscription
+
+```
 
 ## FAQ
 
@@ -431,6 +512,50 @@ The thesis of the deepstack project is to have two backend engineering roles: Sc
 * Rapid iteration on the data control layer (Pyton / Django / Flask) without total recompilation of the deep stack layer.
 * Quickly scale the Flexibility of Python with the Performance and Safety of Rust.
 
+#### Performance
+
+Strawberry GraphQL with Strawberry Django Plus optimizations turned on:
+```python
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    1   1.4      0       5
+Processing:   907 11180 1913.2  11666   12712
+Waiting:      901 11179 1913.2  11663   12710
+Total:        907 11181 1912.3  11667   12716
+
+Percentage of the requests served within a certain time (ms)
+  50%  11667
+  66%  11754
+  75%  11842
+  80%  11900
+  90%  12001
+  95%  12053
+  98%  12097
+  99%  12212
+ 100%  12716 (longest request)
+```
+
+Puff in release mode:
+
+```
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.8      0       3
+Processing:   158 5006 1103.5   5310    6617
+Waiting:      156 5002 1104.0   5307    6562
+Total:        158 5006 1103.0   5310    6618
+
+Percentage of the requests served within a certain time (ms)
+  50%   5310
+  66%   5591
+  75%   5702
+  80%   5820
+  90%   6067
+  95%   6339
+  98%   6475
+  99%   6516
+ 100%   6618 (longest request)
+```
 
 #### Status
 

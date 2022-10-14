@@ -47,6 +47,8 @@ pub struct RuntimeConfig {
     tokio_worker_threads: usize,
     python: bool,
     redis: bool,
+    redis_pool_size: u32,
+    postgres_pool_size: u32,
     postgres: bool,
     pubsub: bool,
     greenlets: bool,
@@ -98,6 +100,14 @@ impl RuntimeConfig {
     /// Get if a global postgres will be enabled.
     pub fn postgres(&self) -> bool {
         self.postgres
+    }
+    /// Get if a global redis will be enabled.
+    pub fn redis_pool_size(&self) -> u32 {
+        self.redis_pool_size
+    }
+    /// Get if a global postgres will be enabled.
+    pub fn postgres_pool_size(&self) -> u32 {
+        self.postgres_pool_size
     }
     /// Get if a global pubsub will be enabled.
     pub fn pubsub(&self) -> bool {
@@ -197,6 +207,27 @@ impl RuntimeConfig {
         new
     }
 
+    /// Sets the max size of postgres pool. Also enables postgres if not enabled already.
+    ///
+    /// Default: 10
+    pub fn set_postgres_pool_size(self, pool_size: u32) -> Self {
+        let mut new = self;
+        new.postgres = true;
+        new.postgres_pool_size = pool_size;
+        new
+    }
+
+    /// Sets the max size of redis pool. Also enables redis if not enabled already.
+    ///
+    /// Default: 10
+    pub fn set_redis_pool_size(self, pool_size: u32) -> Self {
+        let mut new = self;
+        new.redis = true;
+        new.redis_pool_size = pool_size;
+        new
+    }
+
+
     /// Sets whether to start with a global PubSubClient.
     ///
     /// Default: false
@@ -286,6 +317,8 @@ impl Default for RuntimeConfig {
             global_state_fn: None,
             greenlets: true,
             redis: false,
+            redis_pool_size: 10,
+            postgres_pool_size: 10,
             postgres: false,
             pubsub: false,
             blocking_task_keep_alive: Duration::from_secs(30),

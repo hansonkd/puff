@@ -13,15 +13,17 @@ use pyo3::{PyResult, Python, ToPyObject};
 use crate::errors::{log_puff_error, PuffResult};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio_stream::wrappers::UnboundedReceiverStream;
+use uuid::Uuid;
 
 use crate::graphql::puff_schema::{
     returned_values_into_stream, selection_to_fields, AggroArgument, AggroContext, AggroField,
     AggroObject, AggroTypeInfo, PyContext, SubscriptionSender,
 };
 use crate::graphql::row_return::ExtractorRootNode;
-use crate::graphql::scalar::{AggroScalarValue, AggroValue, GenericScalar};
+use crate::graphql::scalar::{AggroScalarValue, AggroValue, Binary, GenericScalar};
 use crate::python::postgres::Connection;
 use crate::types::text::ToText;
 use crate::types::Text;
@@ -137,6 +139,24 @@ fn build_argument<'r>(
                 (false, true) => registry.arg::<Vec<Option<bool>>>(arg_name, &()),
                 (false, false) => registry.arg::<Vec<bool>>(arg_name, &()),
             },
+            AggroTypeInfo::Datetime => match (arg.param_type.optional, inner.optional) {
+                (true, true) => registry.arg::<Option<Vec<Option<DateTime<Utc>>>>>(arg_name, &()),
+                (true, false) => registry.arg::<Option<Vec<DateTime<Utc>>>>(arg_name, &()),
+                (false, true) => registry.arg::<Vec<Option<DateTime<Utc>>>>(arg_name, &()),
+                (false, false) => registry.arg::<Vec<DateTime<Utc>>>(arg_name, &()),
+            },
+            AggroTypeInfo::Binary => match (arg.param_type.optional, inner.optional) {
+                (true, true) => registry.arg::<Option<Vec<Option<Binary>>>>(arg_name, &()),
+                (true, false) => registry.arg::<Option<Vec<Binary>>>(arg_name, &()),
+                (false, true) => registry.arg::<Vec<Option<Binary>>>(arg_name, &()),
+                (false, false) => registry.arg::<Vec<Binary>>(arg_name, &()),
+            },
+            AggroTypeInfo::Uuid => match (arg.param_type.optional, inner.optional) {
+                (true, true) => registry.arg::<Option<Vec<Option<Uuid>>>>(arg_name, &()),
+                (true, false) => registry.arg::<Option<Vec<Uuid>>>(arg_name, &()),
+                (false, true) => registry.arg::<Vec<Option<Uuid>>>(arg_name, &()),
+                (false, false) => registry.arg::<Vec<Uuid>>(arg_name, &()),
+            },
             AggroTypeInfo::List(_) => {
                 panic!("Cannot have nested list. Found one in {}", arg_name)
             }
@@ -198,6 +218,27 @@ fn build_argument<'r>(
                 registry.arg::<bool>(arg_name, &())
             }
         }
+        AggroTypeInfo::Uuid => {
+            if arg.param_type.optional {
+                registry.arg::<Option<Uuid>>(arg_name, &())
+            } else {
+                registry.arg::<Uuid>(arg_name, &())
+            }
+        }
+        AggroTypeInfo::Datetime => {
+            if arg.param_type.optional {
+                registry.arg::<Option<DateTime<Utc>>>(arg_name, &())
+            } else {
+                registry.arg::<DateTime<Utc>>(arg_name, &())
+            }
+        }
+        AggroTypeInfo::Binary => {
+            if arg.param_type.optional {
+                registry.arg::<Option<Binary>>(arg_name, &())
+            } else {
+                registry.arg::<Binary>(arg_name, &())
+            }
+        }
         AggroTypeInfo::Object(tn) => {
             let field_node_type_info = &SchemaInfo {
                 all_objs: info.all_objs.clone(),
@@ -257,6 +298,24 @@ fn build_field<'r>(
                 (false, true) => registry.field::<Vec<Option<bool>>>(field_name, &()),
                 (false, false) => registry.field::<Vec<bool>>(field_name, &()),
             },
+            AggroTypeInfo::Datetime => match (field.return_type.optional, inner.optional) {
+                (true, true) => registry.field::<Option<Vec<Option<DateTime<Utc>>>>>(field_name, &()),
+                (true, false) => registry.field::<Option<Vec<DateTime<Utc>>>>(field_name, &()),
+                (false, true) => registry.field::<Vec<Option<DateTime<Utc>>>>(field_name, &()),
+                (false, false) => registry.field::<Vec<DateTime<Utc>>>(field_name, &()),
+            },
+            AggroTypeInfo::Binary => match (field.return_type.optional, inner.optional) {
+                (true, true) => registry.field::<Option<Vec<Option<Binary>>>>(field_name, &()),
+                (true, false) => registry.field::<Option<Vec<Binary>>>(field_name, &()),
+                (false, true) => registry.field::<Vec<Option<Binary>>>(field_name, &()),
+                (false, false) => registry.field::<Vec<Binary>>(field_name, &()),
+            },
+            AggroTypeInfo::Uuid => match (field.return_type.optional, inner.optional) {
+                (true, true) => registry.field::<Option<Vec<Option<Uuid>>>>(field_name, &()),
+                (true, false) => registry.field::<Option<Vec<Uuid>>>(field_name, &()),
+                (false, true) => registry.field::<Vec<Option<Uuid>>>(field_name, &()),
+                (false, false) => registry.field::<Vec<Uuid>>(field_name, &()),
+            },
             AggroTypeInfo::Object(s) => {
                 let field_node_type_info = &SchemaInfo {
                     all_objs: info.all_objs.clone(),
@@ -314,6 +373,27 @@ fn build_field<'r>(
                 registry.field::<bool>(field_name, &())
             }
         }
+        AggroTypeInfo::Uuid => {
+            if field.return_type.optional {
+                registry.field::<Option<Uuid>>(field_name, &())
+            } else {
+                registry.field::<Uuid>(field_name, &())
+            }
+        }
+        AggroTypeInfo::Datetime => {
+            if field.return_type.optional {
+                registry.field::<Option<DateTime<Utc>>>(field_name, &())
+            } else {
+                registry.field::<DateTime<Utc>>(field_name, &())
+            }
+        }
+        AggroTypeInfo::Binary => {
+            if field.return_type.optional {
+                registry.field::<Option<Binary>>(field_name, &())
+            } else {
+                registry.field::<Binary>(field_name, &())
+            }
+        }
         AggroTypeInfo::Object(tn) => {
             let field_node_type_info = &SchemaInfo {
                 all_objs: info.all_objs.clone(),
@@ -359,8 +439,7 @@ impl GraphQLValueAsync<AggroScalarValue> for PuffGqlObject {
         executor: &'a Executor<'_, '_, Self::Context, AggroScalarValue>,
     ) -> BoxFuture<'a, ExecutionResult<AggroScalarValue>> {
         let context = executor.context();
-        let bearer = context.token();
-        let conn = context.connection();
+
         Box::pin(async move {
             let fut = async move {
                 let look_ahead = executor.look_ahead();
@@ -381,13 +460,12 @@ impl GraphQLValueAsync<AggroScalarValue> for PuffGqlObject {
                 })?;
                 // let field_obj = info.all_objs.get(field.return_type.primary_type.as_str()).unwrap();
                 let rows = Arc::new(ExtractorRootNode);
-                let python_context = PyContext::new(rows.clone(), bearer, conn);
                 let res = returned_values_into_stream(
                     rows,
                     &look_ahead,
                     aggro_field,
                     all_objects,
-                    python_context,
+                    context,
                 )
                 .await?;
 
@@ -425,7 +503,7 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
     {
         let context = executor.context();
         let bearer = context.token();
-        let conn = context.connection();
+
         Box::pin(async move {
             let fut = async move {
                 let look_ahead = executor.look_ahead();
@@ -450,13 +528,12 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                     PuffResult::Ok((laf, args))
                 })?;
                 let parents = Arc::new(ExtractorRootNode);
-                let python_context = PyContext::new(parents.clone(), bearer, conn);
                 let ss = SubscriptionSender::new(
                     sender,
                     look_ahead_fields,
                     field.clone(),
                     all_objects,
-                    python_context.clone(),
+                    context.token(),
                     parents.clone(),
                 );
 
@@ -465,11 +542,14 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                     .acceptor_method
                     .clone()
                     .expect("Subscription field needs an acceptor");
+
+                let python_context = PyContext::new(parents.clone(), bearer, None);
                 py_dispatcher.dispatch::<_, &PyDict>(
                     acceptor_method,
                     (ss, python_context, args),
                     None,
                 )?;
+
                 let stream: ValuesStream<AggroScalarValue> =
                     Box::pin(UnboundedReceiverStream::new(ret));
                 Ok(Value::Scalar(stream))

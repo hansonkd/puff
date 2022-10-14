@@ -6,10 +6,14 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
+use chrono::{DateTime, Utc};
+use serde::de::{EnumAccess, MapAccess, SeqAccess};
 
 use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type};
+use uuid::Uuid;
 use crate::prelude::{Text, ToText};
+use crate::types::{Bytes, UtcDateTime};
 
 pub type AggroValue = JuniperValue<AggroScalarValue>;
 
@@ -55,15 +59,62 @@ impl GenericScalar {
     }
 }
 
+
+#[graphql_scalar(
+    // You can rename the type for GraphQL by specifying the name here.
+    name = "Binary",
+    scalar = AggroScalarValue,
+    // You can also specify a description here.
+    // If present, doc comments will be ignored.
+    description = "Binary data (base64 strings accepted)")]
+#[derive(Debug, PartialEq, Clone)]
+pub struct Binary(Bytes);
+
+impl Binary {
+    pub fn to_output(v: &Binary) -> AggroValue {
+        AggroValue::Scalar(AggroScalarValue::Binary(v.0.clone()))
+    }
+
+    pub fn from_input(v: &InputValue<AggroScalarValue>) -> Result<Binary, String> {
+        match v {
+            InputValue::Scalar(AggroScalarValue::Binary(b)) => {
+                Ok(Binary(b.clone()))
+            }
+            InputValue::Scalar(AggroScalarValue::String(b)) => {
+                match base64::decode(b.as_str()) {
+                    Ok(s) => {
+                        Ok(Binary(Bytes::copy_from_slice(&s)))
+                    }
+                    _ => {
+                        Err("Invalid base64 string for Binary".to_owned())
+                    }
+                }
+
+            }
+            _ => Err("Expected a binary or string in base64".to_owned())
+        }
+    }
+
+    fn parse_token<'a>(
+        _value: juniper::ScalarToken<'a>,
+    ) -> juniper::ParseScalarResult<AggroScalarValue> {
+        panic!("Shouldn't from_str");
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum AggroScalarValue {
     Int(i32),
-    // Long(i64),
+    Long(i64),
     Float(f64),
     String(Text),
     Boolean(bool),
     Generic(Box<AggroValue>),
+    Datetime(UtcDateTime),
+    Uuid(Uuid),
+    Binary(Bytes),
 }
+
 
 impl<'de> Deserialize<'de> for AggroScalarValue {
     fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
@@ -79,7 +130,12 @@ impl<'de> Deserialize<'de> for AggroScalarValue {
             fn visit_bool<E: de::Error>(self, b: bool) -> Result<Self::Value, E> {
                 Ok(AggroScalarValue::Boolean(b))
             }
-
+            fn visit_i8<E: de::Error>(self, n: i8) -> Result<Self::Value, E> {
+                Ok(AggroScalarValue::Int(n.into()))
+            }
+            fn visit_i16<E: de::Error>(self, n: i16) -> Result<Self::Value, E> {
+                Ok(AggroScalarValue::Int(n.into()))
+            }
             fn visit_i32<E: de::Error>(self, n: i32) -> Result<Self::Value, E> {
                 Ok(AggroScalarValue::Int(n))
             }
@@ -88,7 +144,23 @@ impl<'de> Deserialize<'de> for AggroScalarValue {
                 if i64::from(i32::MIN) <= n && n <= i64::from(i32::MAX) {
                     self.visit_i32(n.try_into().unwrap())
                 } else {
-                    Err(de::Error::custom("Invalid integer bounds"))
+                    Ok(AggroScalarValue::Long(n))
+                }
+            }
+
+            fn visit_u8<E: de::Error>(self, n: u8) -> Result<Self::Value, E> {
+                if n <= u8::MAX as u8 {
+                    self.visit_i8(n.try_into().unwrap())
+                } else {
+                    self.visit_u16(n.into())
+                }
+            }
+
+            fn visit_u16<E: de::Error>(self, n: u16) -> Result<Self::Value, E> {
+                if n <= u16::MAX as u16 {
+                    self.visit_i16(n.try_into().unwrap())
+                } else {
+                    self.visit_u32(n.into())
                 }
             }
 
@@ -123,6 +195,14 @@ impl<'de> Deserialize<'de> for AggroScalarValue {
 
             fn visit_string<E: de::Error>(self, s: String) -> Result<Self::Value, E> {
                 Ok(AggroScalarValue::String(s.to_text()))
+            }
+
+            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E> where E: de::Error {
+                Ok(AggroScalarValue::Binary(Bytes::copy_from_slice(v)))
+            }
+
+            fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E> where E: de::Error {
+                Ok(AggroScalarValue::Binary(Bytes::copy_from_slice(&v)))
             }
         }
 
@@ -193,9 +273,13 @@ impl ToSql for AggroScalarValue {
     {
         match self {
             AggroScalarValue::Int(i) => i.to_sql(ty, out),
+            AggroScalarValue::Long(i) => i.to_sql(ty, out),
             AggroScalarValue::Float(i) => i.to_sql(ty, out),
             AggroScalarValue::String(i) => i.as_str().to_sql(ty, out),
             AggroScalarValue::Boolean(i) => i.to_sql(ty, out),
+            AggroScalarValue::Datetime(i) => i.to_sql(ty, out),
+            AggroScalarValue::Binary(i) => i.as_slice().to_sql(ty, out),
+            AggroScalarValue::Uuid(i) => i.to_sql(ty, out),
             AggroScalarValue::Generic(_i) => Err(anyhow!("Cannot convert generic to sql").into()),
         }
     }
@@ -209,6 +293,7 @@ impl ToSql for AggroScalarValue {
             | Type::INT4
             | Type::INT2
             | Type::INT8
+            | Type::BYTEA
             | Type::TEXT
             | Type::VARCHAR
             | Type::BOOL => true,
@@ -223,8 +308,12 @@ impl Hash for AggroScalarValue {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
             AggroScalarValue::Int(i) => i.hash(state),
+            AggroScalarValue::Long(i) => i.hash(state),
+            AggroScalarValue::Uuid(i) => i.hash(state),
+            AggroScalarValue::Datetime(i) => i.hash(state),
             AggroScalarValue::String(i) => i.hash(state),
             AggroScalarValue::Boolean(i) => i.hash(state),
+            AggroScalarValue::Binary(i) => i.hash(state),
             v => {
                 panic!("Tried to hash {:?}", v)
             }
@@ -238,6 +327,10 @@ impl Display for AggroScalarValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             AggroScalarValue::Int(i) => i.fmt(f),
+            AggroScalarValue::Long(i) => i.fmt(f),
+            AggroScalarValue::Datetime(i) => i.fmt(f),
+            AggroScalarValue::Uuid(i) => i.fmt(f),
+            AggroScalarValue::Binary(i) => base64::encode(i.as_slice()).fmt(f),
             AggroScalarValue::Float(i) => i.fmt(f),
             AggroScalarValue::String(i) => i.fmt(f),
             AggroScalarValue::Boolean(i) => i.fmt(f),
@@ -260,6 +353,7 @@ impl FromInputValue<AggroScalarValue> for AggroScalarValue {
     }
 }
 
+
 impl Serialize for AggroScalarValue {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -268,6 +362,10 @@ impl Serialize for AggroScalarValue {
         match self {
             AggroScalarValue::Float(s) => s.serialize(serializer),
             AggroScalarValue::Int(s) => s.serialize(serializer),
+            AggroScalarValue::Long(s) => s.serialize(serializer),
+            AggroScalarValue::Datetime(s) => s.serialize(serializer),
+            AggroScalarValue::Uuid(s) => s.serialize(serializer),
+            AggroScalarValue::Binary(s) => s.serialize(serializer),
             AggroScalarValue::String(s) => s.serialize(serializer),
             AggroScalarValue::Boolean(s) => s.serialize(serializer),
             AggroScalarValue::Generic(s) => s.serialize(serializer),
@@ -355,6 +453,10 @@ impl ScalarValue for AggroScalarValue {
     fn into_another<S: ScalarValue>(self) -> S {
         match self {
             Self::Int(i) => S::from(i),
+            Self::Long(i) => S::from(i.to_string()),
+            Self::Datetime(i) => S::from(i.to_string()),
+            Self::Uuid(i) => S::from(i.to_string()),
+            Self::Binary(i) => S::from(base64::encode(i.as_slice())),
             Self::Float(f) => S::from(f),
             Self::String(s) => S::from(s.to_string()),
             Self::Boolean(b) => S::from(b),

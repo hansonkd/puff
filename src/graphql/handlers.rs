@@ -25,6 +25,7 @@ use juniper_graphql_ws::{ClientMessage, Connection, ConnectionConfig, Schema, We
 use serde;
 use serde::Deserialize;
 use serde_json::{Map, Value};
+use crate::python::postgres::close_conn;
 
 /// The query variables for a GET request
 #[derive(Deserialize, Debug)]
@@ -348,7 +349,10 @@ pub fn handle_graphql() -> impl FnOnce(
             let root_node = with_puff_context(|ctx| ctx.gql());
             let header = bearer.map(|c| c.0 .0.token().to_text());
             let new_ctx = AggroContext::new(header);
-            JuniperPuffResponse(request.execute(&root_node, &new_ctx).await)
+            let resp = request.execute(&root_node, &new_ctx).await;
+            let conn = new_ctx.connection().lock().await;
+            close_conn(&conn).await;
+            JuniperPuffResponse(resp)
         })
     }
 }
