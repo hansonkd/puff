@@ -1,3 +1,4 @@
+use std::convert::Infallible;
 use axum::extract::{FromRequest, Query, WebSocketUpgrade};
 use axum::http::{Method, Request, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
@@ -21,7 +22,7 @@ use axum::headers::authorization::Bearer;
 use axum::headers::Authorization;
 use hyper::Body;
 use juniper::futures::{SinkExt, StreamExt, TryStreamExt};
-use juniper_graphql_ws::{ClientMessage, Connection, ConnectionConfig, Schema, WebsocketError};
+use juniper_graphql_ws::{ClientMessage, Connection, ConnectionConfig, Schema};
 use serde;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -250,7 +251,7 @@ struct AxumMessage(Message);
 
 #[derive(Debug)]
 enum SubscriptionError {
-    Juniper(WebsocketError),
+    Juniper(Infallible),
     Axum(axum::Error),
     Serde(serde_json::Error),
 }

@@ -65,7 +65,29 @@ pub struct HttpServerConfig {
 impl HttpServerConfig {
     pub fn server_builder(&self) -> Builder<AddrIncoming> {
         info!("Serving on http://{}", &self.socket_addr);
-        return axum::Server::bind(&self.socket_addr);
+        if self.reuse_port {
+            let sock = socket2::Socket::new(
+                match self.socket_addr {
+                    SocketAddr::V4(_) => socket2::Domain::IPV4,
+                    SocketAddr::V6(_) => socket2::Domain::IPV6,
+                },
+                socket2::Type::STREAM,
+                None,
+            )
+            .unwrap();
+
+            sock.set_reuse_address(true).unwrap();
+            sock.set_reuse_port(true).unwrap();
+            sock.set_nonblocking(true).unwrap();
+            sock.bind(&self.socket_addr.into()).unwrap();
+            sock.listen(8192).unwrap();
+            sock.set_keepalive(true).unwrap();
+            sock.set_nodelay(true).unwrap();
+
+            axum::Server::from_tcp(sock.into()).unwrap()
+        } else {
+            axum::Server::bind(&self.socket_addr)
+        }
     }
 
     pub fn add_command_options(cmd: Command) -> Command {

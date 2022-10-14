@@ -35,11 +35,15 @@ tokio-postgres = {version = "0.7.7", features=["with-serde_json-1", "with-chrono
 bb8-postgres = "0.8.1"
 pythonize = "0.16.0"
 pyo3-chrono = "0.4.0"
-juniper = { git = "https://github.com/btielen/juniper", branch="axum", features=["chrono"] }
-juniper_graphql_ws = { git = "https://github.com/btielen/juniper", branch="axum" }
+#juniper = { version="0.15.10", features=["chrono"] }
+#juniper_graphql_ws = { version="0.3.0" }
+juniper = { version = "0.16.0-dev", git = "https://github.com/graphql-rust/juniper", features=["chrono", "uuid"] }
+juniper_graphql_ws = { version = "0.4.0-dev", git = "https://github.com/graphql-rust/juniper" }
 async-trait = "0.1.57"
 tokio-stream = "0.1.10"
 base64 = "0.13.0"
+socket2 = "0.4.4"
+
 
 [[example]]
 name = "web"

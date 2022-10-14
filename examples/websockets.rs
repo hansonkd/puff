@@ -42,7 +42,7 @@ async fn on_upgrade(mut socket: WebSocket) {
             },
             Some(msg) = socket.recv() => {
                 if let Ok(msg) = msg {
-                    if !conn.publish(channel_name, msg.into_data()).await {
+                    if conn.publish(channel_name, msg.into_data()).await.is_err() {
                         break
                     }
                 } else {

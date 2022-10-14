@@ -659,7 +659,7 @@ async fn run_txn_loop<'a>(
     rec: &'a mut Receiver<TxnCommand>,
 ) -> PuffResult<LoopResult> {
     let mut row_count: i32 = -1;
-    let mut statement: Option<Statement> = None;
+    let _statement: Option<Statement> = None;
     let mut current_portal: Option<Portal> = None;
     let mut next_message = Some(first_msg);
     let mut is_first = true;
