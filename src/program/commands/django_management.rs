@@ -10,7 +10,7 @@ use pyo3::types::PyDict;
 
 /// The DjangoManagementCommand.
 ///
-/// Exposes ./manage.py [COMMAND] options for a Program.
+/// Exposes ./manage.py \[COMMAND\] options for a Program.
 #[derive(Clone)]
 pub struct DjangoManagementCommand {}
 

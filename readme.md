@@ -90,14 +90,13 @@ Python programs in Puff are run by building a `Program` in Rust and registering 
 The Python method is bootstrapped and run as a greenlet in the Puff runtime.
 
 
-```rust title="/app/src/main.rs"
-use puff_rs::Program;
+```rust title="/app/src/main.rs" no_run
+use puff_rs::prelude::*;
 use puff_rs::program::commands::PythonCommand;
 
 fn main() -> ExitCode {
     Program::new("my_first_app")
         .about("This is my first app")
-        .add_cwd_to_python_path()
         .command(PythonCommand::new("run_hello_world", "my_python_app.hello_world"))
         .run()
 }
@@ -130,7 +129,7 @@ The primary feature of Puff is the seamless ability to go from python into Rust 
 
 This makes the full Rust ecosystem available to your Python program with very little integration overhead or performance degradation.
 
-```rust title="/app/src/main.rs"
+```rust title="/app/src/main.rs" no_run
 use puff_rs::prelude::*;
 use puff_rs::program::commands::PythonCommand;
 
@@ -148,7 +147,7 @@ impl MyPythonState {
     // Async Puff functions take a function to return the result with and offload the future onto Tokio.
     fn hello_from_rust_async(&self, return_func: PyObject, py_says: Text) {
         greenlet_async(return_func, async {
-            tokio::task::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
             debug!("Python says: {}", &py_says);
             Ok(42)
         })
@@ -157,9 +156,10 @@ impl MyPythonState {
 
 
 fn main() -> ExitCode {
+    let rc = RuntimeConfig::default().set_global_state_fn(|py| Ok(MyPythonState.into_py(py)));
     Program::new("my_first_app")
         .about("This is my first app")
-        .set_global_state_fn(|py| Ok(MyPythonState.into_py(py)));
+        .runtime_config(rc)
         .command(PythonCommand::new("run_hello_world", "my_python_app.hello_world"))
         .run()
 }
@@ -184,7 +184,7 @@ While it can run any WSGI app, Puff has a special affection for Django. Puff bel
 
 Transform your sync Django project into a highly concurrent Puff program with a few lines of code. Puff wraps the management commands so migrate, etc. all work as expected. Simply run `cargo run django [command]` instead of using `./manage.py [command]`. For example `cargo run django migrate`. Don't use django's dev server, instead use Puff's with `cargo run runserver`.
 
-```rust title="/app/src/main.rs"
+```rust title="/app/src/main.rs" no_run
 use puff_rs::program::commands::django_management::DjangoManagementCommand;
 use puff_rs::program::commands::pytest::PytestCommand;
 use puff_rs::program::commands::wsgi::WSGIServerCommand;
@@ -317,7 +317,7 @@ class Schema:
 
 Rust:
 
-```rust title="/app/src/main.rs"
+```rust title="/app/src/main.rs" no_run
 use puff_rs::program::commands::ServerCommand;
 use puff_rs::graphql::handlers::{handle_graphql, handle_subscriptions, playground};
 use puff_rs::prelude::*;
@@ -328,7 +328,7 @@ fn main() -> ExitCode {
         .set_postgres(true)
         .set_redis(true)
         .set_pubsub(true)
-        .set_gql_module("my_python_gql_app.schema");
+        .set_gql_schema_class("my_python_gql_app.schema");
     
     let router = Router::new()
             .get("/", playground("/graphql", "/subscriptions"))
@@ -507,55 +507,14 @@ The thesis of the deepstack project is to have two backend engineering roles: Sc
 
 * Control High performance async Rust Computations with Flexible Python Abstractions. 
 * Maximum Performance: Only enter the python GIL to get the query and parameters and exit to execute the query and compute the results in Rust.
-* Django compatible: Full Admin, Migrations, Views, Tests, ...everything.
+* Django compatible: Full Admin, Migrations, Views, Tests, etc...
 * Axum Compatible: All extractors are ready to be used.
 * Rapid iteration on the data control layer (Pyton / Django / Flask) without total recompilation of the deep stack layer.
 * Quickly scale the Flexibility of Python with the Performance and Safety of Rust.
 
 #### Performance
 
-Strawberry GraphQL with Strawberry Django Plus optimizations turned on:
-```python
-Connection Times (ms)
-              min  mean[+/-sd] median   max
-Connect:        0    1   1.4      0       5
-Processing:   907 11180 1913.2  11666   12712
-Waiting:      901 11179 1913.2  11663   12710
-Total:        907 11181 1912.3  11667   12716
-
-Percentage of the requests served within a certain time (ms)
-  50%  11667
-  66%  11754
-  75%  11842
-  80%  11900
-  90%  12001
-  95%  12053
-  98%  12097
-  99%  12212
- 100%  12716 (longest request)
-```
-
-Puff in release mode:
-
-```
-Connection Times (ms)
-              min  mean[+/-sd] median   max
-Connect:        0    0   0.8      0       3
-Processing:   158 5006 1103.5   5310    6617
-Waiting:      156 5002 1104.0   5307    6562
-Total:        158 5006 1103.0   5310    6618
-
-Percentage of the requests served within a certain time (ms)
-  50%   5310
-  66%   5591
-  75%   5702
-  80%   5820
-  90%   6067
-  95%   6339
-  98%   6475
-  99%   6516
- 100%   6618 (longest request)
-```
+Right now there hasn't been too much focus on raw performance, because ultimately performance comes from SQL query optimizations (indexes, no n+1, etc). Puff's structure encourages you write your queries in a layer basis without having to rely on dataloaders or complicated optimizers allowing you to directly express the proper SQL. Ultimately the performance of the GQL server is based on how optimized your queries are to the indexes and structure of your DB.
 
 #### Status
 
