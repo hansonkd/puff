@@ -184,6 +184,7 @@ While it can run any WSGI app, Puff has a special affection for Django. Puff bel
 
 Transform your sync Django project into a highly concurrent Puff program with a few lines of code. Puff wraps the management commands so migrate, etc. all work as expected. Simply run `cargo run django [command]` instead of using `./manage.py [command]`. For example `cargo run django migrate`. Don't use django's dev server, instead use Puff's with `cargo run runserver`.
 
+
 ```rust title="/app/src/main.rs" no_run
 use puff_rs::program::commands::django_management::DjangoManagementCommand;
 use puff_rs::program::commands::pytest::PytestCommand;
@@ -209,6 +210,8 @@ fn main() -> ExitCode {
 ```
 
 Use Puff everywhere in your Django app. Even create Django management commands that use Rust!
+
+See [puff-py repo](https://github.com/hansonkd/puff-py) for a more complete Django example.
 
 
 ## Puff ♥ Graphql
