@@ -1,6 +1,14 @@
 # ☁ Puff ☁
 The deep stack framework.
 
+[![Crates.io][crates-badge]][crates-url]
+[![MIT licensed][mit-badge]][mit-url]
+
+[crates-badge]: https://img.shields.io/crates/v/puff_rs.svg
+[crates-url]: https://crates.io/crates/puff_rs
+[mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
+[mit-url]: https://github.com/hansonkd/puff/blob/master/LICENSE
+
 - [What is Puff?](#what-is-puff)
   * [Quick Start](#quick-start)
   * [Puff ♥ Python](#puff--python)
@@ -58,7 +66,7 @@ The Zen of deepstack is recognizing that no language is the ultimate answer. See
 ## Quick Start
 Puff requires Python >= 3.10, Rust / Cargo. Python's [Poetry](https://python-poetry.org) is optional.
 
-Your Rust Puff Project needs to find your Python project. Even if they are in the same folder, they need to be added to the path.
+Your Rust Puff Project needs to find your Python project. Even if they are in the same folder, they need to be added to the PYTHONPATH.
 
 One way to set up a Puff project is like this:
 
@@ -80,7 +88,7 @@ cargo = "puff.poetry_plugins:cargo"
 
 Now from `my_puff_proj_py` you can run your project with `poetry run cargo` to access cargo from poetry and expose the virtual environment to Puff.
 
-If you don't want to use poetry, you will have to set up a virtual environment and set `PYTHONPATH` when running Puff.
+The Python project doesn't need to be inside off your Rust package. It only needs to be on the PYTHONPATH. If you don't want to use poetry, you will have to set up a virtual environment if needed and set `PYTHONPATH` when running Puff.
 
 
 ## Puff ♥ Python
@@ -517,10 +525,12 @@ The thesis of the deepstack project is to have two backend engineering roles: Sc
 
 #### Performance
 
-Right now there hasn't been too much focus on raw performance, because ultimately performance comes from SQL query optimizations (indexes, no n+1, etc). Puff's structure encourages you write your queries in a layer basis without having to rely on dataloaders or complicated optimizers allowing you to directly express the proper SQL. Ultimately the performance of the GQL server is based on how optimized your queries are to the indexes and structure of your DB.
+Right now there hasn't been too much focus on raw performance in GraphQL, because ultimately performance comes from SQL query optimizations (indexes, no n+1, etc). Puff's structure encourages you write your queries in a layer basis without having to rely on dataloaders or complicated optimizers allowing you to directly express the proper SQL. Ultimately the performance of the GQL server is based on how optimized your queries are to the indexes and structure of your DB.
+
+Puff won't magically make WSGI faster, but where Puff really excels is pushing down tight loops or iterations into the Rust Layer. Think about if you wanted to run multiple queries in parallel and perform some computation on them, resulting in Bytes. It's better to push this function into Puff. See the `/examples/wsgi.rs::get_many` function for an example.
 
 #### Status
 
-This is extremely early in development. While many months of weekends have gotten it this far, the scope of the project is ambitious. Expect things to break. 
+This is extremely early in development. The scope of the project is ambitious. Expect things to break. 
 
-Probably the end game of puff is to have something like gevent's monkeypatch to automatically make projects compatible.
+Probably the end game of puff is to have something like gevent's monkeypatch to automatically make existing projects compatible.
