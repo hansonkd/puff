@@ -11,7 +11,7 @@ homepage = "https://github.com/hansonkd/puff"
 repository = "https://github.com/hansonkd/puff"
 readme = "README.md"
 categories = ["asynchronous", "web-programming", "web-programming::http-server", "python"]
-keywords = ["graphql", "server", "subscription", "web", "websocket", "python"]
+keywords = ["graphql", "server", "web", "python"]
 exclude = ["/release.toml"]
 
 
