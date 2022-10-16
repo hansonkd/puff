@@ -1,9 +1,19 @@
 [package]
 name = "puff-rs"
 version = "0.1.0"
+description = "Puff - Deep Stack Python Runtime and GraphQL library."
+license = "MIT"
 edition = "2021"
+rust-version = "1.62"
+authors = ["Kyle Hanson <me@khanson.io>"]
+documentation = "https://docs.rs/puff_rs"
+homepage = "https://github.com/hansonkd/puff"
+repository = "https://github.com/hansonkd/puff"
+readme = "README.md"
+categories = ["asynchronous", "web-programming", "web-programming::http-server", "python"]
+keywords = ["graphql", "server", "subscription", "web", "websocket", "python"]
+exclude = ["/release.toml"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 futures = "0.3.23"
