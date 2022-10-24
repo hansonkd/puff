@@ -400,9 +400,10 @@ Puff has built in integrations for ASGI and asyncio. You first need to configure
 
 ```python title="/app/src/py_code/fast_api_example.py"
 from fastapi import FastAPI
-import puff, wrap_async
+from puff import global_state, wrap_async
 
-state = puff.global_state()
+
+state = global_state()
 
 app = FastAPI()
 
@@ -428,7 +429,7 @@ struct MyPythonState;
 impl MyPythonState {
     // Async Puff functions take a function to return the result with and offload the future onto Tokio.
     fn hello_from_rust_async(&self, return_func: PyObject, py_says: Text) {
-        run_python_async(return_func, async {
+        run_python_async(return_func, async move {
             tokio::time::sleep(Duration::from_secs(1)).await;
             debug!("Python says: {}", &py_says);
             Ok(42)
