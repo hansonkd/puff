@@ -156,7 +156,7 @@ impl MyPythonState {
     
     // Async Puff functions take a function to return the result with and offload the future onto Tokio.
     fn hello_from_rust_async(&self, return_func: PyObject, py_says: Text) {
-        greenlet_async(return_func, async {
+        run_python_async(return_func, async {
             tokio::time::sleep(Duration::from_secs(1)).await;
             debug!("Python says: {}", &py_says);
             Ok(42)
@@ -401,13 +401,17 @@ async or async from puff greenlets easily.
 
 ```python title="/app/src/py_code/fast_api_example.py"
 from fastapi import FastAPI
+import puff, wrap_async
+
+state = puff.global_state()
 
 app = FastAPI()
 
 
 @app.get("/fast-api")
 async def read_root():
-    return {"Hello": "World", "from": "Fast API"}
+    result = await wrap_async(lambda r: state.hello_from_rust_async(r, "hello from asyncio"))
+    return {"Hello": "World", "from": "Fast API", "rust_value": result}
 ```
 
 Rust
@@ -416,11 +420,29 @@ Rust
 use puff_rs::prelude::*;
 use puff_rs::program::commands::ASGIServerCommand;
 
+
+// Use pyo3 to generate Python compatible Rust classes.
+#[pyclass]
+struct MyPythonState;
+
+#[pymethods]
+impl MyPythonState {
+    // Async Puff functions take a function to return the result with and offload the future onto Tokio.
+    fn hello_from_rust_async(&self, return_func: PyObject, py_says: Text) {
+        run_python_async(return_func, async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            debug!("Python says: {}", &py_says);
+            Ok(42)
+        })
+    }
+}
+
 fn main() -> ExitCode {
     let app = Router::new().get("/", root);
     let rc = RuntimeConfig::default()
-        .set_asyncio(true);
-
+        .set_asyncio(true)
+        .set_global_state_fn(|py| Ok(MyPythonState.into_py(py)));
+        
     Program::new("my_first_app")
         .about("This is my first app")
         .runtime_config(rc)
