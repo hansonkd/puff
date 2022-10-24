@@ -1,10 +1,8 @@
 use crate::databases::redis::{with_redis, RedisClient};
 
-use crate::python::greenlet::greenlet_async;
+use crate::python::async_python::run_python_async;
 use crate::types::Bytes;
 use bb8_redis::redis::{Cmd, FromRedisValue, RedisResult, Value};
-
-
 
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -69,7 +67,7 @@ impl PythonRedis {
         command: Cmd,
     ) -> PyResult<PyObject> {
         let client = self.0.pool();
-        greenlet_async(return_fun, async move {
+        run_python_async(return_fun, async move {
             let mut conn = client.get().await?;
             let res: T = command.query_async(&mut *conn).await?;
             Ok(res)
@@ -78,14 +76,21 @@ impl PythonRedis {
     }
 }
 
-
 #[pymethods]
 impl PythonRedis {
     fn get(&self, py: Python, return_fun: PyObject, val: &[u8]) -> PyResult<PyObject> {
         self.run_command::<Bytes>(py, return_fun, Cmd::get(val))
     }
 
-    fn set(&self, py: Python, return_fun: PyObject, key: &[u8], val: &[u8], ex: Option<usize>, nx: Option<bool>) -> PyResult<PyObject> {
+    fn set(
+        &self,
+        py: Python,
+        return_fun: PyObject,
+        key: &[u8],
+        val: &[u8],
+        ex: Option<usize>,
+        nx: Option<bool>,
+    ) -> PyResult<PyObject> {
         let nx = nx.unwrap_or_default();
         if nx {
             match ex {
@@ -93,26 +98,33 @@ impl PythonRedis {
                     let mut command = Cmd::set(key, val);
                     command.arg("NX").arg("EX").arg(seconds);
                     self.run_command::<()>(py, return_fun, command)
-                },
-                None => self.run_command::<()>(py, return_fun, Cmd::set_nx(key, val))
+                }
+                None => self.run_command::<()>(py, return_fun, Cmd::set_nx(key, val)),
             }
         } else {
             match ex {
-                Some(seconds) => self.run_command::<()>(py, return_fun, Cmd::set_ex(key, val, seconds)),
-                None => self.run_command::<()>(py, return_fun, Cmd::set(key, val))
+                Some(seconds) => {
+                    self.run_command::<()>(py, return_fun, Cmd::set_ex(key, val, seconds))
+                }
+                None => self.run_command::<()>(py, return_fun, Cmd::set(key, val)),
             }
         }
-
     }
 
     fn mget(&self, py: Python, return_fun: PyObject, keys: Vec<&[u8]>) -> PyResult<PyObject> {
         self.run_command::<Vec<Option<Bytes>>>(py, return_fun, Cmd::get(keys))
     }
 
-    fn mset(&self, py: Python, return_fun: PyObject, vals: Vec<(&[u8], &[u8])>, nx: Option<bool>) -> PyResult<PyObject> {
+    fn mset(
+        &self,
+        py: Python,
+        return_fun: PyObject,
+        vals: Vec<(&[u8], &[u8])>,
+        nx: Option<bool>,
+    ) -> PyResult<PyObject> {
         let nx = nx.unwrap_or_default();
         if nx {
-            let mut command  = Cmd::set_multiple(vals.as_slice());
+            let mut command = Cmd::set_multiple(vals.as_slice());
             command.arg("NX");
             self.run_command::<()>(py, return_fun, command)
         } else {
@@ -124,7 +136,13 @@ impl PythonRedis {
         self.run_command::<bool>(py, return_fun, Cmd::persist(key))
     }
 
-    fn expire(&self, py: Python, return_fun: PyObject, key: &[u8], seconds: usize) -> PyResult<PyObject> {
+    fn expire(
+        &self,
+        py: Python,
+        return_fun: PyObject,
+        key: &[u8],
+        seconds: usize,
+    ) -> PyResult<PyObject> {
         self.run_command::<bool>(py, return_fun, Cmd::expire(key, seconds))
     }
 

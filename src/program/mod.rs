@@ -60,7 +60,7 @@ use crate::databases::postgres::{add_postgres_command_arguments, new_postgres_as
 use crate::databases::pubsub::{add_pubsub_command_arguments, new_pubsub_async};
 use crate::errors::{handle_puff_error, PuffResult, Result};
 use crate::graphql::load_schema;
-use crate::python::{bootstrap_puff_globals, setup_greenlet};
+use crate::python::{bootstrap_puff_globals, setup_python_executors};
 use crate::runtime::RuntimeConfig;
 use crate::types::text::Text;
 use crate::types::Puff;
@@ -278,7 +278,7 @@ impl Program {
         let python_dispatcher = if rt_config.python() {
             pyo3::prepare_freethreaded_python();
             bootstrap_puff_globals(rt_config.clone())?;
-            let dispatcher = setup_greenlet(rt_config.clone(), mutex_switcher.clone())?;
+            let dispatcher = setup_python_executors(rt_config.clone(), mutex_switcher.clone())?;
             Some(dispatcher)
         } else {
             None
@@ -310,7 +310,7 @@ impl Program {
                     redis = Some(rt.block_on(new_redis_async(
                         arg_matches.get_one::<String>("redis_url").unwrap().as_str(),
                         true,
-                        rt_config.redis_pool_size()
+                        rt_config.redis_pool_size(),
                     ))?);
                 }
 
@@ -336,7 +336,7 @@ impl Program {
                                 .unwrap()
                                 .as_str(),
                             true,
-                            rt_config.postgres_pool_size()
+                            rt_config.postgres_pool_size(),
                         ))?,
                     );
                 }

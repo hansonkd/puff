@@ -1,4 +1,4 @@
-use crate::context::{with_puff_context};
+use crate::context::with_puff_context;
 use crate::errors::PuffResult;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
@@ -10,28 +10,23 @@ use tokio::sync::oneshot;
 
 /// Python return
 #[pyclass]
-pub struct GreenletReturn(Option<oneshot::Sender<PyResult<PyObject>>>);
+pub struct AsyncReturn(Option<oneshot::Sender<PyResult<PyObject>>>);
 
-impl GreenletReturn {
+impl AsyncReturn {
     pub fn new(rec: Option<oneshot::Sender<PyResult<PyObject>>>) -> Self {
         Self(rec)
     }
 }
 
 #[pymethods]
-impl GreenletReturn {
-    pub fn __call__(
-        &mut self,
-        _py: Python,
-        value: PyObject,
-        exception: Option<&PyAny>,
-    ) -> PyResult<()> {
+impl AsyncReturn {
+    pub fn __call__(&mut self, value: PyObject, exception: Option<&PyAny>) -> PyResult<()> {
         match self.0.take() {
             Some(sender) => match exception {
                 Some(e) => Ok(sender.send(Err(PyErr::from_value(e))).unwrap_or(())),
                 None => Ok(sender.send(Ok(value)).unwrap_or(())),
             },
-            None => Err(PyException::new_err("Already used GreenletReturn")),
+            None => Err(PyException::new_err("Already used AsyncReturn")),
         }
     }
 }
@@ -81,7 +76,7 @@ pub async fn handle_python_return<F: Future<Output = PyResult<R>>, R: ToPyObject
 }
 
 /// The the future in the Tokio and execute the return function when finished. Does not block.
-pub fn greenlet_async<
+pub fn run_python_async<
     F: Future<Output = PuffResult<R>> + Send + 'static,
     R: ToPyObject + 'static,
 >(

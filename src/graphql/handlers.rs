@@ -1,4 +1,3 @@
-use std::convert::Infallible;
 use axum::extract::{FromRequest, Query, WebSocketUpgrade};
 use axum::http::{Method, Request, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
@@ -6,6 +5,7 @@ use axum::{Json, TypedHeader};
 use juniper::{
     BoxFuture, GraphQLSubscriptionType, GraphQLTypeAsync, InputValue, RootNode, ScalarValue,
 };
+use std::convert::Infallible;
 use std::future;
 
 use std::sync::Arc;
@@ -16,6 +16,7 @@ use juniper::http::{GraphQLBatchRequest, GraphQLBatchResponse, GraphQLRequest};
 use crate::context::with_puff_context;
 use crate::graphql::AggroContext;
 use crate::prelude::ToText;
+use crate::python::postgres::close_conn;
 use async_trait::async_trait;
 use axum::extract::ws::{Message, WebSocket};
 use axum::headers::authorization::Bearer;
@@ -26,7 +27,6 @@ use juniper_graphql_ws::{ClientMessage, Connection, ConnectionConfig, Schema};
 use serde;
 use serde::Deserialize;
 use serde_json::{Map, Value};
-use crate::python::postgres::close_conn;
 
 /// The query variables for a GET request
 #[derive(Deserialize, Debug)]

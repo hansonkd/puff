@@ -1,17 +1,17 @@
 //! Call Graphql from Python
 use crate::context::with_puff_context;
-use crate::errors::{to_py_error};
+use crate::errors::to_py_error;
 use crate::graphql::{
     convert_pyany_to_input, juniper_value_to_python, AggroContext, PuffGraphqlRoot,
 };
 use crate::prelude::ToText;
-use crate::python::greenlet::greenlet_async;
+use crate::python::async_python::run_python_async;
+use crate::python::postgres::Connection;
 use juniper::execute;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString};
 use pyo3::{PyObject, PyResult, Python};
 use std::collections::HashMap;
-use crate::python::postgres::Connection;
 
 /// Access the Global graphql context
 #[pyclass]
@@ -60,10 +60,10 @@ impl PythonGraphql {
         }
         let this_root = self.0.clone();
         let this_conn = conn.map(|f| f.clone()).unwrap_or_else(|| {
-            let pool  = with_puff_context(|ctx| ctx.postgres().pool());
+            let pool = with_puff_context(|ctx| ctx.postgres().pool());
             Connection::new(pool)
         });
-        greenlet_async(return_fun, async move {
+        run_python_async(return_fun, async move {
             let (value, errors) = execute(
                 query.as_str(),
                 None,

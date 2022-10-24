@@ -1,8 +1,8 @@
 use crate::context::with_puff_context;
 use crate::databases::pubsub::{ConnectionId, PubSubClient, PubSubConnection, PubSubMessage};
-use crate::errors::{to_py_error};
-use crate::prelude::{greenlet_async};
-use crate::python::greenlet::handle_python_return;
+use crate::errors::to_py_error;
+use crate::prelude::run_python_async;
+use crate::python::async_python::handle_python_return;
 use crate::types::{Bytes, Text};
 
 use pyo3::exceptions::PyTypeError;
@@ -52,7 +52,7 @@ impl PythonPubSubClient {
             .map_err(|_e| PyTypeError::new_err("Invalid Connection ID"))?;
         let client = self.client.clone();
         let bytes = Bytes::copy_from_slice(message.as_bytes());
-        greenlet_async(ret_fun, async move {
+        run_python_async(ret_fun, async move {
             client
                 .publish_as(connection_id_bytes, channel, bytes)
                 .await?;
@@ -72,7 +72,7 @@ impl PythonPubSubClient {
             .map_err(|_e| PyTypeError::new_err("Invalid Connection ID"))?;
         let bytes = Bytes::copy_from_slice(message.as_bytes());
         let client = self.client.clone();
-        greenlet_async(ret_fun, async move {
+        run_python_async(ret_fun, async move {
             client
                 .publish_as(connection_id_bytes, channel, bytes)
                 .await?;
@@ -160,13 +160,13 @@ impl PythonPubSubConnection {
 
     fn subscribe(&self, ret_fun: PyObject, channel: Text) {
         let conn = self.connection.clone();
-        greenlet_async(ret_fun, async move { Ok(conn.subscribe(channel).await) })
+        run_python_async(ret_fun, async move { Ok(conn.subscribe(channel).await) })
     }
 
     fn publish(&self, ret_fun: PyObject, channel: Text, message: Text) {
         let conn = self.connection.clone();
         let bytes = Bytes::copy_from_slice(message.as_bytes());
-        greenlet_async(ret_fun, async move {
+        run_python_async(ret_fun, async move {
             conn.publish(channel, bytes).await?;
             Ok(true)
         })
@@ -175,7 +175,7 @@ impl PythonPubSubConnection {
     fn publish_bytes(&self, ret_fun: PyObject, channel: Text, message: &PyBytes) {
         let bytes = Bytes::copy_from_slice(message.as_bytes());
         let conn = self.connection.clone();
-        greenlet_async(ret_fun, async move {
+        run_python_async(ret_fun, async move {
             conn.publish(channel, bytes).await?;
             Ok(true)
         })

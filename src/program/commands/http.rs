@@ -8,7 +8,6 @@ use clap::{ArgMatches, Command};
 use crate::program::commands::HttpServerConfig;
 use std::process::ExitCode;
 
-
 /// The ServerCommand.
 ///
 /// Exposes options to the command line to set the port and host of the server.

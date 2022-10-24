@@ -52,6 +52,7 @@ pub struct RuntimeConfig {
     postgres: bool,
     pubsub: bool,
     greenlets: bool,
+    asyncio: bool,
     env_vars: Vec<(Text, Text)>,
     python_paths: Vec<Text>,
     gql_module: Option<Text>,
@@ -116,6 +117,10 @@ impl RuntimeConfig {
     /// Get if greenlets will be enabled.
     pub fn greenlets(&self) -> bool {
         self.greenlets
+    }
+    /// Get if asyncio will be enabled.
+    pub fn asyncio(&self) -> bool {
+        self.asyncio
     }
     /// Get the gql module that will be enabled.
     pub fn gql_module(&self) -> Option<Text> {
@@ -227,7 +232,6 @@ impl RuntimeConfig {
         new
     }
 
-
     /// Sets whether to start with a global PubSubClient.
     ///
     /// Default: false
@@ -243,6 +247,15 @@ impl RuntimeConfig {
     pub fn set_greenlets(self, greenlets: bool) -> Self {
         let mut new = self;
         new.greenlets = greenlets;
+        new
+    }
+
+    /// Sets whether to use greenlets when executing python.
+    ///
+    /// Default: false
+    pub fn set_asyncio(self, asyncio: bool) -> Self {
+        let mut new = self;
+        new.asyncio = asyncio;
         new
     }
 
@@ -316,6 +329,7 @@ impl Default for RuntimeConfig {
             python: true,
             global_state_fn: None,
             greenlets: true,
+            asyncio: false,
             redis: false,
             redis_pool_size: 10,
             postgres_pool_size: 10,

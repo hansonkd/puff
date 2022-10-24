@@ -11,9 +11,9 @@ use pyo3::types::PyDict;
 use pyo3::{Python, ToPyObject};
 
 use crate::errors::{log_puff_error, PuffResult};
+use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use chrono::{DateTime, Utc};
 use tokio::sync::mpsc::unbounded_channel;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
@@ -299,7 +299,9 @@ fn build_field<'r>(
                 (false, false) => registry.field::<Vec<bool>>(field_name, &()),
             },
             AggroTypeInfo::Datetime => match (field.return_type.optional, inner.optional) {
-                (true, true) => registry.field::<Option<Vec<Option<DateTime<Utc>>>>>(field_name, &()),
+                (true, true) => {
+                    registry.field::<Option<Vec<Option<DateTime<Utc>>>>>(field_name, &())
+                }
                 (true, false) => registry.field::<Option<Vec<DateTime<Utc>>>>(field_name, &()),
                 (false, true) => registry.field::<Vec<Option<DateTime<Utc>>>>(field_name, &()),
                 (false, false) => registry.field::<Vec<DateTime<Utc>>>(field_name, &()),

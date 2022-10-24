@@ -30,7 +30,7 @@ impl PostgresClient {
 pub async fn new_postgres_async<T: Into<Text>>(
     config: T,
     check: bool,
-    pool_size: u32
+    pool_size: u32,
 ) -> PuffResult<PostgresClient> {
     let manager = PostgresConnectionManager::new_from_stringlike(config.into(), NoTls)?;
     let pool = Pool::builder().max_size(pool_size).build(manager).await?;

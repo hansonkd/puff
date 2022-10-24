@@ -1,6 +1,6 @@
 use crate::context::with_puff_context;
 use crate::errors::{handle_puff_error, PuffResult};
-use crate::python::greenlet::{handle_python_return, handle_return};
+use crate::python::async_python::{handle_python_return, handle_return};
 use crate::python::log_traceback_with_label;
 use crate::python::postgres::TxnCommand::ExecuteMany;
 
@@ -17,7 +17,7 @@ use pyo3::types::{PyList, PyString, PyTuple};
 use pythonize::depythonize;
 use std::error::Error;
 use std::fmt::{Debug, Formatter};
-use std::future::{Future, ready};
+use std::future::{ready, Future};
 use std::pin::Pin;
 
 use std::sync::{Arc, Mutex};
@@ -81,11 +81,17 @@ fn get_sender(
     }
 }
 
-pub async fn execute_rust(conn: &Connection, q: String, params: Vec<PythonSqlValue>) -> PuffResult<(Statement, Vec<Row>)> {
+pub async fn execute_rust(
+    conn: &Connection,
+    q: String,
+    params: Vec<PythonSqlValue>,
+) -> PuffResult<(Statement, Vec<Row>)> {
     let transaction_loop_inner = conn.transaction_loop.clone();
     let sender = get_sender(conn.pool.clone(), transaction_loop_inner);
     let (one_sender, rec) = oneshot::channel();
-    sender.send(TxnCommand::ExecuteRust(one_sender, q, params)).await?;
+    sender
+        .send(TxnCommand::ExecuteRust(one_sender, q, params))
+        .await?;
     rec.await?
 }
 
@@ -96,7 +102,9 @@ pub async fn close_conn(conn: &Connection) {
         job_sender.clone()
     };
     if let Some(s) = sender {
-        s.send(TxnCommand::Close(transaction_loop_inner.clone())).await.unwrap_or_default();
+        s.send(TxnCommand::Close(transaction_loop_inner.clone()))
+            .await
+            .unwrap_or_default();
     }
 }
 
@@ -122,7 +130,9 @@ impl Connection {
         let transaction_loop_inner = self.transaction_loop.clone();
         ctx.handle().spawn(async move {
             let sender = get_sender(loop_pool, transaction_loop_inner);
-            sender.send(TxnCommand::SetAutoCommit(ret_func, new_autocommit)).await
+            sender
+                .send(TxnCommand::SetAutoCommit(ret_func, new_autocommit))
+                .await
         });
     }
 
@@ -406,7 +416,11 @@ fn row_to_pyton(py: Python, row: Row) -> PyResult<Py<PyTuple>> {
 
 enum TxnCommand {
     Execute(PyObject, String, Vec<PythonSqlValue>),
-    ExecuteRust(oneshot::Sender<PuffResult<(Statement, Vec<Row>)>>, String, Vec<PythonSqlValue>),
+    ExecuteRust(
+        oneshot::Sender<PuffResult<(Statement, Vec<Row>)>>,
+        String,
+        Vec<PythonSqlValue>,
+    ),
     ExecuteMany(PyObject, String, PyObject),
     FetchOne(PyObject),
     FetchMany(PyObject, i32),
@@ -668,9 +682,9 @@ async fn run_txn_loop<'a>(
             TxnCommand::SetAutoCommit(py_obj, new) => {
                 handle_python_return(py_obj, ready(Ok(()))).await;
                 if new {
-                    return Ok(LoopResult::ChangeAutoCommit(new))
+                    return Ok(LoopResult::ChangeAutoCommit(new));
                 }
-            },
+            }
             TxnCommand::Close(txn_loop) => {
                 txn.rollback().await?;
                 let mut m = txn_loop.lock().unwrap();
@@ -850,9 +864,9 @@ async fn run_autocommit_loop<'a>(
             TxnCommand::SetAutoCommit(ret, new) => {
                 handle_python_return(ret, ready(Ok(()))).await;
                 if !new {
-                    return Ok(LoopResult::ChangeAutoCommit(new))
+                    return Ok(LoopResult::ChangeAutoCommit(new));
                 }
-            },
+            }
             TxnCommand::Close(txn_loop) => {
                 let mut m = txn_loop.lock().unwrap();
                 *m = None;

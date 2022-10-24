@@ -2,42 +2,42 @@
 use crate::context::PuffContext;
 use crate::errors::Result;
 use crate::program::{Runnable, RunnableCommand};
-use crate::python::wsgi::{create_server_context, WsgiServerSpawner};
+use crate::python::asgi::{create_server_context, AsyncFn};
 use crate::web::server::Router;
 use clap::{ArgMatches, Command};
 use std::process::ExitCode;
 
-use crate::python::wsgi::handler::WsgiHandler;
 use crate::types::Text;
 use futures_util::future::LocalBoxFuture;
 use futures_util::FutureExt;
 
 use pyo3::prelude::*;
+use tokio::sync::oneshot::Receiver;
 
 use crate::program::commands::HttpServerConfig;
-use crate::types::text::ToText;
+use crate::python::asgi::handler::AsgiHandler;
 
-struct WSGIConstructor {
+struct ASGIConstructor {
     config: HttpServerConfig,
     router: Router,
     puff_context: PuffContext,
 }
 
-impl WsgiServerSpawner for WSGIConstructor {
-    fn call(self, handler: WsgiHandler) -> LocalBoxFuture<'static, ()> {
-        start(self.config, self.router, self.puff_context, handler).boxed_local()
+impl AsyncFn for ASGIConstructor {
+    fn call(self, handler: AsgiHandler, rx: Receiver<()>) -> LocalBoxFuture<'static, ()> {
+        start(self.config, self.router, self.puff_context, handler, rx).boxed_local()
     }
 }
 
-/// The WSGIServerCommand.
+/// The ASGIServerCommand.
 ///
 /// Exposes options to the command line to set the port and host of the server.
-pub struct WSGIServerCommand {
+pub struct ASGIServerCommand {
     router_fn: Option<Box<dyn FnOnce() -> Router + 'static>>,
     app_path: Text,
 }
 
-impl WSGIServerCommand {
+impl ASGIServerCommand {
     pub fn new<M: Into<Text>>(app_path: M) -> Self {
         Self {
             router_fn: Some(Box::new(|| Router::new())),
@@ -61,7 +61,7 @@ impl WSGIServerCommand {
     }
 }
 
-impl RunnableCommand for WSGIServerCommand {
+impl RunnableCommand for ASGIServerCommand {
     fn cli_parser(&self) -> Command {
         HttpServerConfig::add_command_options(Command::new("runserver"))
     }
@@ -69,32 +69,26 @@ impl RunnableCommand for WSGIServerCommand {
     fn make_runnable(&mut self, args: &ArgMatches, context: PuffContext) -> Result<Runnable> {
         let wsgi_app = Python::with_gil(|py| {
             let puff_mod = py.import("puff")?;
-            PyResult::Ok(
-                puff_mod
-                    .call_method1("import_string", (self.app_path.clone().into_py(py),))?
-                    .into_py(py),
-            )
+            let puff_asyncio_mod = py.import("puff.asyncio_support")?;
+            let app =
+                puff_mod.call_method1("import_string", (self.app_path.clone().into_py(py),))?;
+            let new_app = puff_asyncio_mod.call_method1("wrap_asgi", (app,))?;
+            PyResult::Ok(new_app.into_py(py))
         })?;
 
         let config = HttpServerConfig::new_from_args(args);
         let router_fn = self.router_fn.take().expect("Already ran.");
         let fut = async move {
-            let server_name = config.socket_addr.ip().to_text();
-            let server_port = config.socket_addr.port();
             let router = router_fn();
             let mut ctx = create_server_context(
                 wsgi_app,
-                WSGIConstructor {
+                ASGIConstructor {
                     config,
                     router,
                     puff_context: context.clone(),
                 },
-                context.clone(),
-                server_name,
-                server_port,
             );
             ctx.start()?.await?;
-
             Ok(ExitCode::SUCCESS)
         };
         Ok(Runnable::new(fut))
@@ -105,12 +99,18 @@ async fn start(
     http_configuration: HttpServerConfig,
     router: Router,
     puff_context: PuffContext,
-    wsgi: WsgiHandler,
+    asgi: AsgiHandler,
+    rx: Receiver<()>,
 ) {
-    let app = router.into_axum_router(puff_context).fallback(wsgi);
+    let app = router.into_axum_router(puff_context).fallback(asgi);
     if let Err(err) = http_configuration
         .server_builder()
         .serve(app.into_make_service())
+        .with_graceful_shutdown(async move {
+            if let Err(e) = rx.await {
+                eprintln!("{e}");
+            }
+        })
         .await
     {
         eprintln!("error running server: {err}");

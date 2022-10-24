@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::context::{supervised_task, with_puff_context};
-use crate::errors::{PuffResult};
+use crate::errors::PuffResult;
 use crate::types::{Bytes, Puff, Text};
 
 use bb8_redis::bb8::Pool;
@@ -21,7 +21,6 @@ use juniper::BoxFuture;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Sender, UnboundedReceiver, UnboundedSender};
-
 
 pub type ConnectionId = uuid::Uuid;
 

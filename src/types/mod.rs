@@ -43,7 +43,6 @@ pub mod text_builder;
 pub mod vector;
 pub mod vector_builder;
 
-use std::fmt::{Debug, Formatter};
 use axum::body::Bytes as AxumBytes;
 use axum::response::{IntoResponse, Response};
 use bb8_redis::redis::{
@@ -54,6 +53,7 @@ use chrono::{Date, DateTime, Utc};
 use pyo3::types::PyBytes;
 use pyo3::{IntoPy, Py, PyAny, PyObject, Python, ToPyObject};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 
 pub use map::Map;

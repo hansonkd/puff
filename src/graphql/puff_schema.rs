@@ -3,12 +3,11 @@ use crate::errors::{to_py_error, PuffResult};
 use crate::graphql::puff_schema::LookAheadFields::{Nested, Terminal};
 use crate::graphql::row_return::{ExtractValues, PostgresResultRows, PythonResultRows};
 use crate::graphql::scalar::{AggroScalarValue, AggroValue};
-use crate::python::greenlet::greenlet_async;
-use crate::python::postgres::{Connection, execute_rust, PythonSqlValue};
+use crate::python::async_python::run_python_async;
+use crate::python::postgres::{execute_rust, Connection, PythonSqlValue};
 use crate::types::text::ToText;
 use crate::types::Text;
 use anyhow::{anyhow, bail};
-
 
 use futures_util::FutureExt;
 use juniper::{
@@ -20,8 +19,8 @@ use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyBytes, PyDict, PyList, PyString};
 use std::collections::{BTreeMap, HashSet};
 
-use std::sync::Arc;
 use futures_util::future::join_all;
+use std::sync::Arc;
 
 use crate::graphql;
 use tokio::sync::mpsc::UnboundedSender;
@@ -33,7 +32,7 @@ static NUMBERS: &'static [&'static str] = &["0", "1", "2", "3", "4", "5", "6", "
 
 pub struct AggroContext {
     bearer: Option<Text>,
-    conn: Mutex<Connection>
+    conn: Mutex<Connection>,
 }
 
 impl juniper::Context for AggroContext {}
@@ -53,8 +52,6 @@ impl AggroContext {
     pub fn connection(&self) -> &Mutex<Connection> {
         &self.conn
     }
-
-
 
     pub fn token(&self) -> Option<Text> {
         self.bearer.clone()
@@ -233,8 +230,16 @@ pub struct PyContext {
 }
 
 impl PyContext {
-    pub fn new(extractor: Arc<dyn ExtractValues + Send + Sync>, bearer: Option<Text>, conn: Option<Connection>) -> Self {
-        Self { extractor, bearer, conn }
+    pub fn new(
+        extractor: Arc<dyn ExtractValues + Send + Sync>,
+        bearer: Option<Text>,
+        conn: Option<Connection>,
+    ) -> Self {
+        Self {
+            extractor,
+            bearer,
+            conn,
+        }
     }
 }
 
@@ -329,17 +334,23 @@ fn input_to_python(
             _ => bail!("Input non-string to a string input"),
         },
         AggroTypeInfo::Binary => match v {
-            LookAheadValue::Scalar(AggroScalarValue::String(i)) => Ok(PyBytes::new(py, &base64::decode(i.as_str())?).into_py(py)),
+            LookAheadValue::Scalar(AggroScalarValue::String(i)) => {
+                Ok(PyBytes::new(py, &base64::decode(i.as_str())?).into_py(py))
+            }
             LookAheadValue::Scalar(AggroScalarValue::Binary(i)) => Ok(i.clone().into_py(py)),
             _ => bail!("Input non-string to a string input"),
         },
         AggroTypeInfo::Datetime => match v {
-            LookAheadValue::Scalar(AggroScalarValue::String(i)) => Ok(PyBytes::new(py, &base64::decode(i.as_str())?).into_py(py)),
+            LookAheadValue::Scalar(AggroScalarValue::String(i)) => {
+                Ok(PyBytes::new(py, &base64::decode(i.as_str())?).into_py(py))
+            }
             LookAheadValue::Scalar(AggroScalarValue::Binary(i)) => Ok(i.clone().into_py(py)),
             _ => bail!("Input non-string to a string input"),
         },
         AggroTypeInfo::Uuid => match v {
-            LookAheadValue::Scalar(AggroScalarValue::String(i)) => Ok(Uuid::parse_str(i.as_str())?.to_string().into_py(py)),
+            LookAheadValue::Scalar(AggroScalarValue::String(i)) => {
+                Ok(Uuid::parse_str(i.as_str())?.to_string().into_py(py))
+            }
             LookAheadValue::Scalar(AggroScalarValue::Uuid(i)) => Ok(i.to_string().into_py(py)),
             _ => bail!("Input non-string to a string input"),
         },
@@ -475,7 +486,8 @@ pub async fn do_returned_values_into_stream(
                     })?
                 } else {
                     let conn = aggro_context.connection().lock().await;
-                    let py_extractor = PyContext::new(rows.clone(), aggro_context.token(), Some(conn.clone()));
+                    let py_extractor =
+                        PyContext::new(rows.clone(), aggro_context.token(), Some(conn.clone()));
                     let py_dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
                     let rec = Python::with_gil(|py| {
                         let arg_dict = args.into_py_dict(py);
@@ -517,12 +529,7 @@ pub async fn do_returned_values_into_stream(
                 } else {
                     if aggro_value_is_list {
                         if let Ok(l) = py_res.downcast::<PyList>() {
-                            Ok((
-                                PythonMethodResult::PythonList(
-                                    l.into_py(py),
-                                ),
-                                None,
-                            ))
+                            Ok((PythonMethodResult::PythonList(l.into_py(py)), None))
                         } else {
                             bail!("Expected to return a list.")
                         }
@@ -534,7 +541,6 @@ pub async fn do_returned_values_into_stream(
                             None,
                         ))
                     }
-
                 }
             })?;
 
@@ -580,7 +586,8 @@ pub async fn do_returned_values_into_stream(
                                     &child,
                                     all_objects.clone(),
                                     aggro_context,
-                                ).await;
+                                )
+                                .await;
                                 (child, children)
                             };
                             to_compute.push(fut)
@@ -650,7 +657,8 @@ pub async fn do_returned_values_into_stream(
                                     &child,
                                     all_objects.clone(),
                                     aggro_context,
-                                ).await;
+                                )
+                                .await;
                                 (child, children)
                             };
                             to_compute.push(fut)
@@ -740,7 +748,8 @@ pub async fn do_returned_values_into_stream(
                             &child,
                             all_objects.clone(),
                             aggro_context,
-                        ).await;
+                        )
+                        .await;
                         (child, children)
                     };
                     to_compute.push(fut)
@@ -878,7 +887,7 @@ impl SubscriptionSender {
         let bearer = self.bearer.clone();
         let this_sender = self.sender.clone();
         let rows = self.rows.clone();
-        greenlet_async(ret_func, async move {
+        run_python_async(ret_func, async move {
             let mut my_field = this_field;
             my_field.producer_method = Some(new_function);
             let res = returned_values_into_stream(

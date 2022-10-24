@@ -76,6 +76,11 @@ name = "websockets"
 path = "examples/websockets.rs"
 
 
+[[example]]
+name = "asgi"
+path = "examples/asgi.rs"
+
+
 #[profile.release]
 #opt-level = 3
 #strip = true

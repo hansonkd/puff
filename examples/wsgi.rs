@@ -1,13 +1,10 @@
 use futures_util::future::join_all;
 
-
-
-
 use puff_rs::databases::redis::bb8_redis::redis::Cmd;
 use puff_rs::databases::redis::with_redis;
 use puff_rs::prelude::*;
 use puff_rs::program::commands::wsgi::WSGIServerCommand;
-use puff_rs::python::greenlet::greenlet_async;
+use puff_rs::python::async_python::run_python_async;
 
 #[pyclass]
 #[derive(Clone)]
@@ -22,7 +19,7 @@ impl MyState {
         key: Text,
         num: usize,
     ) -> PyResult<PyObject> {
-        greenlet_async(return_fun, get_many(key, num));
+        run_python_async(return_fun, get_many(key, num));
         Ok(py.None())
     }
 }

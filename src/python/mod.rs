@@ -2,7 +2,7 @@ use crate::errors::PuffResult;
 use crate::python::redis::RedisGlobal;
 
 use crate::context::{set_puff_context, set_puff_context_waiting, with_puff_context, PuffContext};
-use crate::python::greenlet::{greenlet_async, GreenletReturn};
+use crate::python::async_python::{run_python_async, AsyncReturn};
 use crate::runtime::RuntimeConfig;
 use pyo3::types::{PyBytes, PyDict, PyTuple};
 
@@ -12,15 +12,16 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 use tracing::error;
 
-use crate::python::graphql::{GlobalGraphQL};
+use crate::python::graphql::GlobalGraphQL;
 use crate::python::postgres::{add_pg_puff_exceptions, PostgresGlobal};
 use tracing::log::info;
 
 use crate::python::pubsub::GlobalPubSub;
 pub use pyo3::prelude::*;
 
+pub mod asgi;
+pub mod async_python;
 pub mod graphql;
-pub mod greenlet;
 pub mod postgres;
 pub mod pubsub;
 pub mod redis;
@@ -32,12 +33,57 @@ struct ReadFileBytes;
 #[pymethods]
 impl ReadFileBytes {
     pub fn __call__(&self, return_func: PyObject, file_name: String) {
-        greenlet_async(return_func, async move {
+        run_python_async(return_func, async move {
             let contents = tokio::fs::read(&file_name).await?;
             Ok(Python::with_gil(|py| {
                 PyBytes::new(py, contents.as_slice()).to_object(py)
             }))
         })
+    }
+}
+
+#[pyclass]
+struct PyDispatchGreenlet;
+
+#[pymethods]
+impl PyDispatchGreenlet {
+    pub fn __call__(&self, return_func: PyObject, f: PyObject) -> PyResult<()> {
+        let dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
+        run_python_async(return_func, async move {
+            Ok(dispatcher.dispatch1(f, ())?.await??)
+        });
+        Ok(())
+    }
+}
+
+#[pyclass]
+struct PyDispatchAsyncIO;
+
+#[pymethods]
+impl PyDispatchAsyncIO {
+    pub fn __call__(&self, return_func: PyObject, f: PyObject) -> PyResult<()> {
+        let dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
+        run_python_async(return_func, async move {
+            Ok(
+                Python::with_gil(|py| dispatcher.dispatch_asyncio(py, f, (), PyDict::new(py)))?
+                    .await??,
+            )
+        });
+        Ok(())
+    }
+}
+
+#[pyclass]
+struct PyDispatchAsyncCoro;
+
+#[pymethods]
+impl PyDispatchAsyncCoro {
+    pub fn __call__(&self, return_func: PyObject, awaitable: PyObject) -> PyResult<()> {
+        let dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
+        run_python_async(return_func, async move {
+            Ok(Python::with_gil(|py| dispatcher.dispatch_asyncio_coro(py, awaitable))?.await??)
+        });
+        Ok(())
     }
 }
 
@@ -80,10 +126,14 @@ pub(crate) fn bootstrap_puff_globals(config: RuntimeConfig) -> PuffResult<()> {
         puff_rust_functions.setattr("global_postgres_getter", PostgresGlobal)?;
         puff_rust_functions.setattr("global_pubsub_getter", GlobalPubSub)?;
         puff_rust_functions.setattr("global_gql_getter", GlobalGraphQL)?;
+        puff_rust_functions.setattr("dispatch_greenlet", PyDispatchGreenlet.into_py(py))?;
+        puff_rust_functions.setattr("dispatch_asyncio", PyDispatchAsyncIO.into_py(py))?;
+        puff_rust_functions.setattr("dispatch_asyncio_coro", PyDispatchAsyncCoro.into_py(py))?;
         add_pg_puff_exceptions(py)?;
         puff_rust_functions.setattr("global_state", global_state)?;
         puff_rust_functions.setattr("read_file_bytes", ReadFileBytes.into_py(py))?;
         puff_mod.call_method0("patch_libs")?;
+        info!("Finished adding puff to python.");
         PyResult::Ok(())
     })?;
     Ok(())
@@ -121,6 +171,7 @@ impl PythonPuffContextSetter {
 #[derive(Clone)]
 pub struct PythonDispatcher {
     thread_obj: PyObject,
+    asyncio_obj: PyObject,
     spawn_blocking_fn: PyObject,
     blocking: bool,
 }
@@ -132,30 +183,41 @@ fn spawn_blocking_fn(py: Python) -> PyResult<PyObject> {
 }
 
 impl PythonDispatcher {
-    pub fn new(context_waiting: Arc<Mutex<Option<PuffContext>>>) -> PyResult<Self> {
-        let (thread_obj, spawn_blocking_fn) = Python::with_gil(|py| {
+    pub fn new(
+        config: RuntimeConfig,
+        context_waiting: Arc<Mutex<Option<PuffContext>>>,
+    ) -> PyResult<Self> {
+        let (thread_obj, asyncio_obj, spawn_blocking_fn) = Python::with_gil(|py| {
             let puff = py.import("puff")?;
-            let ret = puff.call_method1(
-                "start_event_loop",
-                (PythonPuffContextWaitingSetter(context_waiting.clone()),),
-            )?;
-            PyResult::Ok((ret.into_py(py), spawn_blocking_fn(py)?))
+            let greenlet_thread = if config.greenlets() {
+                puff.call_method1(
+                    "start_event_loop",
+                    (PythonPuffContextWaitingSetter(context_waiting.clone()),),
+                )?
+                .into_py(py)
+            } else {
+                py.None()
+            };
+
+            let asyncio_thread = if config.asyncio() {
+                let puff_asyncio = py.import("puff.asyncio_support")?;
+                puff_asyncio
+                    .call_method1(
+                        "start_event_loop",
+                        (PythonPuffContextWaitingSetter(context_waiting.clone()),),
+                    )?
+                    .into_py(py)
+            } else {
+                py.None()
+            };
+            PyResult::Ok((greenlet_thread, asyncio_thread, spawn_blocking_fn(py)?))
         })?;
 
         PyResult::Ok(Self {
             thread_obj,
+            asyncio_obj,
             spawn_blocking_fn,
             blocking: false,
-        })
-    }
-
-    pub fn blocking() -> PyResult<Self> {
-        let (thread_obj, spawn_blocking_fn) =
-            Python::with_gil(|py| PyResult::Ok((py.None(), spawn_blocking_fn(py)?)))?;
-        PyResult::Ok(Self {
-            thread_obj,
-            spawn_blocking_fn,
-            blocking: true,
         })
     }
 
@@ -168,7 +230,7 @@ impl PythonDispatcher {
         kwargs: K,
     ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
         let (sender, rec) = oneshot::channel();
-        let ret = GreenletReturn::new(Some(sender));
+        let ret = AsyncReturn::new(Some(sender));
         let on_thread_start = with_puff_context(PythonPuffContextSetter);
         self.spawn_blocking_fn.call1(
             py,
@@ -222,7 +284,7 @@ impl PythonDispatcher {
         kwargs: K,
     ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
         let (sender, rec) = oneshot::channel();
-        let returner = GreenletReturn::new(Some(sender));
+        let returner = AsyncReturn::new(Some(sender));
         self.thread_obj.call_method1(
             py,
             "spawn",
@@ -235,15 +297,47 @@ impl PythonDispatcher {
         )?;
         Ok(rec)
     }
+
+    /// Executes the python function on the asyncio thread to create an awaitable to add.
+    pub fn dispatch_asyncio<A: IntoPy<Py<PyTuple>>, K: IntoPy<Py<PyDict>>>(
+        &self,
+        py: Python,
+        function: PyObject,
+        args: A,
+        kwargs: K,
+    ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
+        let (sender, rec) = oneshot::channel();
+        let returner = AsyncReturn::new(Some(sender));
+        self.asyncio_obj.call_method1(
+            py,
+            "spawn",
+            (
+                function,
+                args.into_py(py).to_object(py),
+                kwargs.into_py(py).to_object(py),
+                returner,
+            ),
+        )?;
+        Ok(rec)
+    }
+
+    /// Dispatch an awaitable coroutine onto the event loop.
+    pub fn dispatch_asyncio_coro(
+        &self,
+        py: Python,
+        function: PyObject,
+    ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
+        let (sender, rec) = oneshot::channel();
+        let returner = AsyncReturn::new(Some(sender));
+        self.asyncio_obj
+            .call_method1(py, "spawn_coro", (function, returner))?;
+        Ok(rec)
+    }
 }
 
-pub fn setup_greenlet(
+pub fn setup_python_executors(
     config: RuntimeConfig,
     context_waiting: Arc<Mutex<Option<PuffContext>>>,
 ) -> PyResult<PythonDispatcher> {
-    if config.greenlets() {
-        PythonDispatcher::new(context_waiting)
-    } else {
-        PythonDispatcher::blocking()
-    }
+    PythonDispatcher::new(config, context_waiting)
 }

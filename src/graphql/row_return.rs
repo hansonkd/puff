@@ -4,7 +4,7 @@ use crate::errors::PuffResult;
 use crate::python::postgres::column_to_python;
 use crate::types::{Bytes, Text, UtcDateTime};
 use anyhow::{anyhow, bail, Result};
-use juniper::{Object};
+use juniper::Object;
 use pyo3::exceptions::PyKeyError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyString};
@@ -82,11 +82,15 @@ pub fn convert_postgres_to_juniper(
         }
         &tokio_postgres::types::Type::BYTEA => {
             let r = r.get(column_index);
-            Ok(AggroValue::Scalar(AggroScalarValue::Binary(Bytes::copy_from_slice(r))))
+            Ok(AggroValue::Scalar(AggroScalarValue::Binary(
+                Bytes::copy_from_slice(r),
+            )))
         }
         &tokio_postgres::types::Type::TIMESTAMP => {
             let r = r.get(column_index);
-            Ok(AggroValue::Scalar(AggroScalarValue::Datetime(UtcDateTime::new(r))))
+            Ok(AggroValue::Scalar(AggroScalarValue::Datetime(
+                UtcDateTime::new(r),
+            )))
         }
         &tokio_postgres::types::Type::UUID => {
             let r = r.get(column_index);

@@ -7,13 +7,11 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 
-
-
+use crate::prelude::{Text, ToText};
+use crate::types::{Bytes, UtcDateTime};
 use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type};
 use uuid::Uuid;
-use crate::prelude::{Text, ToText};
-use crate::types::{Bytes, UtcDateTime};
 
 pub type AggroValue = JuniperValue<AggroScalarValue>;
 
@@ -59,7 +57,6 @@ impl GenericScalar {
     }
 }
 
-
 #[graphql_scalar(
     // You can rename the type for GraphQL by specifying the name here.
     name = "Binary",
@@ -77,21 +74,12 @@ impl Binary {
 
     pub fn from_input(v: &InputValue<AggroScalarValue>) -> Result<Binary, String> {
         match v {
-            InputValue::Scalar(AggroScalarValue::Binary(b)) => {
-                Ok(Binary(b.clone()))
-            }
-            InputValue::Scalar(AggroScalarValue::String(b)) => {
-                match base64::decode(b.as_str()) {
-                    Ok(s) => {
-                        Ok(Binary(Bytes::copy_from_slice(&s)))
-                    }
-                    _ => {
-                        Err("Invalid base64 string for Binary".to_owned())
-                    }
-                }
-
-            }
-            _ => Err("Expected a binary or string in base64".to_owned())
+            InputValue::Scalar(AggroScalarValue::Binary(b)) => Ok(Binary(b.clone())),
+            InputValue::Scalar(AggroScalarValue::String(b)) => match base64::decode(b.as_str()) {
+                Ok(s) => Ok(Binary(Bytes::copy_from_slice(&s))),
+                _ => Err("Invalid base64 string for Binary".to_owned()),
+            },
+            _ => Err("Expected a binary or string in base64".to_owned()),
         }
     }
 
@@ -114,7 +102,6 @@ pub enum AggroScalarValue {
     Uuid(Uuid),
     Binary(Bytes),
 }
-
 
 impl<'de> Deserialize<'de> for AggroScalarValue {
     fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
@@ -197,11 +184,17 @@ impl<'de> Deserialize<'de> for AggroScalarValue {
                 Ok(AggroScalarValue::String(s.to_text()))
             }
 
-            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E> where E: de::Error {
+            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
                 Ok(AggroScalarValue::Binary(Bytes::copy_from_slice(v)))
             }
 
-            fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E> where E: de::Error {
+            fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
                 Ok(AggroScalarValue::Binary(Bytes::copy_from_slice(&v)))
             }
         }
@@ -353,7 +346,6 @@ impl FromInputValue<AggroScalarValue> for AggroScalarValue {
     }
 }
 
-
 impl Serialize for AggroScalarValue {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -378,7 +370,6 @@ impl From<Text> for AggroScalarValue {
         AggroScalarValue::String(s)
     }
 }
-
 
 impl From<String> for AggroScalarValue {
     fn from(s: String) -> Self {
