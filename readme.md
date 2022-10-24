@@ -396,8 +396,7 @@ def test_gql():
 
 Puff has built in integrations for ASGI and asyncio. You first need to configure the RuntimeConfig to use it. Puff will automatically use uvloop if installed when starting the event loop.
 
-`asgiref.sync.async_to_sync` and `asgiref.sync.sync_to_async` have both been patched so that you can call puff greenlets from
-async or async from puff greenlets easily.
+`asgiref.sync.async_to_sync` and `asgiref.sync.sync_to_async` have both been patched so that you can call puff greenlets from async or async from puff greenlets easily.
 
 ```python title="/app/src/py_code/fast_api_example.py"
 from fastapi import FastAPI
