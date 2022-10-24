@@ -20,13 +20,12 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::errors::handle_puff_error;
+use crate::python::asgi::handler::get_cached_string;
 use crate::types::Text;
 use tracing::error;
 use wsgi::Sender;
-use crate::python::asgi::handler::get_cached_string;
 
 const MAX_LIST_BODY_INLINE_CONCAT: u64 = 1024 * 32;
-
 
 #[derive(Clone)]
 pub struct WsgiHandler {
@@ -189,7 +188,10 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                 Python::with_gil(|py| {
                     let environ = PyDict::new(py);
                     environ.set_item(get_cached_string(py, "wsgi.version"), (1, 0))?;
-                    environ.set_item(get_cached_string(py, "wsgi.url_scheme"), req.uri.scheme_str().unwrap_or("http"))?;
+                    environ.set_item(
+                        get_cached_string(py, "wsgi.url_scheme"),
+                        req.uri.scheme_str().unwrap_or("http"),
+                    )?;
                     environ.set_item(
                         get_cached_string(py, "wsgi.input"),
                         self.bytesio
@@ -209,10 +211,14 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                         }
                     };
 
-                    environ.set_item(get_cached_string(py, "SERVER_NAME"), self.server_name.as_str())?;
+                    environ.set_item(
+                        get_cached_string(py, "SERVER_NAME"),
+                        self.server_name.as_str(),
+                    )?;
                     environ.set_item(get_cached_string(py, "SERVER_PORT"), self.server_port)?;
                     environ.set_item(get_cached_string(py, "SERVER_PROTOCOL"), server_protocol)?;
-                    environ.set_item(get_cached_string(py, "REQUEST_METHOD"), req.method.as_str())?;
+                    environ
+                        .set_item(get_cached_string(py, "REQUEST_METHOD"), req.method.as_str())?;
                     if let Some(path_and_query) = req.uri.path_and_query() {
                         let path = path_and_query.path();
                         let raw_path = path.as_bytes();
@@ -231,7 +237,10 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                         if let Some(query) = path_and_query.query() {
                             environ.set_item(get_cached_string(py, "QUERY_STRING"), query)?;
                         } else {
-                            environ.set_item(get_cached_string(py, "QUERY_STRING"), get_cached_string(py, ""))?;
+                            environ.set_item(
+                                get_cached_string(py, "QUERY_STRING"),
+                                get_cached_string(py, ""),
+                            )?;
                         }
                     } else {
                         // TODO: is it even possible to get here?

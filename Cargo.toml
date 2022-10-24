@@ -1,6 +1,6 @@
 [package]
 name = "puff-rs"
-version = "0.1.0"
+version = "0.1.1"
 description = "Puff - Deep Stack Python Runtime and GraphQL library."
 license = "MIT"
 edition = "2021"
@@ -79,9 +79,9 @@ name = "asgi"
 path = "examples/asgi.rs"
 
 
-[profile.release]
-opt-level = 3
-strip = true
-debug = false
-codegen-units = 1
-lto = true
+#[profile.release]
+#opt-level = 3
+#strip = true
+#debug = false
+#codegen-units = 1
+#lto = true

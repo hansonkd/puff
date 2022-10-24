@@ -109,6 +109,7 @@ pub struct AggroArgument {
 pub struct AggroField {
     pub name: Text,
     pub return_type: DecodedType,
+    pub is_async: bool,
     pub depends_on: Vec<Text>,
     pub producer_method: Option<Py<PyAny>>,
     pub acceptor_method: Option<Py<PyAny>>,
@@ -204,6 +205,7 @@ pub fn convert_obj(name: &str, desc: BTreeMap<String, &PyAny>) -> PyResult<Aggro
             depends_on,
             name: k.into(),
             return_type: decode_type(field_description.getattr("return_type")?)?,
+            is_async: field_description.getattr("is_async")?.extract()?,
             producer_method: field_description.getattr("producer")?.extract()?,
             acceptor_method: field_description.getattr("acceptor")?.extract()?,
             safe_without_context: field_description
@@ -478,7 +480,7 @@ pub async fn do_returned_values_into_stream(
     match class_method {
         Some(cm) => {
             let result = {
-                if aggro_field.safe_without_context {
+                if !aggro_field.is_async && aggro_field.safe_without_context {
                     let py_extractor = PyContext::new(rows.clone(), aggro_context.token(), None);
                     Python::with_gil(|py| {
                         let arg_dict = args.into_py_dict(py);
@@ -491,7 +493,11 @@ pub async fn do_returned_values_into_stream(
                     let py_dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
                     let rec = Python::with_gil(|py| {
                         let arg_dict = args.into_py_dict(py);
-                        py_dispatcher.dispatch(cm, (py_extractor,), Some(arg_dict))
+                        if aggro_field.is_async {
+                            py_dispatcher.dispatch_asyncio(py, cm, (py_extractor,), arg_dict)
+                        } else {
+                            py_dispatcher.dispatch(cm, (py_extractor,), Some(arg_dict))
+                        }
                     })?;
 
                     rec.await??

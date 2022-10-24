@@ -16,11 +16,12 @@ The deep stack framework.
   * [Puff ♥ Django](#puff--django)
   * [Puff ♥ Graphql](#puff--graphql)
   * [Puff ♥ Pytest](#puff--pytest)
+  * [Puff ♥ AsyncIO](#puff--asyncio)
+  * [Puff ♥ Django + GraphQL](#puff--django--graphql)
   * [FAQ](#faq)
       - [Puff Dependencies](#why-a-monolithic-project)
       - [Architecture](#architecture)
       - [Why is Greenlet environment single threaded?](#why-is-greenlet-environment-single-threaded)
-      - [Why no AsyncIO?](#why-no-asyncio)
       - [What is a Deep Stack Framework?](#what-is-a-deep-stack-framework)
       - [Deep Stack Teams](#deep-stack-teams)
       - [Benefits of Deep Stack](#benefits-of-deep-stack)
@@ -36,6 +37,7 @@ High level overview is that Puff gives Python
 * Greenlets on Rust's Tokio.
 * High performance HTTP Server - combine Axum with Python WSGI apps (Flask, Django, etc.)
 * Rust / Python natively in the same process, no sockets or serialization.
+* AsyncIO / uvloop / ASGI integration with Rust
 * An easy-to-use GraphQL service
 * Multi-node pub-sub
 * Rust level Redis Pool
@@ -390,7 +392,50 @@ def test_gql():
     assert result['data']["hello_world"][0]["was_input"] == 3
 ```
 
-##
+## Puff ♥ AsyncIO
+
+Puff has built in integrations for ASGI and asyncio. You first need to configure the RuntimeConfig to use it. Puff will automatically use uvloop if installed when starting the event loop.
+
+`asgiref.sync.async_to_sync` and `asgiref.sync.sync_to_async` have both been patched so that you can call puff greenlets from
+async or async from puff greenlets easily.
+
+```python title="/app/src/py_code/fast_api_example.py"
+from fastapi import FastAPI
+
+app = FastAPI()
+
+
+@app.get("/fast-api")
+async def read_root():
+    return {"Hello": "World", "from": "Fast API"}
+```
+
+Rust
+
+```rust title="/app/src/main.rs" no_run
+use puff_rs::prelude::*;
+use puff_rs::program::commands::ASGIServerCommand;
+
+fn main() -> ExitCode {
+    let app = Router::new().get("/", root);
+    let rc = RuntimeConfig::default()
+        .set_asyncio(true);
+
+    Program::new("my_first_app")
+        .about("This is my first app")
+        .runtime_config(rc)
+        .command(ASGIServerCommand::new_with_router(
+            "fast_api_example.app",
+            app,
+        ))
+        .run()
+}
+
+// Basic handler that responds with a static string
+async fn root() -> Text {
+    "Ok".to_text()
+}
+```
 
 ## Puff ♥ Django + Graphql
 
@@ -497,11 +542,6 @@ Puff consists of multithreaded Tokio Runtime and a single thread which runs all 
 
 Only one thread can have the GIL at any particular time. All IO is done outside the GIL in the Rust layer and so the greenlets will only be utilizing the GIL efficiently most of the time. Adding more Python threads will not increase performance, however you can dispatch blocking greenlets which will run on their own thread if you need to do IO blocking work with the Python standard library or 3rd party packages.
 
-#### Why no AsyncIO?
-
-A core belief of puff is that the GIL is bad and all Computation should be shifted down to the rust layer. While it is 100% possible to make Puff AsyncIO compatible, Puff wants to encourage users to return pure data structures that represent queries that do zero IO and allow the Rust runtime to compute the results.
-
-The WSGI interface is primarily a fallback for auth, admin and one off activities and shouldn't be relied on to be the primary interface for serving data. Graphql should serve the majority of the traffic that comes from a Puff site. This allows maximum flexibility to use Django and Flask packages for Auth, admin, files, etc, while serving the bulk of your data from Rust.
 
 #### What is a Deep Stack Framework?
 Currently, you have the frontend and backend that makes up your "full stack". Deep stack is about safely controlling the runtime that your full stack app executes on. Think of an ASGI or WSGI server that is probably written in C or another low level language that executes your higher level Python backend code. Deep stack is about giving you full (and safe) control over that lower level server to run your higher level operations. Its aggressively embracing that different levels of languages have different pros and cons.
@@ -528,6 +568,10 @@ The thesis of the deepstack project is to have two backend engineering roles: Sc
 Right now there hasn't been too much focus on raw performance in GraphQL, because ultimately performance comes from SQL query optimizations (indexes, no n+1, etc). Puff's structure encourages you write your queries in a layer basis without having to rely on dataloaders or complicated optimizers allowing you to directly express the proper SQL. Ultimately the performance of the GQL server is based on how optimized your queries are to the indexes and structure of your DB.
 
 Puff won't magically make WSGI faster, but where Puff really excels is pushing down tight loops or iterations into the Rust Layer. Think about if you wanted to run multiple queries in parallel and perform some computation on them, resulting in Bytes. It's better to push this function into Puff. See the `/examples/wsgi.rs::get_many` function for an example.
+
+AsyncIO / uvloop performance is about the same if not 10-25% faster as using hypercorn or similar when using 1 worker.
+
+When thinking about performance on Deep Stack, remember about the extra dimension it makes possible. For example, if you are making a micro-benchmark and wanted to compare a static json response from FastAPI, it would be more idiomatic for Puff to write the static JSON response as an Axum handler in Rust and instead of a FastAPI endpoint. This can deliver a 2-80x performance boost. Specializing a route in Rust is not cheating; it's how its designed.
 
 #### Status
 
