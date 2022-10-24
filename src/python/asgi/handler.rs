@@ -1,31 +1,79 @@
+use crate::context::with_puff_context;
+use crate::errors::PuffResult;
 use crate::prelude::run_python_async;
 use crate::python::{asgi, PythonDispatcher};
+use anyhow::anyhow;
 use asgi::Sender;
-use axum::body::{boxed, Body, BoxBody, Bytes};
+use axum::body::{boxed, Body, BoxBody, Bytes as AxumBytes, HttpBody};
 use axum::handler::Handler;
 use axum::headers::HeaderName;
 use axum::http::{HeaderValue, Request, StatusCode, Version};
 use axum::response::{IntoResponse, Response};
+use futures::pin_mut;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList, PyLong, PyMapping, PyString};
+use pyo3::types::{PyBytes, PyDict, PyList, PyLong, PyMapping, PyString, PyTuple};
 use pyo3::PyDowncastError;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tokio::runtime::Handle;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::sync::Mutex;
+use tokio_stream::wrappers::ReceiverStream;
+
+thread_local! {
+    static CACHED_STRINGS: RefCell<HashMap<&'static str, Py<PyString>>> = RefCell::new(HashMap::new());
+}
+
+pub fn get_cached_string<'a>(py: Python<'a>, k: &'static str) -> Py<PyString> {
+    CACHED_STRINGS.with(|d| {
+        let mut s = d.borrow_mut();
+        if let Some(existing) = s.get(k) {
+            existing.clone()
+        } else {
+            let new_str: Py<PyString> = PyString::new(py, k).into_py(py);
+            s.insert(k, new_str.clone());
+            new_str
+        }
+    })
+}
 
 #[derive(Clone)]
 pub struct AsgiHandler {
     app: PyObject,
     dispatcher: PythonDispatcher,
+    asgi_spec: Py<PyDict>,
+    handle: Handle,
 }
 
 impl AsgiHandler {
     pub fn new(app: PyObject, dispatcher: PythonDispatcher) -> AsgiHandler {
-        AsgiHandler { app, dispatcher }
+        let asgi_spec = Python::with_gil(|py| {
+            let asgi = PyDict::new(py);
+            asgi.set_item(
+                get_cached_string(py, "spec_version"),
+                get_cached_string(py, "2.0"),
+            )
+            .unwrap();
+            asgi.set_item(
+                get_cached_string(py, "version"),
+                get_cached_string(py, "2.0"),
+            )
+            .unwrap();
+            asgi.into_py(py)
+        });
+        let handle = with_puff_context(|ctx| ctx.handle());
+        AsgiHandler {
+            app,
+            dispatcher,
+            asgi_spec,
+            handle,
+        }
     }
 }
 
@@ -83,7 +131,7 @@ impl Drop for SetTrueOnDrop {
 #[pyclass]
 struct HttpReceiver {
     disconnected: Arc<AtomicBool>,
-    rx: Arc<Mutex<UnboundedReceiver<Option<Body>>>>,
+    rx: Arc<Mutex<UnboundedReceiver<AxumBytes>>>,
 }
 
 #[pymethods]
@@ -97,18 +145,21 @@ impl HttpReceiver {
             if matches!(next, None) || disconnected.load(Ordering::SeqCst) {
                 Python::with_gil(|py| {
                     let scope = PyDict::new(py);
-                    scope.set_item("type", "http.disconnect")?;
+                    scope.set_item(
+                        get_cached_string(py, "type"),
+                        get_cached_string(py, "http.disconnect"),
+                    )?;
                     Ok(scope.into())
                 })
-            } else if let Some(Some(body)) = next {
-                let bytes = hyper::body::to_bytes(body)
-                    .await
-                    .map_err(|_e| PyErr::new::<PyRuntimeError, _>("failed to fetch data"))?;
+            } else if let Some(bytes) = next {
                 Python::with_gil(|py| {
                     let bytes = PyBytes::new(py, &bytes[..]);
                     let scope = PyDict::new(py);
-                    scope.set_item("type", "http.request")?;
-                    scope.set_item("body", bytes)?;
+                    scope.set_item(
+                        get_cached_string(py, "type"),
+                        get_cached_string(py, "http.request"),
+                    )?;
+                    scope.set_item(get_cached_string(py, "body"), bytes)?;
                     let scope: Py<PyDict> = scope.into();
                     Ok(scope)
                 })
@@ -136,29 +187,36 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
             disconnected: disconnected.clone(),
         };
         let (req, body): (_, Body) = req.into_parts();
-        let dispatcher = self.dispatcher.clone();
+        let handle = self.handle.clone();
+        handle.spawn(async move {
+            pin_mut!(body);
 
+            while let Some(s) = body.data().await {
+                receiver_tx.send(s.unwrap()).unwrap();
+            }
+        });
+        let dispatcher = self.dispatcher.clone();
+        let asgi = self.asgi_spec.clone();
         Box::pin(async move {
-            receiver_tx.send(Some(body)).unwrap();
             let _disconnected = SetTrueOnDrop(disconnected);
             match Python::with_gil(|py| {
-                let asgi = PyDict::new(py);
-                asgi.set_item("spec_version", "2.0")?;
-                asgi.set_item("version", "2.0")?;
                 let scope = PyDict::new(py);
-                scope.set_item("type", "http")?;
-                scope.set_item("asgi", asgi)?;
+                scope.set_item(get_cached_string(py, "type"), get_cached_string(py, "http"))?;
+                scope.set_item(get_cached_string(py, "asgi"), asgi)?;
                 scope.set_item(
-                    "http_version",
+                    get_cached_string(py, "http_version"),
                     match req.version {
-                        Version::HTTP_10 => "1.0",
-                        Version::HTTP_11 => "1.1",
-                        Version::HTTP_2 => "2",
+                        Version::HTTP_10 => get_cached_string(py, "1.0"),
+                        Version::HTTP_11 => get_cached_string(py, "1.1"),
+                        Version::HTTP_2 => get_cached_string(py, "2"),
                         _ => return Err(AsgiError::InvalidHttpVersion),
                     },
                 )?;
-                scope.set_item("method", req.method.as_str())?;
-                scope.set_item("scheme", req.uri.scheme_str().unwrap_or("http"))?;
+                scope.set_item(get_cached_string(py, "method"), req.method.as_str())?;
+                scope.set_item(
+                    get_cached_string(py, "scheme"),
+                    req.uri.scheme_str().unwrap_or("http"),
+                )?;
                 if let Some(path_and_query) = req.uri.path_and_query() {
                     let path = path_and_query.path();
                     let raw_path = path.as_bytes();
@@ -167,15 +225,15 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
                     let path = percent_encoding::percent_decode(raw_path)
                         .decode_utf8()
                         .map_err(|_| AsgiError::InvalidUtf8InPath)?;
-                    scope.set_item("path", path)?;
+                    scope.set_item(get_cached_string(py, "path"), path)?;
                     let raw_path_bytes = PyBytes::new(py, path_and_query.path().as_bytes());
-                    scope.set_item("raw_path", raw_path_bytes)?;
+                    scope.set_item(get_cached_string(py, "raw_path"), raw_path_bytes)?;
                     if let Some(query) = path_and_query.query() {
                         let qs_bytes = PyBytes::new(py, query.as_bytes());
-                        scope.set_item("query_string", qs_bytes)?;
+                        scope.set_item(get_cached_string(py, "query_string"), qs_bytes)?;
                     } else {
                         let qs_bytes = PyBytes::new(py, "".as_bytes());
-                        scope.set_item("query_string", qs_bytes)?;
+                        scope.set_item(get_cached_string(py, "query_string"), qs_bytes)?;
                     }
                 } else {
                     // TODO: is it even possible to get here?
@@ -186,7 +244,10 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
                     let qs_bytes = PyBytes::new(py, "".as_bytes());
                     scope.set_item("query_string", qs_bytes)?;
                 }
-                scope.set_item("root_path", "")?;
+                scope.set_item(
+                    get_cached_string(py, "root_path"),
+                    get_cached_string(py, ""),
+                )?;
 
                 let headers = req
                     .headers
@@ -198,7 +259,7 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
                     })
                     .collect::<Vec<_>>();
                 let headers = PyList::new(py, headers);
-                scope.set_item("headers", headers)?;
+                scope.set_item(get_cached_string(py, "headers"), headers)?;
                 // TODO: client/server args
                 let sender = Py::new(py, http_sender)?;
                 let receiver = Py::new(py, receiver)?;
@@ -209,119 +270,141 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
                 Ok::<_, AsgiError>(coro)
             }) {
                 Ok(http_coro) => {
-                    tokio::spawn(async move {
+                    handle.spawn(async move {
                         if let Err(_e) = http_coro.await {
                             tracing::error!("error handling request: {_e}");
                         }
                     });
 
-                    let mut response = Response::builder();
-
-                    if let Some(resp) = http_sender_rx.recv().await {
-                        let (status, headers) = match Python::with_gil(|py| {
+                    let response = if let Some(resp) = http_sender_rx.recv().await {
+                        let res = Python::with_gil(|py| {
                             let dict: &PyDict = resp.into_ref(py);
                             if let Some(value) = dict.get_item("type") {
-                                let value: &PyString = value.downcast()?;
+                                let value: &PyString = value
+                                    .downcast()
+                                    .map_err(|_e| anyhow!("Invalid asgi type value"))?;
                                 let value = value.to_str()?;
                                 if value == "http.response.start" {
                                     let value: &PyLong = dict
-                                        .get_item("status")
+                                        .get_item(get_cached_string(py, "status"))
                                         .ok_or_else(|| {
                                             PyErr::new::<PyRuntimeError, _>(
                                                 "Missing status in http.response.start",
                                             )
                                         })?
-                                        .downcast()?;
+                                        .downcast()
+                                        .map_err(|_e| anyhow!("Invalid asgi status value"))?;
                                     let status: u16 = value.extract()?;
+                                    let mut this_response = Response::builder();
+                                    this_response = this_response.status(status);
+                                    let headers = this_response.headers_mut().unwrap();
 
-                                    let headers = if let Some(raw) = dict.get_item("headers") {
-                                        let value: &PyMapping = raw.downcast()?;
-                                        Some(
-                                            value
-                                                .iter()?
-                                                .map(|item| {
-                                                    item.and_then(
-                                                        PyAny::extract::<(Vec<u8>, Vec<u8>)>,
-                                                    )
-                                                })
-                                                .collect::<PyResult<Vec<_>>>()?,
-                                        )
-                                    } else {
-                                        None
+                                    if let Some(raw) =
+                                        dict.get_item(get_cached_string(py, "headers"))
+                                    {
+                                        let value: &PyMapping = raw
+                                            .downcast()
+                                            .map_err(|_e| anyhow!("Invalid asgi headers value"))?;
+                                        for item in value.iter()? {
+                                            if let Ok(t) = item?.downcast::<PyTuple>() {
+                                                let k = t
+                                                    .get_item(0)?
+                                                    .downcast::<PyBytes>()
+                                                    .map_err(|_e| {
+                                                        anyhow!("Invalid asgi header key value")
+                                                    })?;
+                                                let v = t
+                                                    .get_item(1)?
+                                                    .downcast::<PyBytes>()
+                                                    .map_err(|_e| {
+                                                        anyhow!("Invalid asgi header value value")
+                                                    })?;
+                                                headers.insert(
+                                                    HeaderName::from_bytes(k.as_bytes())?,
+                                                    HeaderValue::from_bytes(v.as_bytes())?,
+                                                );
+                                            }
+                                        }
                                     };
-                                    Ok((status, headers))
+
+                                    PuffResult::Ok(Ok(this_response))
                                 } else {
-                                    Err(AsgiError::ExpectedResponseStart)
+                                    Ok(Err(AsgiError::ExpectedResponseStart))
                                 }
                             } else {
-                                Err(AsgiError::ExpectedResponseStart)
+                                Ok(Err(AsgiError::ExpectedResponseStart))
                             }
-                        }) {
-                            Ok((status, headers)) => (status, headers),
-                            Err(e) => {
-                                return e.into_response();
-                            }
-                        };
-                        response = response.status(status);
-                        if let Some(pyheaders) = headers {
-                            let headers = response.headers_mut().unwrap();
-                            for (name, value) in pyheaders {
-                                let name = match HeaderName::from_bytes(&name) {
-                                    Ok(name) => name,
-                                    Err(_e) => {
-                                        return AsgiError::InvalidHeader.into_response();
-                                    }
-                                };
-                                let value = match HeaderValue::from_bytes(&value) {
-                                    Ok(value) => value,
-                                    Err(_e) => {
-                                        return AsgiError::InvalidHeader.into_response();
-                                    }
-                                };
-                                headers.append(name, value);
+                        });
+
+                        match res {
+                            Ok(Ok(new_response)) => new_response,
+                            Ok(Err(e)) => return e.into_response(),
+                            Err(_e) => {
+                                tracing::error!("Failed to create response: {:?}", _e);
+                                return AsgiError::InvalidHeader.into_response();
                             }
                         }
                     } else {
                         return AsgiError::MissingResponse.into_response();
-                    }
+                    };
 
-                    let mut body = Vec::new();
-                    while let Some(resp) = http_sender_rx.recv().await {
-                        let (bytes, more_body) = match Python::with_gil(|py| {
-                            let dict: &PyDict = resp.into_ref(py);
-                            if let Some(value) = dict.get_item("type") {
-                                let value: &PyString = value.downcast()?;
-                                let value = value.to_str()?;
-                                if value == "http.response.body" {
-                                    let more_body = if let Some(raw) = dict.get_item("more_body") {
-                                        raw.extract::<bool>()?
+                    let (sender, body_rec) = mpsc::channel(2);
+
+                    handle.spawn(async move {
+                        while let Some(resp) = http_sender_rx.recv().await {
+                            let more_body = match Python::with_gil(|py| {
+                                let dict: &PyDict = resp.into_ref(py);
+                                if let Some(value) = dict.get_item(get_cached_string(py, "type")) {
+                                    let value: &PyString = value.downcast()?;
+                                    let value = value.to_str()?;
+                                    if value == "http.response.body" {
+                                        let more_body = if let Some(raw) =
+                                            dict.get_item(get_cached_string(py, "more_body"))
+                                        {
+                                            raw.extract::<bool>()?
+                                        } else {
+                                            false
+                                        };
+                                        if let Some(raw) =
+                                            dict.get_item(get_cached_string(py, "body"))
+                                        {
+                                            if let Ok(s) = raw.downcast::<PyBytes>() {
+                                                Ok((
+                                                    AxumBytes::copy_from_slice(s.as_bytes()),
+                                                    more_body,
+                                                ))
+                                            } else {
+                                                Err(AsgiError::ExpectedResponseBody)
+                                            }
+                                        } else {
+                                            Err(AsgiError::ExpectedResponseBody)
+                                        }
                                     } else {
-                                        false
-                                    };
-                                    if let Some(raw) = dict.get_item("body") {
-                                        Ok((raw.extract::<Vec<u8>>()?, more_body))
-                                    } else {
-                                        Ok((Vec::new(), more_body))
+                                        Err(AsgiError::ExpectedResponseBody)
                                     }
                                 } else {
                                     Err(AsgiError::ExpectedResponseBody)
                                 }
-                            } else {
-                                Err(AsgiError::ExpectedResponseBody)
+                            }) {
+                                Ok((body_piece, more_body)) => {
+                                    sender
+                                        .send(Result::<_, Infallible>::Ok(body_piece))
+                                        .await
+                                        .unwrap();
+                                    more_body
+                                }
+                                Err(_e) => {
+                                    tracing::error!("Failed to create response: {:?}", _e);
+                                    return ();
+                                }
+                            };
+                            if !more_body {
+                                break;
                             }
-                        }) {
-                            Ok((bytes, more_body)) => (bytes, more_body),
-                            Err(e) => {
-                                return e.into_response();
-                            }
-                        };
-                        body.extend(bytes);
-                        if !more_body {
-                            break;
                         }
-                    }
+                    });
 
-                    let body = boxed(Body::from(Bytes::from(body)));
+                    let body = boxed(Body::wrap_stream(ReceiverStream::new(body_rec)));
                     match response.body(body) {
                         Ok(response) => response.into_response(),
                         Err(_e) => {

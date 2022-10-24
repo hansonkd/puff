@@ -23,8 +23,10 @@ use crate::errors::handle_puff_error;
 use crate::types::Text;
 use tracing::error;
 use wsgi::Sender;
+use crate::python::asgi::handler::get_cached_string;
 
 const MAX_LIST_BODY_INLINE_CONCAT: u64 = 1024 * 32;
+
 
 #[derive(Clone)]
 pub struct WsgiHandler {
@@ -186,32 +188,31 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
             let args_to_send: Result<Result<(PyObject, PyObject), Response>, Error> =
                 Python::with_gil(|py| {
                     let environ = PyDict::new(py);
-                    let _io = py.import("io")?;
-                    environ.set_item("wsgi.version", (1, 0))?;
-                    environ.set_item("wsgi.url_scheme", req.uri.scheme_str().unwrap_or("http"))?;
+                    environ.set_item(get_cached_string(py, "wsgi.version"), (1, 0))?;
+                    environ.set_item(get_cached_string(py, "wsgi.url_scheme"), req.uri.scheme_str().unwrap_or("http"))?;
                     environ.set_item(
-                        "wsgi.input",
+                        get_cached_string(py, "wsgi.input"),
                         self.bytesio
                             .call1(py, (PyByteArray::new(py, &body_bytes[..]),))?,
                     )?;
-                    environ.set_item("wsgi.errors", self.std_err.clone())?;
-                    environ.set_item("wsgi.multithread", false)?;
-                    environ.set_item("wsgi.run_once", false)?;
+                    environ.set_item(get_cached_string(py, "wsgi.errors"), self.std_err.clone())?;
+                    environ.set_item(get_cached_string(py, "wsgi.multithread"), false)?;
+                    environ.set_item(get_cached_string(py, "wsgi.run_once"), false)?;
 
                     let server_protocol = match req.version {
-                        Version::HTTP_10 => "HTTP/1.0",
-                        Version::HTTP_11 => "HTTP/1.1",
-                        Version::HTTP_2 => "HTTP/2",
+                        Version::HTTP_10 => get_cached_string(py, "HTTP/1.0"),
+                        Version::HTTP_11 => get_cached_string(py, "HTTP/1.1"),
+                        Version::HTTP_2 => get_cached_string(py, "HTTP/2"),
                         _ => {
                             error!("Invalid HTTP version");
                             return Ok(Err(WsgiError::InvalidHttpVersion.into_response()));
                         }
                     };
 
-                    environ.set_item("SERVER_NAME", self.server_name.as_str())?;
-                    environ.set_item("SERVER_PORT", self.server_port)?;
-                    environ.set_item("SERVER_PROTOCOL", server_protocol)?;
-                    environ.set_item("REQUEST_METHOD", req.method.as_str())?;
+                    environ.set_item(get_cached_string(py, "SERVER_NAME"), self.server_name.as_str())?;
+                    environ.set_item(get_cached_string(py, "SERVER_PORT"), self.server_port)?;
+                    environ.set_item(get_cached_string(py, "SERVER_PROTOCOL"), server_protocol)?;
+                    environ.set_item(get_cached_string(py, "REQUEST_METHOD"), req.method.as_str())?;
                     if let Some(path_and_query) = req.uri.path_and_query() {
                         let path = path_and_query.path();
                         let raw_path = path.as_bytes();
@@ -226,11 +227,11 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                             return Ok(Err(WsgiError::InvalidUtf8InPath.into_response()));
                         };
 
-                        environ.set_item("PATH_INFO", path)?;
+                        environ.set_item(get_cached_string(py, "PATH_INFO"), path)?;
                         if let Some(query) = path_and_query.query() {
-                            environ.set_item("QUERY_STRING", query)?;
+                            environ.set_item(get_cached_string(py, "QUERY_STRING"), query)?;
                         } else {
-                            environ.set_item("QUERY_STRING", "")?;
+                            environ.set_item(get_cached_string(py, "QUERY_STRING"), get_cached_string(py, ""))?;
                         }
                     } else {
                         // TODO: is it even possible to get here?
@@ -238,7 +239,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                         environ.set_item("PATH_INFO", "")?;
                         environ.set_item("QUERY_STRING", "")?;
                     }
-                    environ.set_item("SCRIPT_NAME", "")?;
+                    environ.set_item(get_cached_string(py, "SCRIPT_NAME"), "")?;
 
                     for (name, value) in req.headers.iter() {
                         let corrected_name = match name.to_string().to_uppercase().as_str() {
