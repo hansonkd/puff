@@ -82,17 +82,17 @@ impl PyHttpClient {
             for (k, v) in f.iter() {
                 let part_name = k.str()?.to_str()?.to_owned();
                 if let Ok(text_value) = v.downcast::<PyString>() {
-                    let part = Part::text(text_value.to_str()?.to_owned());
+                    let part = Part::text(text_value.to_str()?.to_owned()).file_name(part_name.clone());
                     mp = mp.part(part_name, part);
                 } else if let Ok(text_value) = v.downcast::<PyBytes>() {
-                    let part = Part::bytes(text_value.as_bytes().to_vec());
+                    let part = Part::bytes(text_value.as_bytes().to_vec()).file_name(part_name.clone());
                     mp = mp.part(part_name, part);
                 } else if let Ok(v) = v.call_method0("read") {
                     if let Ok(text_value) = v.downcast::<PyString>() {
-                        let part = Part::text(text_value.to_str()?.to_owned());
+                        let part = Part::text(text_value.to_str()?.to_owned()).file_name(part_name.clone());
                         mp = mp.part(part_name, part);
                     } else if let Ok(text_value) = v.downcast::<PyBytes>() {
-                        let part = Part::bytes(text_value.as_bytes().to_vec());
+                        let part = Part::bytes(text_value.as_bytes().to_vec()).file_name(part_name.clone());
                         mp = mp.part(part_name, part);
                     }
                 } else if let Ok(tuple_value) = v.downcast::<PyTuple>() {
@@ -180,7 +180,7 @@ impl PyHttpClient {
         }
 
         rb = rb.header(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        let obj = dump_string(py, body.into_py(py), None, None, None)?;
+        let obj = dump_string(py, body.into_py(py), None, None)?;
         rb = rb.body(obj);
 
         let request = rb
@@ -232,7 +232,7 @@ impl PyHttpResponse {
         let d = PyDict::new(py);
         if let Some(r) = &self.response {
             for (hn, hv) in r.headers() {
-                d.set_item(hn.as_str(), hv.as_bytes())?
+                d.set_item(hn.as_str(), PyBytes::new(py, hv.as_bytes()))?
             }
         }
         Ok(d.into_py(py))

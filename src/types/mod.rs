@@ -147,6 +147,10 @@ impl Bytes {
         Self(AxumBytes::copy_from_slice(slice))
     }
 
+    pub fn from_vec(slice: Vec<u8>) -> Self {
+        Self(slice.into())
+    }
+
     pub fn into_bytes(self) -> AxumBytes {
         self.0
     }

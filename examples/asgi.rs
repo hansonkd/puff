@@ -51,7 +51,7 @@ async fn root_post(
     for (k, v) in payload {
         ret_map.insert(
             format!("Key was {}", k),
-            format!("Value was {}", v.to_uppercase().into()),
+            serde_json::Value::String(format!("Value was {}", v.to_uppercase())),
         );
     }
     Json(serde_json::Value::Object(ret_map))

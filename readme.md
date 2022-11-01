@@ -639,6 +639,7 @@ def do_http_request_greenlet():
 You can set the HTTP client options through RuntimeConfig. If your program is only talking to other Puff instances or HTTP2 services, it can make sense to turn on HTTP2 only. You can also configure user-agents as well as many other HTTP options through this method.
 
 ```rust
+use puff_rs::runtime::RuntimeConfig;
 use reqwest::ClientBuilder;
 
 // Force HTTP2

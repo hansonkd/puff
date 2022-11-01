@@ -33,7 +33,6 @@ def run_main():
         print(f"{task} returned {result}")
 
 
-
 def my_awesome_task(payload):
     print(f"In task {payload}")
     return payload["x"][0]

@@ -16,6 +16,7 @@ use std::os::raw::c_int;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::oneshot;
 use tracing::error;
 
@@ -88,6 +89,24 @@ pub fn get_cached_object<'a>(py: Python<'a>, k: Text) -> PyResult<PyObject> {
     })
 }
 
+
+#[pyclass]
+struct PyDispatchAsyncIO;
+
+#[pymethods]
+impl PyDispatchAsyncIO {
+    pub fn __call__(&self, return_func: PyObject, f: PyObject) -> PyResult<()> {
+        let dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
+        run_python_async(return_func, async move {
+            Ok(
+                    Python::with_gil(|py| dispatcher.dispatch_asyncio(py, f, (), PyDict::new(py)))?
+                    .await??,
+            )
+        });
+        Ok(())
+    }
+}
+
 #[pyclass]
 struct ReadFileBytes;
 
@@ -118,21 +137,18 @@ impl PyDispatchGreenlet {
 }
 
 #[pyclass]
-struct PyDispatchAsyncIO;
+struct PySleepMs;
 
 #[pymethods]
-impl PyDispatchAsyncIO {
-    pub fn __call__(&self, return_func: PyObject, f: PyObject) -> PyResult<()> {
-        let dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
+impl PySleepMs {
+    pub fn __call__(&self, return_func: PyObject, sleep_time_ms: u64) {
         run_python_async(return_func, async move {
-            Ok(
-                Python::with_gil(|py| dispatcher.dispatch_asyncio(py, f, (), PyDict::new(py)))?
-                    .await??,
-            )
-        });
-        Ok(())
+            tokio::time::sleep(Duration::from_millis(sleep_time_ms)).await;
+            Ok(Python::with_gil(|py| py.None()))
+        })
     }
 }
+
 
 #[pyclass]
 struct PyDispatchAsyncCoro;
@@ -200,6 +216,7 @@ pub(crate) fn bootstrap_puff_globals(config: RuntimeConfig) -> PuffResult<()> {
         add_pg_puff_exceptions(py)?;
         puff_rust_functions.setattr("global_state", global_state)?;
         puff_rust_functions.setattr("read_file_bytes", ReadFileBytes.into_py(py))?;
+        puff_rust_functions.setattr("sleep_ms", PySleepMs.into_py(py))?;
         puff_mod.call_method0("patch_libs")?;
         info!("Finished adding puff to python.");
         PyResult::Ok(())

@@ -39,6 +39,8 @@ use pyo3::wrap_pyfunction;
 use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{self, Serialize, SerializeMap, SerializeSeq, Serializer};
 
+use crate::types::Bytes;
+
 #[pyfunction]
 pub fn load(py: Python, fp: PyObject, kwargs: Option<&PyDict>) -> PyResult<PyObject> {
     // Temporary workaround for
@@ -123,7 +125,7 @@ pub fn dumps(
     py: Python,
     obj: PyObject,
     _skipkeys: Option<PyObject>,
-    ensure_ascii: Option<PyObject>,
+    _ensure_ascii: Option<PyObject>,
     _check_circular: Option<PyObject>,
     _allow_nan: Option<PyObject>,
     _cls: Option<PyObject>,
@@ -133,20 +135,39 @@ pub fn dumps(
     sort_keys: Option<PyObject>,
     _kwargs: Option<&PyDict>,
 ) -> PyResult<PyObject> {
-    let s = dump_string(py, obj, ensure_ascii, indent, sort_keys)?;
+    let s = dump_string(py, obj, indent, sort_keys)?;
 
     Ok(s.to_object(py))
 }
 
-// ensure_ascii, check_circular, allow_nan, cls, indent, separators, default, sort_keys, kwargs = "**")]
-#[allow(unused_variables)]
-pub fn dump_string(
+pub fn dump_vec(
     py: Python,
     obj: PyObject,
-    ensure_ascii: Option<PyObject>,
-    indent: Option<PyObject>,
     sort_keys: Option<PyObject>,
-) -> PyResult<String> {
+) -> PyResult<Vec<u8>> {
+
+    let v = SerializePyObject {
+        py,
+        obj: obj.extract(py)?,
+        sort_keys: match sort_keys {
+            Some(sort_keys) => sort_keys.is_true(py)?,
+            None => false,
+        },
+    };
+
+    let s: Result<_, HyperJsonError> =
+        serde_json::to_vec(&v).map_err(|error| HyperJsonError::InvalidConversion { error });
+
+    Ok(s?)
+}
+
+
+pub fn dump_string(
+        py: Python,
+        obj: PyObject,
+        indent: Option<PyObject>,
+        sort_keys: Option<PyObject>,
+        ) -> PyResult<String> {
     let indent_data: Option<Vec<u8>> = if let Some(indent_py) = indent {
         let indent_number = indent_py.extract(py)?;
         Some(vec![b' '; indent_number])
@@ -168,7 +189,7 @@ pub fn dump_string(
         let formatter = serde_json::ser::PrettyFormatter::with_indent(&indent);
         let mut ser = serde_json::Serializer::with_formatter(buf, formatter);
         v.serialize(&mut ser)
-            .map_err(|error| HyperJsonError::InvalidConversion { error })?;
+        .map_err(|error| HyperJsonError::InvalidConversion { error })?;
         String::from_utf8(ser.into_inner()).map_err(|error| HyperJsonError::Utf8Error { error })
     } else {
         serde_json::to_string(&v).map_err(|error| HyperJsonError::InvalidConversion { error })
@@ -176,6 +197,7 @@ pub fn dump_string(
 
     Ok(s?)
 }
+
 
 #[pyfunction]
 pub fn dump(
@@ -247,7 +269,7 @@ pub fn run_loads(
             Ok(py_object)
         }
         Err(e) => {
-            return convert_special_floats(py, &string, &parse_int).or_else(|err| {
+            return convert_special_floats(py, &string.as_bytes(), &parse_int).or_else(|err| {
                 if e.is_syntax() {
                     return Err(JSONDecodeError::new_err((
                         format!("Value: {:?}, Error: {:?}", string, err),
@@ -258,6 +280,41 @@ pub fn run_loads(
                     return Err(PyValueError::new_err(format!(
                         "Value: {:?}, Error: {:?}",
                         string, e
+                    )));
+                }
+            });
+        }
+    }
+}
+
+
+pub fn run_load_bytes(
+        py: Python,
+        string: &[u8],
+        parse_float: Option<PyObject>,
+        parse_int: Option<PyObject>,
+        ) -> PyResult<PyObject> {
+    let mut deserializer = serde_json::Deserializer::from_slice(string);
+    let seed = HyperJsonValue::new(py, &parse_float, &parse_int);
+    match seed.deserialize(&mut deserializer) {
+        Ok(py_object) => {
+            deserializer
+            .end()
+            .map_err(|e| JSONDecodeError::new_err((e.to_string(), Bytes::copy_from_slice(string), 0)))?;
+            Ok(py_object)
+        }
+        Err(e) => {
+            return convert_special_floats(py, string, &parse_int).or_else(|err| {
+                if e.is_syntax() {
+                    return Err(JSONDecodeError::new_err((
+                            format!("Value: {:?}, Error: {:?}", string, err),
+                    Bytes::copy_from_slice(string),
+                    0,
+                    )));
+                } else {
+                    return Err(PyValueError::new_err(format!(
+                            "Value: {:?}, Error: {:?}",
+                    string, e
                     )));
                 }
             });
@@ -420,15 +477,15 @@ impl<'p, 'a> Serialize for SerializePyObject<'p, 'a> {
 
 fn convert_special_floats(
     py: Python,
-    s: &str,
+    s: &[u8],
     _parse_int: &Option<PyObject>,
 ) -> PyResult<PyObject> {
     match s {
         // TODO: If `allow_nan` is false (default: True), then this should be a ValueError
         // https://docs.python.org/3/library/json.html
-        "NaN" => Ok(std::f64::NAN.to_object(py)),
-        "Infinity" => Ok(std::f64::INFINITY.to_object(py)),
-        "-Infinity" => Ok(std::f64::NEG_INFINITY.to_object(py)),
+        b"NaN" => Ok(std::f64::NAN.to_object(py)),
+        b"Infinity" => Ok(std::f64::INFINITY.to_object(py)),
+        b"-Infinity" => Ok(std::f64::NEG_INFINITY.to_object(py)),
         _ => Err(PyValueError::new_err(format!("Value: {:?}", s))),
     }
 }

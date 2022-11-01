@@ -437,7 +437,7 @@ pub fn loop_tasks(
     dispatcher: PythonDispatcher,
 ) -> () {
     let tasks_per_loop = num_workers as isize;
-    let wait_duration = Duration::from_secs(1);
+    let wait_duration = Duration::from_millis(1000);
     let (sender, mut rec) = mpsc::unbounded_channel();
     let first_sender = sender.clone();
     let inner_handle = handle.clone();

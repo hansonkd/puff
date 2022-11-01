@@ -23,10 +23,13 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Sender, UnboundedReceiver, UnboundedSender};
 
 pub type ConnectionId = uuid::Uuid;
+pub type InstanceId = uuid::Uuid;
 
+#[derive(Debug)]
 enum PubSubEvent {
     Sub(Text, ConnectionId, UnboundedSender<PubSubMessage>),
     UnSub(Text, ConnectionId),
+    Drop(ConnectionId)
 }
 
 /// A message received from a pubsub channel.
@@ -108,6 +111,26 @@ async fn handle_event(
             match maybe_sub {
                 Some(chan) => pubsub.subscribe(chan).await?,
                 None => (),
+            }
+        }
+        PubSubEvent::Drop(conn) => {
+            let unsubscribed = {
+                let mut mutex_guard = client.channels.lock().unwrap();
+                let mut unsubscribed = Vec::new();
+                for (chan, v) in mutex_guard.iter_mut() {
+                    if v.remove(&conn).is_some() {
+                        if v.is_empty() {
+                            unsubscribed.push(chan.clone());
+                        }
+                    }
+                }
+                for chan in &unsubscribed {
+                    mutex_guard.remove(chan);
+                }
+                unsubscribed
+            };
+            for chan in unsubscribed {
+                pubsub.unsubscribe(chan).await?
             }
         }
         PubSubEvent::UnSub(chan, conn) => {
@@ -206,8 +229,11 @@ impl PubSubClient {
         connection_id: ConnectionId,
     ) -> PuffResult<(PubSubConnection, UnboundedReceiver<PubSubMessage>)> {
         let (sender, receiver) = mpsc::unbounded_channel();
+        let instance_id = uuid::Uuid::new_v4();
+
         let conn = PubSubConnection {
             connection_id,
+            instance_id,
             sender,
             client: self.client.clone(),
             events_sender: self.events_sender.clone(),
@@ -249,12 +275,31 @@ impl PubSubClient {
 }
 
 /// A connection that can subscribe to new messages.
-#[derive(Clone)]
 pub struct PubSubConnection {
     connection_id: ConnectionId,
+    instance_id: InstanceId,
     client: Pool<RedisConnectionManager>,
     sender: UnboundedSender<PubSubMessage>,
     events_sender: Arc<Mutex<Option<Sender<PubSubEvent>>>>,
+}
+
+
+impl Drop for PubSubConnection {
+    fn drop(&mut self) {
+        let event = PubSubEvent::Drop(self.instance_id.clone());
+        let inner_sender = self.events_sender.clone();
+        with_puff_context(move |ctx| {
+            ctx.handle().spawn(async move {
+                let maybe_s = {
+                    let m = inner_sender.lock().unwrap();
+                    (*m).clone()
+                };
+                if let Some(s) = maybe_s {
+                    s.send(event).await.unwrap_or_default();
+                }
+            });
+        })
+    }
 }
 
 impl PubSubConnection {
@@ -266,37 +311,33 @@ impl PubSubConnection {
     /// Subscribe to the channel. Queues the command even if you don't await the handle.
     pub fn subscribe<T: Into<Text>>(&self, channel: T) -> BoxFuture<bool> {
         let new_sender = self.sender.clone();
-        let event = PubSubEvent::Sub(channel.into(), self.connection_id.clone(), new_sender);
+        let event = PubSubEvent::Sub(channel.into(), self.instance_id.clone(), new_sender);
         let inner_sender = self.events_sender.clone();
-        with_puff_context(move |_ctx| {
-            let fut = async move {
-                let s = {
-                    let m = inner_sender.lock().unwrap();
-                    (*m).clone().expect("Pub loop not started yet.")
-                };
-                let r = s.send(event).await;
-                r.is_ok()
+        let fut = async move {
+            let s = {
+                let m = inner_sender.lock().unwrap();
+                (*m).clone().expect("Pub loop not started yet.")
             };
-            fut.boxed()
-        })
+            let r = s.send(event).await;
+            r.is_ok()
+        };
+        fut.boxed()
     }
 
     /// Unsubscribe from the channel. Queues the command even if you don't await the handle.
     pub fn unsubscribe<T: Into<Text>>(&self, channel: T) -> BoxFuture<bool> {
-        let event = PubSubEvent::UnSub(channel.into(), self.connection_id.clone());
+        let event = PubSubEvent::UnSub(channel.into(), self.instance_id.clone());
         let inner_sender = self.events_sender.clone();
-        with_puff_context(move |_ctx| {
-            let fut = async move {
-                let s = {
-                    let m = inner_sender.lock().unwrap();
-                    (*m).clone().expect("Sub loop not started yet.")
-                };
-
-                let r = s.send(event).await;
-                r.is_ok()
+        let fut = async move {
+            let s = {
+                let m = inner_sender.lock().unwrap();
+                (*m).clone().expect("Sub loop not started yet.")
             };
-            fut.boxed()
-        })
+
+            let r = s.send(event).await;
+            r.is_ok()
+        };
+        fut.boxed()
     }
 
     /// Try to broadcast a message to the channel.
@@ -312,16 +353,14 @@ impl PubSubConnection {
             body.into(),
         );
 
-        with_puff_context(|_ctx| {
-            let inner_client = self.client.clone();
-            let fut = async move {
-                let inner_client = inner_client.clone();
-                let body_bytes = bincode::serialize(&message)?;
-                let mut conn = inner_client.get().await?;
-                Ok(conn.publish::<_, _, ()>(channel_text, body_bytes).await?)
-            };
-            fut.boxed()
-        })
+        let inner_client = self.client.clone();
+        let fut = async move {
+            let inner_client = inner_client.clone();
+            let body_bytes = bincode::serialize(&message)?;
+            let mut conn = inner_client.get().await?;
+            Ok(conn.publish::<_, _, ()>(channel_text, body_bytes).await?)
+        };
+        fut.boxed()
     }
 }
 
