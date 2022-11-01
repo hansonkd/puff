@@ -115,6 +115,20 @@ def test_publish_and_wait_string_multi_channels():
     assert greenlet.join() == ("123456", "789", "abc")
 
 
+def test_publish_and_wait_string_multi_channels_multi_wait():
+    greenlet = spawn(wait_for_message_string_multi_channels)
+    greenlet2 = spawn(wait_for_message_string_multi_channels)
+    greenlet3 = spawn(wait_for_message_string_multi_channels)
+    conn = pubsub.connection()
+    sleep_ms(100)
+    conn.publish("test-chan-1", "123456")
+    conn.publish("test-chan-2", "789")
+    conn.publish("test-chan-3", "abc")
+    assert greenlet.join() == ("123456", "789", "abc")
+    assert greenlet2.join() == ("123456", "789", "abc")
+    assert greenlet3.join() == ("123456", "789", "abc")
+
+
 def test_pubsub_async():
     async_to_sync(publish_and_wait)()
 

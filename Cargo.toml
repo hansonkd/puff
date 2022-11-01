@@ -10,7 +10,7 @@ documentation = "https://docs.rs/puff_rs"
 homepage = "https://github.com/hansonkd/puff"
 repository = "https://github.com/hansonkd/puff"
 readme = "README.md"
-categories = ["asynchronous", "web-programming", "web-programming::http-server", "python"]
+categories = ["asynchronous", "web-programming", "web-programming::http-server", "development-tools::ffi"]
 keywords = ["graphql", "server", "web", "python"]
 exclude = ["/release.toml"]
 
