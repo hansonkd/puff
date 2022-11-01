@@ -1,7 +1,9 @@
 use crate::databases::redis::RedisClient;
 use crate::errors::{handle_puff_result, PuffResult};
 
+use crate::tasks::TaskQueue;
 use crate::types::{Puff, Text};
+use crate::web::client::PyHttpClient;
 use futures_util::future::BoxFuture;
 
 use std::cell::RefCell;
@@ -21,10 +23,12 @@ use tracing::{error, info};
 #[derive(Clone)]
 pub struct PuffContext {
     handle: Handle,
+    http_client: Option<PyHttpClient>,
     redis: Option<RedisClient>,
     postgres: Option<PostgresClient>,
     python_dispatcher: Option<PythonDispatcher>,
     pubsub_client: Option<PubSubClient>,
+    task_queue_client: Option<TaskQueue>,
     gql_root: Option<PuffGraphqlRoot>,
 }
 
@@ -87,13 +91,15 @@ impl PuffContext {
             postgres: None,
             python_dispatcher: None,
             pubsub_client: None,
+            task_queue_client: None,
             gql_root: None,
+            http_client: None,
         }
     }
 
     /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`.
     pub fn new(handle: Handle) -> PuffContext {
-        Self::new_with_options(handle, None, None, None, None, None)
+        Self::new_with_options(handle, None, None, None, None, None, None, None)
     }
 
     /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`. This function will start
@@ -104,7 +110,9 @@ impl PuffContext {
         postgres: Option<PostgresClient>,
         python_dispatcher: Option<PythonDispatcher>,
         pubsub_client: Option<PubSubClient>,
+        task_queue_client: Option<TaskQueue>,
         gql_root: Option<PuffGraphqlRoot>,
+        http_client: Option<PyHttpClient>,
     ) -> PuffContext {
         let arc_dispatcher = Self {
             handle,
@@ -112,7 +120,9 @@ impl PuffContext {
             postgres,
             python_dispatcher,
             pubsub_client,
+            task_queue_client,
             gql_root,
+            http_client,
         };
 
         arc_dispatcher
@@ -128,6 +138,20 @@ impl PuffContext {
         self.pubsub_client
             .clone()
             .expect("PubSub is not configured for this runtime.")
+    }
+
+    /// The global configured reqwest::Client
+    pub fn http_client(&self) -> PyHttpClient {
+        self.http_client
+            .clone()
+            .expect("HttpClient is not configured for this runtime.")
+    }
+
+    /// The global configured PubSubClient
+    pub fn task_queue(&self) -> TaskQueue {
+        self.task_queue_client
+            .clone()
+            .expect("TaskQueue is not configured for this runtime.")
     }
 
     /// A Handle into the multi-threaded async runtime

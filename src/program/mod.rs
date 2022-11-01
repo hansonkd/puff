@@ -46,6 +46,8 @@
 use clap::{ArgMatches, Command};
 
 use crate::databases::redis::{add_redis_command_arguments, new_redis_async};
+use crate::tasks::{add_task_queue_command_arguments, loop_tasks, new_task_queue_async};
+use crate::web::client::new_http_client;
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -273,16 +275,12 @@ impl Program {
             top_level = add_pubsub_command_arguments(top_level)
         }
 
+        if rt_config.task_queue() {
+            top_level = add_task_queue_command_arguments(top_level)
+        }
+
         rt_config.apply_env_vars();
         let mutex_switcher = Arc::new(Mutex::new(None::<PuffContext>));
-        let python_dispatcher = if rt_config.python() {
-            pyo3::prepare_freethreaded_python();
-            bootstrap_puff_globals(rt_config.clone())?;
-            let dispatcher = setup_python_executors(rt_config.clone(), mutex_switcher.clone())?;
-            Some(dispatcher)
-        } else {
-            None
-        };
 
         let mut builder = self.runtime()?;
 
@@ -305,6 +303,20 @@ impl Program {
                 });
 
                 let rt = builder.build()?;
+
+                let python_dispatcher = if rt_config.python() {
+                    pyo3::prepare_freethreaded_python();
+                    bootstrap_puff_globals(rt_config.clone())?;
+                    let dispatcher = setup_python_executors(
+                        rt_config.clone(),
+                        mutex_switcher.clone(),
+                        rt.handle().clone(),
+                    )?;
+                    Some(dispatcher)
+                } else {
+                    None
+                };
+
                 let mut redis = None;
                 if rt_config.redis() {
                     redis = Some(rt.block_on(new_redis_async(
@@ -325,6 +337,26 @@ impl Program {
                             true,
                         ))?,
                     );
+                }
+
+                let mut task_queue_client = None;
+                if rt_config.task_queue() {
+                    let task_queue = rt.block_on(new_task_queue_async(
+                        arg_matches
+                            .get_one::<String>("task_queue_url")
+                            .unwrap()
+                            .as_str(),
+                        true,
+                    ))?;
+                    loop_tasks(
+                        task_queue.clone(),
+                        rt_config.task_queue_max_concurrent_tasks(),
+                        rt.handle().clone(),
+                        python_dispatcher
+                            .clone()
+                            .expect("TaskQueue requires Python"),
+                    );
+                    task_queue_client = Some(task_queue);
                 }
 
                 let mut postgres = None;
@@ -349,6 +381,8 @@ impl Program {
                     ))?;
                     gql_root = Some(res);
                 }
+                let client_builder = rt_config.http_client_builder();
+                let http_client = new_http_client(client_builder)?;
 
                 let context = PuffContext::new_with_options(
                     rt.handle().clone(),
@@ -356,7 +390,9 @@ impl Program {
                     postgres,
                     python_dispatcher,
                     pubsub_client.clone(),
+                    task_queue_client.clone(),
                     gql_root.clone(),
+                    Some(http_client),
                 );
 
                 set_puff_context(context.puff());

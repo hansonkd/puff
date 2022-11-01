@@ -4,10 +4,17 @@ use crate::python::redis::RedisGlobal;
 use crate::context::{set_puff_context, set_puff_context_waiting, with_puff_context, PuffContext};
 use crate::python::async_python::{run_python_async, AsyncReturn};
 use crate::runtime::RuntimeConfig;
-use pyo3::types::{PyBytes, PyDict, PyTuple};
+use crate::tasks::GlobalTaskQueue;
+use crate::types::text::Text;
+use crate::web::client::GlobalHttpClient;
+use pyo3::types::{PyBytes, PyDict, PyString, PyTuple};
+use pyo3::wrap_pyfunction;
+use tokio::runtime::Handle;
 
 use std::os::raw::c_int;
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 use tracing::error;
@@ -16,16 +23,70 @@ use crate::python::graphql::GlobalGraphQL;
 use crate::python::postgres::{add_pg_puff_exceptions, PostgresGlobal};
 use tracing::log::info;
 
+use crate::json::{dump, dumps, load, loads};
 use crate::python::pubsub::GlobalPubSub;
 pub use pyo3::prelude::*;
+
+use self::queue::PyEventLoopQueue;
 
 pub mod asgi;
 pub mod async_python;
 pub mod graphql;
 pub mod postgres;
 pub mod pubsub;
+pub mod queue;
 pub mod redis;
 pub mod wsgi;
+
+thread_local! {
+    static CACHED_STRINGS: RefCell<HashMap<&'static str, Py<PyString>>> = RefCell::new(HashMap::new());
+    static CACHED_IMPORTED_OBJS: RefCell<HashMap<Text, PyObject>> = RefCell::new(HashMap::new());
+    static CACHED_PATH_IMPORTER: RefCell<Option<PyObject>> = RefCell::new(None);
+}
+
+pub fn get_cached_string<'a>(py: Python<'a>, k: &'static str) -> Py<PyString> {
+    CACHED_STRINGS.with(|d| {
+        let mut s = d.borrow_mut();
+        if let Some(existing) = s.get(k) {
+            existing.clone()
+        } else {
+            let new_str: Py<PyString> = PyString::new(py, k).into_py(py);
+            s.insert(k, new_str.clone());
+            new_str
+        }
+    })
+}
+
+pub fn get_cached_path_importer<'a>(py: Python<'a>) -> PyObject {
+    CACHED_PATH_IMPORTER.with(|d| {
+        let mut s = d.borrow_mut();
+        if let Some(existing) = s.as_ref() {
+            existing.clone()
+        } else {
+            let puff_mod = py.import("puff").expect("Could not import puff");
+            let string_import_fn = puff_mod
+                .getattr("import_string")
+                .expect("Could not import puff.import_string")
+                .into_py(py);
+            *s = Some(string_import_fn.clone());
+            string_import_fn
+        }
+    })
+}
+
+pub fn get_cached_object<'a>(py: Python<'a>, k: Text) -> PyResult<PyObject> {
+    CACHED_IMPORTED_OBJS.with(|d| {
+        let mut s = d.borrow_mut();
+        if let Some(existing) = s.get(&k) {
+            Ok(existing.clone())
+        } else {
+            let cache_importer = get_cached_path_importer(py);
+            let result = cache_importer.call1(py, (k.as_str(),))?;
+            s.insert(k, result.clone());
+            Ok(result)
+        }
+    })
+}
 
 #[pyclass]
 struct ReadFileBytes;
@@ -119,6 +180,7 @@ pub(crate) fn bootstrap_puff_globals(config: RuntimeConfig) -> PuffResult<()> {
 
         info!("Adding puff to python....");
         let puff_mod = py.import("puff")?;
+        let puff_json_mod = py.import("puff.json_impl")?;
 
         let puff_rust_functions = puff_mod.getattr("rust_objects")?;
         puff_rust_functions.setattr("is_puff", true)?;
@@ -126,9 +188,15 @@ pub(crate) fn bootstrap_puff_globals(config: RuntimeConfig) -> PuffResult<()> {
         puff_rust_functions.setattr("global_postgres_getter", PostgresGlobal)?;
         puff_rust_functions.setattr("global_pubsub_getter", GlobalPubSub)?;
         puff_rust_functions.setattr("global_gql_getter", GlobalGraphQL)?;
+        puff_rust_functions.setattr("global_task_queue_getter", GlobalTaskQueue)?;
+        puff_rust_functions.setattr("global_http_client_getter", GlobalHttpClient)?;
         puff_rust_functions.setattr("dispatch_greenlet", PyDispatchGreenlet.into_py(py))?;
         puff_rust_functions.setattr("dispatch_asyncio", PyDispatchAsyncIO.into_py(py))?;
         puff_rust_functions.setattr("dispatch_asyncio_coro", PyDispatchAsyncCoro.into_py(py))?;
+        puff_json_mod.add_function(wrap_pyfunction!(load, puff_json_mod)?)?;
+        puff_json_mod.add_function(wrap_pyfunction!(loads, puff_json_mod)?)?;
+        puff_json_mod.add_function(wrap_pyfunction!(dump, puff_json_mod)?)?;
+        puff_json_mod.add_function(wrap_pyfunction!(dumps, puff_json_mod)?)?;
         add_pg_puff_exceptions(py)?;
         puff_rust_functions.setattr("global_state", global_state)?;
         puff_rust_functions.setattr("read_file_bytes", ReadFileBytes.into_py(py))?;
@@ -170,8 +238,8 @@ impl PythonPuffContextSetter {
 
 #[derive(Clone)]
 pub struct PythonDispatcher {
-    thread_obj: PyObject,
-    asyncio_obj: PyObject,
+    thread_obj: Option<PyObject>,
+    asyncio_obj: Option<PyObject>,
     spawn_blocking_fn: PyObject,
     blocking: bool,
 }
@@ -186,29 +254,37 @@ impl PythonDispatcher {
     pub fn new(
         config: RuntimeConfig,
         context_waiting: Arc<Mutex<Option<PuffContext>>>,
+        handle: Handle,
     ) -> PyResult<Self> {
         let (thread_obj, asyncio_obj, spawn_blocking_fn) = Python::with_gil(|py| {
             let puff = py.import("puff")?;
             let greenlet_thread = if config.greenlets() {
-                puff.call_method1(
-                    "start_event_loop",
-                    (PythonPuffContextWaitingSetter(context_waiting.clone()),),
-                )?
-                .into_py(py)
+                Some(
+                    puff.call_method1(
+                        "start_event_loop",
+                        (
+                            PyEventLoopQueue::new(handle),
+                            PythonPuffContextWaitingSetter(context_waiting.clone()),
+                        ),
+                    )?
+                    .into_py(py),
+                )
             } else {
-                py.None()
+                None
             };
 
             let asyncio_thread = if config.asyncio() {
                 let puff_asyncio = py.import("puff.asyncio_support")?;
-                puff_asyncio
-                    .call_method1(
-                        "start_event_loop",
-                        (PythonPuffContextWaitingSetter(context_waiting.clone()),),
-                    )?
-                    .into_py(py)
+                Some(
+                    puff_asyncio
+                        .call_method1(
+                            "start_event_loop",
+                            (PythonPuffContextWaitingSetter(context_waiting.clone()),),
+                        )?
+                        .into_py(py),
+                )
             } else {
-                py.None()
+                None
             };
             PyResult::Ok((greenlet_thread, asyncio_thread, spawn_blocking_fn(py)?))
         })?;
@@ -285,16 +361,19 @@ impl PythonDispatcher {
     ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
         let (sender, rec) = oneshot::channel();
         let returner = AsyncReturn::new(Some(sender));
-        self.thread_obj.call_method1(
-            py,
-            "spawn",
-            (
-                function,
-                args.into_py(py).to_object(py),
-                kwargs.into_py(py).to_object(py),
-                returner,
-            ),
-        )?;
+        self.thread_obj
+            .clone()
+            .expect("Greenlets not enabled")
+            .call_method1(
+                py,
+                "spawn",
+                (
+                    function,
+                    args.into_py(py).to_object(py),
+                    kwargs.into_py(py).to_object(py),
+                    returner,
+                ),
+            )?;
         Ok(rec)
     }
 
@@ -308,16 +387,19 @@ impl PythonDispatcher {
     ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
         let (sender, rec) = oneshot::channel();
         let returner = AsyncReturn::new(Some(sender));
-        self.asyncio_obj.call_method1(
-            py,
-            "spawn",
-            (
-                function,
-                args.into_py(py).to_object(py),
-                kwargs.into_py(py).to_object(py),
-                returner,
-            ),
-        )?;
+        self.asyncio_obj
+            .clone()
+            .expect("AsyncIO not enabled")
+            .call_method1(
+                py,
+                "spawn",
+                (
+                    function,
+                    args.into_py(py).to_object(py),
+                    kwargs.into_py(py).to_object(py),
+                    returner,
+                ),
+            )?;
         Ok(rec)
     }
 
@@ -330,6 +412,8 @@ impl PythonDispatcher {
         let (sender, rec) = oneshot::channel();
         let returner = AsyncReturn::new(Some(sender));
         self.asyncio_obj
+            .clone()
+            .expect("AsyncIO not enabled")
             .call_method1(py, "spawn_coro", (function, returner))?;
         Ok(rec)
     }
@@ -338,6 +422,7 @@ impl PythonDispatcher {
 pub fn setup_python_executors(
     config: RuntimeConfig,
     context_waiting: Arc<Mutex<Option<PuffContext>>>,
+    handle: Handle,
 ) -> PyResult<PythonDispatcher> {
-    PythonDispatcher::new(config, context_waiting)
+    PythonDispatcher::new(config, context_waiting, handle)
 }

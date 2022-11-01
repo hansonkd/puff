@@ -1,3 +1,9 @@
+# 0.1.2
+
+* HTTP Client
+* TaskQueue
+* Rust based JSON serialization, using hyperjson
+
 # 0.1.1
 
 * Async python dispatcher

@@ -1,7 +1,7 @@
 use crate::context::with_puff_context;
 use crate::errors::PuffResult;
 use crate::prelude::run_python_async;
-use crate::python::{asgi, PythonDispatcher};
+use crate::python::{asgi, get_cached_string, PythonDispatcher};
 use anyhow::anyhow;
 use asgi::Sender;
 use axum::body::{boxed, Body, BoxBody, Bytes as AxumBytes, HttpBody};
@@ -14,8 +14,6 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyLong, PyMapping, PyString, PyTuple};
 use pyo3::PyDowncastError;
-use std::cell::RefCell;
-use std::collections::HashMap;
 use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
@@ -25,23 +23,6 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::sync::Mutex;
 use tokio_stream::wrappers::ReceiverStream;
-
-thread_local! {
-    static CACHED_STRINGS: RefCell<HashMap<&'static str, Py<PyString>>> = RefCell::new(HashMap::new());
-}
-
-pub fn get_cached_string<'a>(py: Python<'a>, k: &'static str) -> Py<PyString> {
-    CACHED_STRINGS.with(|d| {
-        let mut s = d.borrow_mut();
-        if let Some(existing) = s.get(k) {
-            existing.clone()
-        } else {
-            let new_str: Py<PyString> = PyString::new(py, k).into_py(py);
-            s.insert(k, new_str.clone());
-            new_str
-        }
-    })
-}
 
 #[derive(Clone)]
 pub struct AsgiHandler {

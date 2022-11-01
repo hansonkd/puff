@@ -3,6 +3,7 @@
 
 use pyo3::prelude::PyObject;
 use pyo3::{PyResult, Python};
+use reqwest::ClientBuilder;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -51,6 +52,9 @@ pub struct RuntimeConfig {
     postgres_pool_size: u32,
     postgres: bool,
     pubsub: bool,
+    http_client_builder: Arc<dyn Fn() -> ClientBuilder>,
+    task_queue: bool,
+    task_queue_max_concurrent_tasks: usize,
     greenlets: bool,
     asyncio: bool,
     env_vars: Vec<(Text, Text)>,
@@ -113,6 +117,21 @@ impl RuntimeConfig {
     /// Get if a global pubsub will be enabled.
     pub fn pubsub(&self) -> bool {
         self.pubsub
+    }
+
+    /// Get if a global pubsub will be enabled.
+    pub fn http_client_builder(&self) -> ClientBuilder {
+        (self.http_client_builder)()
+    }
+
+    /// Get if a global task_queue will be enabled.
+    pub fn task_queue(&self) -> bool {
+        self.task_queue
+    }
+
+    /// Get maximum number of concurrent tasks to pull from queue.
+    pub fn task_queue_max_concurrent_tasks(&self) -> usize {
+        self.task_queue_max_concurrent_tasks
     }
     /// Get if greenlets will be enabled.
     pub fn greenlets(&self) -> bool {
@@ -241,6 +260,37 @@ impl RuntimeConfig {
         new
     }
 
+    /// Set a constructor function for the HTTP ClientBuilder
+    ///
+    /// Default: ClientBuilder::new
+    pub fn set_http_client_builder_fn<F: Fn() -> ClientBuilder + 'static>(
+        self,
+        builder: F,
+    ) -> Self {
+        let mut new = self;
+        new.http_client_builder = Arc::new(builder);
+        new
+    }
+
+    /// Sets whether to start with a global TaskQueue.
+    ///
+    /// Default: false
+    pub fn set_task_queue(self, task_queue: bool) -> Self {
+        let mut new = self;
+        new.task_queue = task_queue;
+        new
+    }
+
+    /// Sets the number of tasks to run concurrently from the queue. Sets `task_queue` to true.
+    ///
+    /// Default: num_cpu * 4
+    pub fn set_task_queue_concurrent_tasks(self, max_workers: usize) -> Self {
+        let mut new = self;
+        new = new.set_task_queue(true);
+        new.task_queue_max_concurrent_tasks = max_workers;
+        new
+    }
+
     /// Sets whether to use greenlets when executing python.
     ///
     /// Default: true
@@ -335,11 +385,14 @@ impl Default for RuntimeConfig {
             postgres_pool_size: 10,
             postgres: false,
             pubsub: false,
+            task_queue: false,
+            task_queue_max_concurrent_tasks: num_cpus::get() * 4,
             blocking_task_keep_alive: Duration::from_secs(30),
             strategy: Strategy::RoundRobin,
             python_paths: Vec::new(),
             env_vars: Vec::new(),
             gql_module: None,
+            http_client_builder: Arc::new(ClientBuilder::new),
         }
     }
 }

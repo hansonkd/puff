@@ -11,6 +11,7 @@ use std::future::Future;
 use std::net::SocketAddr;
 use std::process::ExitCode;
 use std::sync::Mutex;
+use std::time::Duration;
 use tracing::info;
 
 pub use asgi::ASGIServerCommand;
@@ -55,6 +56,31 @@ impl<F: Future<Output = PuffResult<ExitCode>> + 'static> RunnableCommand for Bas
             .take()
             .ok_or(anyhow!("Already ran command."))?;
         Ok(Runnable::new(this_self_func))
+    }
+}
+
+/// Run Puff runtime until terminated
+pub struct WaitForever;
+
+impl WaitForever {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl RunnableCommand for WaitForever {
+    fn cli_parser(&self) -> Command {
+        Command::new("wait_forever").about("Keep the program alive until terminated by a signal.")
+    }
+
+    fn make_runnable(&mut self, _args: &ArgMatches, _context: PuffContext) -> Result<Runnable> {
+        let fut = async {
+            info!("Program will now wait forever.");
+            loop {
+                tokio::time::sleep(Duration::from_secs(u64::MAX)).await;
+            }
+        };
+        Ok(Runnable::new(fut))
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::python::{log_traceback_with_label, wsgi, PythonDispatcher};
+use crate::python::{get_cached_string, log_traceback_with_label, wsgi, PythonDispatcher};
 use anyhow::{anyhow, Error};
 use axum::body::{Body, BoxBody, Bytes, Full, HttpBody};
 use axum::handler::Handler;
@@ -20,7 +20,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::errors::handle_puff_error;
-use crate::python::asgi::handler::get_cached_string;
 use crate::types::Text;
 use tracing::error;
 use wsgi::Sender;

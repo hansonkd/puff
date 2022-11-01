@@ -18,6 +18,8 @@ The deep stack framework.
   * [Puff ♥ Pytest](#puff--pytest)
   * [Puff ♥ AsyncIO](#puff--asyncio)
   * [Puff ♥ Django + GraphQL](#puff--django--graphql)
+  * [Puff ♥ Tasks](#puff--tasks)
+  * [Puff ♥ HTTP](#puff--http)
   * [FAQ](#faq)
       - [Puff Dependencies](#why-a-monolithic-project)
       - [Architecture](#architecture)
@@ -43,6 +45,8 @@ High level overview is that Puff gives Python
 * Rust level Redis Pool
 * Rust level Postgres Pool
 * Websockets
+* HTTP Client
+* Distributed, at-least-once, priority and scheduled task queue
 * semi-compatible with Psycopg2 (hopefully good enough for most of Django)
 * A safe convenient way to drop into rust for maximum performance
 
@@ -531,6 +535,102 @@ class Schema:
     mutation: Mutation
     subscription: Subscription
 
+```
+
+
+## Puff ♥ Tasks
+
+Sometimes you need to execute a function in the future, or you need to execute it, but you don't care about the result right now. For example, you might have a webhook or an email to send.
+
+Puff provides a TaskQueue abstraction as part of the standard library. It is powered by Redis and has the ability to distribute tasks across nodes with priorities, delays and retries. TaskQueues can be persisted (if Redis is configured to persist to disk), so you can shutdown and restart your server without worrying about losing your queued functions.
+
+TaskQueues run in the background of every Puff instance. In order to have a "worker" instance, simply use the `WaitForever` command. This means by default, your HTTP server will also handle processing and running background tasks. This is handy for small projects and scales out well by using `wait_forever` to add more processing power if needed.
+
+A "Task" is simply a python function that takes a JSONable Payload that you care executes, but you don't care when or where. What's a "JSONable" payload? Think simple Python structures (dicts, lists, strings, etc) that can be serialized to JSON. Queues will monitor tasks and retry them if they don't get a result in `timeout_ms`. This means that you might have the same task running multiple times if you don't configure timeouts correctly, so be aware if you are sending HTTP requests or something that might take a while to respond. Tasks should return a "JSONable" result which will be kept for `keep_results_for_ms` seconds.
+
+Only pass in top-level functions into `schedule_function` that can be imported (no lambda's or closures). This function should be accessable on all Puff instances.
+
+Implement "priorities" by utilizing `scheduled_time_unix_ms`. The TaskQueue sorts all tasks by this value and executes the first one up until the current time. So if you schedule `scheduled_time_unix_ms=1`, you can be sure that your Task will be the first to execute on the first availability. Use `scheduled_time_unix_ms=1`, `scheduled_time_unix_ms=2`. `scheduled_time_unix_ms=3`, etc for different task types that are high priority and you want to execute as soon as possible. Just be careful that you don't "starve" the other tasks if you aren't processing these high priority Tasks fast enough. By default Puff schedules new tasks with the current unix time to be "fair" and provide a sense of "FIFO" order. You can also set this value to a unix timestamp in the future to delay execution of a task.
+
+You can have as many tasks running as you want (use `set_task_queue_concurrent_tasks`), but there is a small overhead in terms of monitoring and finding new tasks by increasing this value. The default is `num_cpu x 4`
+
+```python title="/app/src/py_code/task_queue_example.py"
+from puff.task_queue import global_task_queue
+
+task_queue = global_task_queue()
+
+
+def run_main():
+    all_tasks = []
+    for x in range(100):
+        task1 = task_queue.schedule_function(my_awesome_task, {"type": "coroutine", "x": [x]}, timeout_ms=100, keep_results_for_ms=5 * 1000)
+        #  override `scheduled_time_unix_ms` so that async tasks execute with priority over the coroutine tasks.
+        #  Notice that since all async tasks have the same priority, they may be executed out of the order they were scheduled.
+        task2 = task_queue.schedule_function(my_awesome_task_async, {"type": "async", "x": [x]}, scheduled_time_unix_ms=1, timeout_ms=100, keep_results_for_ms=5 * 1000)
+        #  These tasks will keep their order since their priorities as defined by `scheduled_time_unix_ms` match their order.
+        task3 = task_queue.schedule_function(my_awesome_task_async, {"type": "async-ordered", "x": [x]}, scheduled_time_unix_ms=x, timeout_ms=100, keep_results_for_ms=5 * 1000)
+        print(f"Put tasks {task1}, {task2}, {task3} in queue")
+        all_tasks.append(task1)
+        all_tasks.append(task2)
+        all_tasks.append(task3)
+
+    for task in all_tasks:
+        result = task_queue.wait_for_task_result(task, 100, 1000)
+        print(f"{task} returned {result}")
+
+
+def my_awesome_task(payload):
+    print(f"In task {payload}")
+    return payload["x"][0]
+
+
+async def my_awesome_task_async(payload):
+    print(f"In async task {payload}")
+    return payload["x"][0]
+```
+
+Rust
+
+```rust title="/app/src/main.rs" no_run
+use puff_rs::prelude::*;
+use puff_rs::program::commands::{WaitForever, PythonCommand};
+
+fn main() -> ExitCode {
+    let rc = RuntimeConfig::default()
+        .add_python_path("./examples")
+        .set_asyncio(true)
+        .set_task_queue(true);
+
+    Program::new("my_first_app")
+        .about("This is my first app")
+        .runtime_config(rc)
+        .command(PythonCommand::new(
+            "run_main",
+            "task_queue_example.run_main",
+        ))
+        .command(WaitForever)
+        .run()
+}
+```
+
+## Puff ♥ HTTP
+
+Puff has a built in asyncrounous HTTP client that can handle HTTP1 and HTTP2 and reuse connections. It uses hyperjson to encode and decode JSON ultra-fast.
+
+```python
+from puff.http import global_http_client
+
+http_client = global_http_client()
+
+async def do_http_request():
+    this_response = await http_client.post("http://localhost:7777/", json={"my_data": ["some", "json_data"]})
+    return await this_response.json()
+
+
+def do_http_request_greenlet():
+    """greenlets can use same async functions. Puff will automatically handle awaiting and context switching."""
+    this_response = http_client.post("http://localhost:7777/", json={"my_data": ["some", "json_data"]})
+    return this_response.json()
 ```
 
 ## FAQ

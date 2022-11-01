@@ -1,6 +1,6 @@
 [package]
 name = "puff-rs"
-version = "0.1.1"
+version = "0.1.2"
 description = "Puff - Deep Stack Python Runtime and GraphQL library."
 license = "MIT"
 edition = "2021"
@@ -34,7 +34,7 @@ owning_ref = "0.4.1"
 chrono = {version = "0.4.22", features = ["serde"]}
 serde = {version = "1.0.144", features=["derive"]}
 serde_bytes = "0.11.7"
-reqwest = "0.11.11"
+reqwest = {version="0.11.12", features=["json", "cookies", "multipart", "brotli", "gzip"]}
 tracing-subscriber = "0.3.15"
 percent-encoding = "2.2.0"
 pyo3 = "0.16.6"
@@ -51,7 +51,7 @@ async-trait = "0.1.57"
 tokio-stream = "0.1.10"
 base64 = "0.13.0"
 socket2 = "0.4.4"
-
+failure = "0.1.8"
 
 [[example]]
 name = "web"
@@ -77,6 +77,10 @@ path = "examples/websockets.rs"
 [[example]]
 name = "asgi"
 path = "examples/asgi.rs"
+
+[[example]]
+name = "task_queue"
+path = "examples/task_queue.rs"
 
 
 #[profile.release]

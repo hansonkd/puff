@@ -1,5 +1,9 @@
+use std::collections::HashMap;
+
+use axum::{extract, Json};
 use puff_rs::prelude::*;
 use puff_rs::program::commands::ASGIServerCommand;
+use serde_json::Map;
 
 // Use pyo3 to generate Python compatible Rust classes.
 #[pyclass]
@@ -17,9 +21,8 @@ impl MyPythonState {
     }
 }
 
-
 fn main() -> ExitCode {
-    let app = Router::new().get("/", root);
+    let app = Router::new().get("/", root).post("/", root_post);
     let rc = RuntimeConfig::default()
         .add_python_path("./examples")
         .set_asyncio(true)
@@ -38,4 +41,18 @@ fn main() -> ExitCode {
 // Basic handler that responds with a static string
 async fn root() -> Text {
     "Ok".to_text()
+}
+
+// Basic handler that transforms json sent to it.
+async fn root_post(
+    extract::Json(payload): extract::Json<HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let mut ret_map = Map::new();
+    for (k, v) in payload {
+        ret_map.insert(
+            format!("Key was {}", k),
+            format!("Value was {}", v.to_uppercase().into()),
+        );
+    }
+    Json(serde_json::Value::Object(ret_map))
 }
