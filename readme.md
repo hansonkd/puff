@@ -3,7 +3,7 @@ The deep stack framework.
 
 [![Crates.io][crates-badge]][crates-url]
 [![MIT licensed][mit-badge]][mit-url]
-[![Documentation](https://docs.rs/puff_rs/badge.svg)](https://docs.rs/puff_rs)
+[![Documentation](https://docs.rs/puff-rs/badge.svg)](https://docs.rs/puff_rs)
 
 [crates-badge]: https://img.shields.io/crates/v/puff_rs.svg
 [crates-url]: https://crates.io/crates/puff_rs
