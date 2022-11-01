@@ -3,7 +3,7 @@ from puff.task_queue import global_task_queue
 task_queue = global_task_queue()
 
 
-async def run_main():
+def run_main():
     all_tasks = []
     for x in range(100):
         task1 = task_queue.schedule_function(
