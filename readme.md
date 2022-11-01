@@ -545,7 +545,7 @@ Sometimes you need to execute a function in the future, or you need to execute i
 
 Puff provides a distributed queue abstraction as part of the standard library. It is powered by Redis and has the ability to distribute tasks across nodes with priorities, delays and retries. Jobs submitted to the queue can be persisted (additionally so if Redis is configured to persist to disk), so you can shut down and restart your server without worrying about losing your queued functions.
 
-The distributed queue runs in the background of every Puff instance. In order to have a worker instance, use the `WaitForever` command. By default, your HTTP server will also handle processing and running background tasks which is handy for small projects and scales out well by using `wait_forever` to add more processing power if needed.
+The distributed queue runs in the background of every Puff instance. In order to have a worker instance, use the `WaitForever` command. Your HTTP server can also handle distributing, processing and running background tasks which is handy for small projects and scales out well by using `wait_forever` to add more processing power if needed.
 
 A task is a python function that takes a JSONable payload that you care executes, but you don't care exactly when or where. JSONable types are simple Python structures (dicts, lists, strings, etc) that can be serialized to JSON. Queues will monitor tasks and retry them if they don't get a result in `timeout_ms`. Beware that you might have the same task running multiple times if you don't configure timeouts correctly, so if you are sending HTTP requests or other task that might take a while to respond configure timeouts correctly. Tasks should return a JSONable result which will be kept for `keep_results_for_ms` seconds.
 
@@ -564,12 +564,13 @@ task_queue = global_task_queue()
 def run_main():
     all_tasks = []
     for x in range(100):
+        #  Schedule some tasks on any coroutine thread of any Puff instance connected through Redis.
         task1 = task_queue.schedule_function(my_awesome_task, {"type": "coroutine", "x": [x]}, timeout_ms=100, keep_results_for_ms=5 * 1000)
-        #  override `scheduled_time_unix_ms` so that async tasks execute with priority over the coroutine tasks.
-        #  Notice that since all async tasks have the same priority, they may be executed out of the order they were scheduled.
-        task2 = task_queue.schedule_function(my_awesome_task_async, {"type": "async", "x": [x]}, scheduled_time_unix_ms=1, timeout_ms=100, keep_results_for_ms=5 * 1000)
-        #  These tasks will keep their order since their priorities as defined by `scheduled_time_unix_ms` match their order.
-        task3 = task_queue.schedule_function(my_awesome_task_async, {"type": "async-ordered", "x": [x]}, scheduled_time_unix_ms=x, timeout_ms=100, keep_results_for_ms=5 * 1000)
+        #  Override `scheduled_time_unix_ms` so that async tasks execute with priority over the coroutine tasks.
+        #  Notice that since all of these tasks have the same priority, they may be executed out of the order they were scheduled.
+        task2 = task_queue.schedule_function(my_awesome_task_async, {"type": "async", "x": [x]}, scheduled_time_unix_ms=1)
+        #  These tasks will keep their order since their priorities as defined by `scheduled_time_unix_ms` match the order scheduled.
+        task3 = task_queue.schedule_function(my_awesome_task_async, {"type": "async-ordered", "x": [x]}, scheduled_time_unix_ms=x)
         print(f"Put tasks {task1}, {task2}, {task3} in queue")
         all_tasks.append(task1)
         all_tasks.append(task2)
@@ -616,7 +617,7 @@ fn main() -> ExitCode {
 
 ## Puff ♥ HTTP
 
-Puff has a built-in asynchronous HTTP client based on reqwests that can handle HTTP2 (served by the Puff WSGI/ASGI integrations) and reuse connections. It uses rust to encode and decode JSON ultra-fast.
+Puff has a built-in asynchronous HTTP client based on reqwests that can handle HTTP2 (also served by the Puff WSGI/ASGI integrations) and reuse connections. It uses rust to encode and decode JSON ultra-fast.
 
 ```python
 from puff.http import global_http_client
