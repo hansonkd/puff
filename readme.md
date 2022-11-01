@@ -19,7 +19,7 @@ The deep stack framework.
   * [Puff ♥ Pytest](#puff--pytest)
   * [Puff ♥ AsyncIO](#puff--asyncio)
   * [Puff ♥ Django + GraphQL](#puff--django--graphql)
-  * [Puff ♥ Tasks](#puff--tasks)
+  * [Puff ♥ Distributed Tasks](#puff--distributed-tasks)
   * [Puff ♥ HTTP](#puff--http)
   * [FAQ](#faq)
       - [Puff Dependencies](#why-a-monolithic-project)
@@ -539,21 +539,21 @@ class Schema:
 ```
 
 
-## Puff ♥ Tasks
+## Puff ♥ Distributed Tasks
 
 Sometimes you need to execute a function in the future, or you need to execute it, but you don't care about the result right now. For example, you might have a webhook or an email to send.
 
-Puff provides a TaskQueue abstraction as part of the standard library. It is powered by Redis and has the ability to distribute tasks across nodes with priorities, delays and retries. TaskQueues can be persisted (if Redis is configured to persist to disk), so you can shutdown and restart your server without worrying about losing your queued functions.
+Puff provides a distributed queue abstraction as part of the standard library. It is powered by Redis and has the ability to distribute tasks across nodes with priorities, delays and retries. Jobs submitted to the queue can be persisted (additionally so if Redis is configured to persist to disk), so you can shut down and restart your server without worrying about losing your queued functions.
 
-TaskQueues run in the background of every Puff instance. In order to have a "worker" instance, simply use the `WaitForever` command. This means by default, your HTTP server will also handle processing and running background tasks. This is handy for small projects and scales out well by using `wait_forever` to add more processing power if needed.
+The distributed queue runs in the background of every Puff instance. In order to have a worker instance, use the `WaitForever` command. By default, your HTTP server will also handle processing and running background tasks which is handy for small projects and scales out well by using `wait_forever` to add more processing power if needed.
 
-A "Task" is simply a python function that takes a JSONable Payload that you care executes, but you don't care when or where. What's a "JSONable" payload? Think simple Python structures (dicts, lists, strings, etc) that can be serialized to JSON. Queues will monitor tasks and retry them if they don't get a result in `timeout_ms`. This means that you might have the same task running multiple times if you don't configure timeouts correctly, so be aware if you are sending HTTP requests or something that might take a while to respond. Tasks should return a "JSONable" result which will be kept for `keep_results_for_ms` seconds.
+A task is a python function that takes a JSONable payload that you care executes, but you don't care exactly when or where. JSONable types are simple Python structures (dicts, lists, strings, etc) that can be serialized to JSON. Queues will monitor tasks and retry them if they don't get a result in `timeout_ms`. Beware that you might have the same task running multiple times if you don't configure timeouts correctly, so if you are sending HTTP requests or other task that might take a while to respond configure timeouts correctly. Tasks should return a JSONable result which will be kept for `keep_results_for_ms` seconds.
 
 Only pass in top-level functions into `schedule_function` that can be imported (no lambda's or closures). This function should be accessible on all Puff instances.
 
-Implement "priorities" by utilizing `scheduled_time_unix_ms`. The TaskQueue sorts all tasks by this value and executes the first one up until the current time. So if you schedule `scheduled_time_unix_ms=1`, you can be sure that your Task will be the first to execute on the first availability. Use `scheduled_time_unix_ms=1`, `scheduled_time_unix_ms=2`. `scheduled_time_unix_ms=3`, etc for different task types that are high priority and you want to execute as soon as possible. Just be careful that you don't "starve" the other tasks if you aren't processing these high priority Tasks fast enough. By default Puff schedules new tasks with the current unix time to be "fair" and provide a sense of "FIFO" order. You can also set this value to a unix timestamp in the future to delay execution of a task.
+Implement priorities by utilizing `scheduled_time_unix_ms`. The worker sorts all tasks by this value and executes the first one up until the current time. So if you schedule `scheduled_time_unix_ms=1`, that function will be the next to execute on the first availability. Use `scheduled_time_unix_ms=1`, `scheduled_time_unix_ms=2`. `scheduled_time_unix_ms=3`, etc for different task types that are high priority. Be careful that you don't starve the other tasks if you aren't processing these high priority tasks fast enough. By default, Puff schedules new tasks with the current unix time to be "fair" and provide a sense of "FIFO" order. You can also set this value to a unix timestamp in the future to delay execution of a task.
 
-You can have as many tasks running as you want (use `set_task_queue_concurrent_tasks`), but there is a small overhead in terms of monitoring and finding new tasks by increasing this value. The default is `num_cpu x 4`
+You can have as many tasks running as you want (use `set_task_queue_concurrent_tasks`), however there is a small overhead in terms of monitoring and finding new tasks by increasing this value. The default is `num_cpu x 4`
 
 ```python title="/app/src/py_code/task_queue_example.py"
 from puff.task_queue import global_task_queue
@@ -616,12 +616,13 @@ fn main() -> ExitCode {
 
 ## Puff ♥ HTTP
 
-Puff has a built in asyncrounous HTTP client that can handle HTTP1 and HTTP2 and reuse connections. It uses rust to encode and decode JSON ultra-fast.
+Puff has a built-in asynchronous HTTP client based on reqwests that can handle HTTP2 (served by the Puff WSGI/ASGI integrations) and reuse connections. It uses rust to encode and decode JSON ultra-fast.
 
 ```python
 from puff.http import global_http_client
 
 http_client = global_http_client()
+
 
 async def do_http_request():
     this_response = await http_client.post("http://localhost:7777/", json={"my_data": ["some", "json_data"]})
@@ -629,9 +630,19 @@ async def do_http_request():
 
 
 def do_http_request_greenlet():
-    """greenlets can use same async functions. Puff will automatically handle awaiting and context switching."""
+    """greenlets can use the same async functions. Puff will automatically handle awaiting and context switching."""
     this_response = http_client.post("http://localhost:7777/", json={"my_data": ["some", "json_data"]})
     return this_response.json()
+```
+
+You can set the HTTP client options through RuntimeConfig. If your program is only talking to other Puff instances or HTTP2 services, it can make sense to turn on HTTP2 only. You can also configure user-agents as well as many other HTTP options through this method.
+
+```rust
+use reqwest::ClientBuilder;
+
+// Force HTTP2
+RuntimeConfig::default()
+    .set_http_client_builder_fn(|| ClientBuilder::new().http2_prior_knowledge());
 ```
 
 ## FAQ
