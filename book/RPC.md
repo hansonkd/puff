@@ -67,7 +67,7 @@ async def my_awesome_task_async(payload):
     return payload["hello"]
 ```
 
-Now run `poetry run cargo run wait_forever` in one or more terminals and `poetry run cargo run queue_task` in another terminal repeatedly. Your tasks should be distributed across all listening nodes.
+Now run `poetry run run_cargo wait_forever` in one or more terminals and `poetry run run_cargo queue_task` in another terminal repeatedly. Your tasks should be distributed across all listening nodes.
 
 
 # Step 2: Improving responsiveness
