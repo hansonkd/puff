@@ -29,8 +29,8 @@ The deep stack framework.
       - [Deep Stack Teams](#deep-stack-teams)
       - [Benefits of Deep Stack](#benefits-of-deep-stack)
   * Links
-      - [CHANGELOG](https://github.com/mozilla/learning.mozilla.org/blob/master/CHANGELOG.md)
-      - [Building RPC with Puff](https://github.com/mozilla/learning.mozilla.org/blob/master/book/RPC.md)
+      - [CHANGELOG](https://github.com/hansonkd/puff/blob/master/CHANGELOG.md)
+      - [Building RPC with Puff](https://github.com/hansonkd/puff/blob/master/book/RPC.md)
 
 # What is Puff?
 
@@ -557,6 +557,8 @@ Only pass in top-level functions into `schedule_function` that can be imported (
 Implement priorities by utilizing `scheduled_time_unix_ms`. The worker sorts all tasks by this value and executes the first one up until the current time. So if you schedule `scheduled_time_unix_ms=1`, that function will be the next to execute on the first availability. Use `scheduled_time_unix_ms=1`, `scheduled_time_unix_ms=2`. `scheduled_time_unix_ms=3`, etc for different task types that are high priority. Be careful that you don't starve the other tasks if you aren't processing these high priority tasks fast enough. By default, Puff schedules new tasks with the current unix time to be "fair" and provide a sense of "FIFO" order. You can also set this value to a unix timestamp in the future to delay execution of a task.
 
 You can have as many tasks running as you want (use `set_task_queue_concurrent_tasks`), however there is a small overhead in terms of monitoring and finding new tasks by increasing this value. The default is `num_cpu x 4`
+
+See additional design patterns in [Building RPC with Puff](https://github.com/hansonkd/puff/blob/master/book/RPC.md).
 
 ```python title="/app/src/py_code/task_queue_example.py"
 from puff.task_queue import global_task_queue
