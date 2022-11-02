@@ -1,3 +1,7 @@
+# 0.1.5
+
+* Improve Startup coordination of services.
+
 # 0.1.4
 
 * Improve Redis compatibility
