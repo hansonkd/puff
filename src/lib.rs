@@ -15,4 +15,4 @@ pub mod tasks;
 pub mod types;
 pub mod web;
 
-pub use {axum, tracing, reqwest};
+pub use {axum, reqwest, tracing};

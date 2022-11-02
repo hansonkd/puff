@@ -29,7 +29,7 @@ pub type InstanceId = uuid::Uuid;
 enum PubSubEvent {
     Sub(Text, ConnectionId, UnboundedSender<PubSubMessage>),
     UnSub(Text, ConnectionId),
-    Drop(ConnectionId)
+    Drop(ConnectionId),
 }
 
 /// A message received from a pubsub channel.
@@ -161,9 +161,13 @@ impl PubSubClient {
     pub fn start_supervised_listener(&self) {
         let task_name = self.task_name.clone();
         let inner_client = self.clone();
+
         with_puff_context(move |ctx| {
+            let (ready_s, mut ready_r) = mpsc::channel::<()>(1);
+
             supervised_task(ctx, task_name, move || {
                 let inner_client = inner_client.clone();
+                let ready_s = ready_s.clone();
                 let fut = async move {
                     let client = inner_client.client.dedicated_connection().await?;
                     let mut pubsub = client.into_pubsub();
@@ -185,6 +189,8 @@ impl PubSubClient {
                         *s_mutex = Some(events);
                     }
 
+                    ready_s.try_send(()).unwrap_or_default();
+
                     loop {
                         let mut on_message = pubsub.on_message();
                         tokio::select! {
@@ -205,7 +211,9 @@ impl PubSubClient {
                     Ok(())
                 };
                 fut.boxed()
-            })
+            });
+
+            ready_r.blocking_recv().expect("Pub sub was not ready");
         })
     }
 
@@ -282,7 +290,6 @@ pub struct PubSubConnection {
     sender: UnboundedSender<PubSubMessage>,
     events_sender: Arc<Mutex<Option<Sender<PubSubEvent>>>>,
 }
-
 
 impl Drop for PubSubConnection {
     fn drop(&mut self) {

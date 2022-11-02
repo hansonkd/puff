@@ -1,7 +1,6 @@
 use puff_rs::prelude::*;
 use puff_rs::program::commands::{PythonCommand, WaitForever};
 
-
 fn main() -> ExitCode {
     let rc = RuntimeConfig::default()
         .add_python_path("./examples")

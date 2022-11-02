@@ -1,10 +1,10 @@
 use crate::context::with_puff_context;
 use crate::databases::pubsub::{ConnectionId, PubSubClient, PubSubConnection, PubSubMessage};
 use crate::errors::to_py_error;
+use crate::json::{dump_vec, run_load_bytes};
 use crate::prelude::run_python_async;
 use crate::python::async_python::handle_python_return;
 use crate::types::{Bytes, Text};
-use crate::json::{dump_vec, run_load_bytes};
 
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
@@ -84,28 +84,27 @@ impl PythonPubSubClient {
     }
 
     fn publish_json_as(
-            &self,
-            py: Python,
-            ret_fun: PyObject,
-            connection_id: &PyString,
-            channel: Text,
-            message: PyObject,
-            ) -> PyResult<()> {
+        &self,
+        py: Python,
+        ret_fun: PyObject,
+        connection_id: &PyString,
+        channel: Text,
+        message: PyObject,
+    ) -> PyResult<()> {
         let connection_id_bytes = ConnectionId::from_str(connection_id.to_str()?)
-        .map_err(|_e| PyTypeError::new_err("Invalid Connection ID"))?;
+            .map_err(|_e| PyTypeError::new_err("Invalid Connection ID"))?;
         let vec = dump_vec(py, message, None)?;
 
         let bytes = Bytes::from_vec(vec);
         let client = self.client.clone();
         run_python_async(ret_fun, async move {
             client
-            .publish_as(connection_id_bytes, channel, bytes)
-            .await?;
+                .publish_as(connection_id_bytes, channel, bytes)
+                .await?;
             Ok(true)
         });
         Ok(())
     }
-
 
     fn connection_with_id(&self, py: Python, connection_id: &PyString) -> PyResult<PyObject> {
         let connection_id_bytes = ConnectionId::from_str(connection_id.to_str()?)
@@ -139,7 +138,11 @@ fn start_pubsub_listener_loop(
             .await
         }
     });
-    Ok(PythonPubSubConnection { connection: Arc::new(connection), sender }.into_py(py))
+    Ok(PythonPubSubConnection {
+        connection: Arc::new(connection),
+        sender,
+    }
+    .into_py(py))
 }
 
 #[pyclass]
@@ -170,7 +173,6 @@ impl PyPubSubMessage {
     fn get_from_connection_id(&self) -> String {
         self.message.from().to_string()
     }
-
 
     fn json(&self, py: Python) -> PyResult<PyObject> {
         let b = self.message.body();
@@ -218,7 +220,13 @@ impl PythonPubSubConnection {
         })
     }
 
-    fn publish_json(&self, py: Python, ret_fun: PyObject, channel: Text, message: PyObject) -> PyResult<()> {
+    fn publish_json(
+        &self,
+        py: Python,
+        ret_fun: PyObject,
+        channel: Text,
+        message: PyObject,
+    ) -> PyResult<()> {
         let conn = self.connection.clone();
         let vec = dump_vec(py, message, None)?;
         run_python_async(ret_fun, async move {

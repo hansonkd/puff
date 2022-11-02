@@ -7,6 +7,7 @@ use clap::{ArgMatches, Command};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::process::ExitCode;
+use tracing::info;
 
 /// The PythonCommand.
 ///
@@ -46,8 +47,9 @@ impl RunnableCommand for PythonCommand {
                 .extract::<bool>()?;
             PyResult::Ok((f, is_coroutine))
         })?;
-
+        let fp = self.function_path.clone();
         let fut = async move {
+            info!("Running {}", fp);
             let res = if is_coroutine {
                 Python::with_gil(|py| {
                     context.python_dispatcher().dispatch_asyncio(

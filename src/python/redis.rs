@@ -3,11 +3,11 @@ use std::num::NonZeroUsize;
 use crate::databases::redis::{with_redis, RedisClient};
 
 use crate::python::async_python::run_python_async;
-use bb8_redis::redis::{Cmd, FromRedisValue, RedisResult, Value, RedisError, ErrorKind};
+use bb8_redis::redis::{Cmd, ErrorKind, FromRedisValue, RedisError, RedisResult, Value};
 
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyString, PyList};
+use pyo3::types::{PyBytes, PyList, PyString};
 
 #[pyclass]
 pub struct RedisGlobal;
@@ -48,14 +48,16 @@ struct PyRedisBytes(Py<PyBytes>);
 impl FromRedisValue for PyRedisBytes {
     fn from_redis_value(v: &Value) -> RedisResult<Self> {
         match v {
-            Value::Data(v) => Ok(Python::with_gil(|py| PyRedisBytes(PyBytes::new(py, v.as_slice()).into_py(py)))),
+            Value::Data(v) => Ok(Python::with_gil(|py| {
+                PyRedisBytes(PyBytes::new(py, v.as_slice()).into_py(py))
+            })),
             val => Err(RedisError::from((
-                    ErrorKind::TypeError,
-            "Response was of incompatible type",
-            format!(
+                ErrorKind::TypeError,
+                "Response was of incompatible type",
+                format!(
                     "Response type not bytes compatible. (response was {:?})",
-            val
-            ),
+                    val
+                ),
             ))),
         }
     }
@@ -66,7 +68,6 @@ impl ToPyObject for PyRedisBytes {
         self.0.to_object(py)
     }
 }
-
 
 #[pyclass]
 pub struct PythonRedis(RedisClient);
@@ -109,7 +110,10 @@ fn py_obj_to_bytes(val: &PyAny) -> PyResult<&[u8]> {
     } else if let Ok(r) = val.downcast::<PyBytes>() {
         Ok(r.as_bytes())
     } else {
-        Err(PyTypeError::new_err(format!("Expected str or bytes, got {}", val.to_string())))
+        Err(PyTypeError::new_err(format!(
+            "Expected str or bytes, got {}",
+            val.to_string()
+        )))
     }
 }
 
@@ -136,14 +140,24 @@ impl PythonRedis {
                     command.arg("NX").arg("EX").arg(seconds);
                     self.run_command::<()>(py, return_fun, command)
                 }
-                None => self.run_command::<()>(py, return_fun, Cmd::set_nx(py_obj_to_bytes(key)?, py_obj_to_bytes(val)?)),
+                None => self.run_command::<()>(
+                    py,
+                    return_fun,
+                    Cmd::set_nx(py_obj_to_bytes(key)?, py_obj_to_bytes(val)?),
+                ),
             }
         } else {
             match ex {
-                Some(seconds) => {
-                    self.run_command::<()>(py, return_fun, Cmd::set_ex(py_obj_to_bytes(key)?, py_obj_to_bytes(val)?, seconds))
-                }
-                None => self.run_command::<()>(py, return_fun, Cmd::set(py_obj_to_bytes(key)?, py_obj_to_bytes(val)?)),
+                Some(seconds) => self.run_command::<()>(
+                    py,
+                    return_fun,
+                    Cmd::set_ex(py_obj_to_bytes(key)?, py_obj_to_bytes(val)?, seconds),
+                ),
+                None => self.run_command::<()>(
+                    py,
+                    return_fun,
+                    Cmd::set(py_obj_to_bytes(key)?, py_obj_to_bytes(val)?),
+                ),
             }
         }
     }
@@ -166,8 +180,12 @@ impl PythonRedis {
         let mut vec = Vec::new();
         for row in vals.iter()? {
             let mut it = row?.iter()?;
-            let key = it.next().ok_or(PyTypeError::new_err("Expected two elements in mset element"))??;
-            let value = it.next().ok_or(PyTypeError::new_err("Expected two elements in mset element"))??;
+            let key = it.next().ok_or(PyTypeError::new_err(
+                "Expected two elements in mset element",
+            ))??;
+            let value = it.next().ok_or(PyTypeError::new_err(
+                "Expected two elements in mset element",
+            ))??;
             vec.push((py_obj_to_bytes(key)?, py_obj_to_bytes(value)?));
         }
         let nx = nx.unwrap_or_default();
@@ -198,40 +216,128 @@ impl PythonRedis {
         self.run_command::<bool>(py, return_fun, Cmd::del(py_obj_to_bytes(key)?))
     }
 
-    fn incr(&self, py: Python, return_fun: PyObject, key: &PyAny, delta: i64) -> PyResult<PyObject> {
+    fn incr(
+        &self,
+        py: Python,
+        return_fun: PyObject,
+        key: &PyAny,
+        delta: i64,
+    ) -> PyResult<PyObject> {
         self.run_command::<i64>(py, return_fun, Cmd::incr(py_obj_to_bytes(key)?, delta))
     }
 
-    fn decr(&self, py: Python, return_fun: PyObject, key: &PyAny, delta: i64) -> PyResult<PyObject> {
+    fn decr(
+        &self,
+        py: Python,
+        return_fun: PyObject,
+        key: &PyAny,
+        delta: i64,
+    ) -> PyResult<PyObject> {
         self.run_command::<i64>(py, return_fun, Cmd::decr(py_obj_to_bytes(key)?, delta))
     }
 
-    fn blpop(&self, py: Python, return_fun: PyObject, key: &PyAny, timeout: usize) -> PyResult<PyObject> {
-        self.run_command::<Option<(PyRedisBytes, PyRedisBytes)>>(py, return_fun, Cmd::blpop(py_obj_to_bytes(key)?, timeout))
+    fn blpop(
+        &self,
+        py: Python,
+        return_fun: PyObject,
+        key: &PyAny,
+        timeout: usize,
+    ) -> PyResult<PyObject> {
+        self.run_command::<Option<(PyRedisBytes, PyRedisBytes)>>(
+            py,
+            return_fun,
+            Cmd::blpop(py_obj_to_bytes(key)?, timeout),
+        )
     }
 
-    fn brpop(&self, py: Python, return_fun: PyObject, key: &PyAny, timeout: usize) -> PyResult<PyObject> {
-        self.run_command::<Option<(PyRedisBytes, PyRedisBytes)>>(py, return_fun, Cmd::brpop(py_obj_to_bytes(key)?, timeout))
+    fn brpop(
+        &self,
+        py: Python,
+        return_fun: PyObject,
+        key: &PyAny,
+        timeout: usize,
+    ) -> PyResult<PyObject> {
+        self.run_command::<Option<(PyRedisBytes, PyRedisBytes)>>(
+            py,
+            return_fun,
+            Cmd::brpop(py_obj_to_bytes(key)?, timeout),
+        )
     }
 
-    fn rpop(&self, py: Python, return_fun: PyObject, key: &PyAny, count: Option<usize>) -> PyResult<PyObject> {
-        self.run_command::<Vec<PyRedisBytes>>(py, return_fun, Cmd::rpop(py_obj_to_bytes(key)?, count.map(NonZeroUsize::new).unwrap_or_default()))
+    fn rpop(
+        &self,
+        py: Python,
+        return_fun: PyObject,
+        key: &PyAny,
+        count: Option<usize>,
+    ) -> PyResult<PyObject> {
+        self.run_command::<Vec<PyRedisBytes>>(
+            py,
+            return_fun,
+            Cmd::rpop(
+                py_obj_to_bytes(key)?,
+                count.map(NonZeroUsize::new).unwrap_or_default(),
+            ),
+        )
     }
 
-    fn lpop(&self, py: Python, return_fun: PyObject, key: &PyAny, count: Option<usize>) -> PyResult<PyObject> {
-        self.run_command::<Vec<PyRedisBytes>>(py, return_fun, Cmd::lpop(py_obj_to_bytes(key)?, count.map(NonZeroUsize::new).unwrap_or_default()))
+    fn lpop(
+        &self,
+        py: Python,
+        return_fun: PyObject,
+        key: &PyAny,
+        count: Option<usize>,
+    ) -> PyResult<PyObject> {
+        self.run_command::<Vec<PyRedisBytes>>(
+            py,
+            return_fun,
+            Cmd::lpop(
+                py_obj_to_bytes(key)?,
+                count.map(NonZeroUsize::new).unwrap_or_default(),
+            ),
+        )
     }
 
-    fn rpush(&self, py: Python, return_fun: PyObject, key: &PyAny, value: &PyAny) -> PyResult<PyObject> {
-        self.run_command::<i64>(py, return_fun, Cmd::rpush(py_obj_to_bytes(key)?, py_obj_to_bytes(value)?))
+    fn rpush(
+        &self,
+        py: Python,
+        return_fun: PyObject,
+        key: &PyAny,
+        value: &PyAny,
+    ) -> PyResult<PyObject> {
+        self.run_command::<i64>(
+            py,
+            return_fun,
+            Cmd::rpush(py_obj_to_bytes(key)?, py_obj_to_bytes(value)?),
+        )
     }
 
-    fn lpush(&self, py: Python, return_fun: PyObject, key: &PyAny, value: &PyAny) -> PyResult<PyObject> {
-        self.run_command::<i64>(py, return_fun, Cmd::lpush(py_obj_to_bytes(key)?, py_obj_to_bytes(value)?))
+    fn lpush(
+        &self,
+        py: Python,
+        return_fun: PyObject,
+        key: &PyAny,
+        value: &PyAny,
+    ) -> PyResult<PyObject> {
+        self.run_command::<i64>(
+            py,
+            return_fun,
+            Cmd::lpush(py_obj_to_bytes(key)?, py_obj_to_bytes(value)?),
+        )
     }
 
-    fn rpoplpush(&self, py: Python, return_fun: PyObject, key: &PyAny, destination: &PyAny) -> PyResult<PyObject> {
-        self.run_command::<PyRedisBytes>(py, return_fun, Cmd::rpoplpush(py_obj_to_bytes(key)?, py_obj_to_bytes(destination)?))
+    fn rpoplpush(
+        &self,
+        py: Python,
+        return_fun: PyObject,
+        key: &PyAny,
+        destination: &PyAny,
+    ) -> PyResult<PyObject> {
+        self.run_command::<PyRedisBytes>(
+            py,
+            return_fun,
+            Cmd::rpoplpush(py_obj_to_bytes(key)?, py_obj_to_bytes(destination)?),
+        )
     }
 
     fn flushdb(&self, py: Python, return_fun: PyObject) -> PyResult<PyObject> {

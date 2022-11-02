@@ -82,17 +82,21 @@ impl PyHttpClient {
             for (k, v) in f.iter() {
                 let part_name = k.str()?.to_str()?.to_owned();
                 if let Ok(text_value) = v.downcast::<PyString>() {
-                    let part = Part::text(text_value.to_str()?.to_owned()).file_name(part_name.clone());
+                    let part =
+                        Part::text(text_value.to_str()?.to_owned()).file_name(part_name.clone());
                     mp = mp.part(part_name, part);
                 } else if let Ok(text_value) = v.downcast::<PyBytes>() {
-                    let part = Part::bytes(text_value.as_bytes().to_vec()).file_name(part_name.clone());
+                    let part =
+                        Part::bytes(text_value.as_bytes().to_vec()).file_name(part_name.clone());
                     mp = mp.part(part_name, part);
                 } else if let Ok(v) = v.call_method0("read") {
                     if let Ok(text_value) = v.downcast::<PyString>() {
-                        let part = Part::text(text_value.to_str()?.to_owned()).file_name(part_name.clone());
+                        let part = Part::text(text_value.to_str()?.to_owned())
+                            .file_name(part_name.clone());
                         mp = mp.part(part_name, part);
                     } else if let Ok(text_value) = v.downcast::<PyBytes>() {
-                        let part = Part::bytes(text_value.as_bytes().to_vec()).file_name(part_name.clone());
+                        let part = Part::bytes(text_value.as_bytes().to_vec())
+                            .file_name(part_name.clone());
                         mp = mp.part(part_name, part);
                     }
                 } else if let Ok(tuple_value) = v.downcast::<PyTuple>() {

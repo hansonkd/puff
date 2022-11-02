@@ -52,6 +52,10 @@ pub fn set_puff_context_waiting(context: Arc<Mutex<Option<PuffContext>>>) {
     PUFF_CONTEXT_WAITING.with(|d| *d.borrow_mut() = Some(context.clone()));
 }
 
+pub fn is_puff_context_ready() -> bool {
+    PUFF_CONTEXT_WAITING.with(|d| d.borrow().is_some())
+}
+
 pub fn with_puff_context<F: FnOnce(PuffContext) -> R, R>(f: F) -> R {
     let maybe_context = PUFF_CONTEXT.with(|d| d.borrow().clone());
 
@@ -202,7 +206,7 @@ pub fn supervised_task<F: Fn() -> BoxFuture<'static, PuffResult<()>> + Send + Sy
     let inner_handle = handle.clone();
     handle.spawn(async move {
         loop {
-            info!("Starting task {_task_name}");
+            info!("Supervising {_task_name}");
             let result = inner_handle.spawn(f()).await;
             match result {
                 Ok(r) => {

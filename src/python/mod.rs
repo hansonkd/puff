@@ -24,7 +24,7 @@ use crate::python::graphql::GlobalGraphQL;
 use crate::python::postgres::{add_pg_puff_exceptions, PostgresGlobal};
 use tracing::log::info;
 
-use crate::json::{dump, dumps, load, loads, loadb, dumpb};
+use crate::json::{dump, dumpb, dumps, load, loadb, loads};
 use crate::python::pubsub::GlobalPubSub;
 pub use pyo3::prelude::*;
 
@@ -89,7 +89,6 @@ pub fn get_cached_object<'a>(py: Python<'a>, k: Text) -> PyResult<PyObject> {
     })
 }
 
-
 #[pyclass]
 struct PyDispatchAsyncIO;
 
@@ -99,7 +98,7 @@ impl PyDispatchAsyncIO {
         let dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
         run_python_async(return_func, async move {
             Ok(
-                    Python::with_gil(|py| dispatcher.dispatch_asyncio(py, f, (), PyDict::new(py)))?
+                Python::with_gil(|py| dispatcher.dispatch_asyncio(py, f, (), PyDict::new(py)))?
                     .await??,
             )
         });
@@ -148,7 +147,6 @@ impl PySleepMs {
         })
     }
 }
-
 
 #[pyclass]
 struct PyDispatchAsyncCoro;
