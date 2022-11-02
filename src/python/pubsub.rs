@@ -195,6 +195,11 @@ impl PythonPubSubConnection {
         run_python_async(ret_fun, async move { Ok(conn.subscribe(channel).await) })
     }
 
+    fn unsubscribe(&self, ret_fun: PyObject, channel: Text) {
+        let conn = self.connection.clone();
+        run_python_async(ret_fun, async move { Ok(conn.unsubscribe(channel).await) })
+    }
+
     fn publish(&self, ret_fun: PyObject, channel: Text, message: Text) {
         let conn = self.connection.clone();
         let bytes = Bytes::copy_from_slice(message.as_bytes());

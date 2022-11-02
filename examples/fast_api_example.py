@@ -4,8 +4,6 @@ from puff import global_state, wrap_async
 
 app = FastAPI()
 
-state = global_state()
-
 
 @app.get("/fast-api")
 async def read_root():
@@ -15,6 +13,6 @@ async def read_root():
 @app.get("/fast-api-async")
 async def read_root():
     result = await wrap_async(
-        lambda r: state.hello_from_rust_async(r, "hello from asyncio")
+        lambda r: global_state.hello_from_rust_async(r, "hello from asyncio")
     )
     return {"Hello": "World", "from": "Fast API", "rust_value": result}

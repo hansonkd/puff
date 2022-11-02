@@ -28,7 +28,10 @@ The deep stack framework.
       - [What is a Deep Stack Framework?](#what-is-a-deep-stack-framework)
       - [Deep Stack Teams](#deep-stack-teams)
       - [Benefits of Deep Stack](#benefits-of-deep-stack)
-      
+  * Links
+      - [CHANGELOG](https://github.com/mozilla/learning.mozilla.org/blob/master/CHANGELOG.md)
+      - [Building RPC with Puff](https://github.com/mozilla/learning.mozilla.org/blob/master/book/RPC.md)
+
 # What is Puff?
 
 Puff is a batteries included "deep stack" for Python. It's an experiment to minimize the barrier between Python and Rust to unlock the full potential of high level languages. Build your own Runtime using standard CPython and extend it with Rust. Imagine if GraphQL, Postgres, Redis and PubSub were part of the standard library. That's Puff.
@@ -83,17 +86,17 @@ cd my_puff_proj
 cargo add puff-rs
 poetry new my_puff_proj_py
 cd my_puff_proj_py
-poetry install puff-py
+poetry add puff-py
 ```
 
 And add the puff plugin for poetry.
 
 ```toml title="/app/my_puff_proj/my_puff_proj_py/pyproject.toml"
 [tool.poetry.scripts]
-cargo = "puff.poetry_plugins:cargo"
+run_cargo = "puff.poetry_plugins:run_cargo"
 ```
 
-Now from `my_puff_proj_py` you can run your project with `poetry run cargo` to access cargo from poetry and expose the virtual environment to Puff.
+Now from `my_puff_proj_py` you can run your project with `poetry run run_cargo` to access cargo from poetry and expose the virtual environment to Puff.
 
 The Python project doesn't need to be inside off your Rust package. It only needs to be on the PYTHONPATH. If you don't want to use poetry, you will have to set up a virtual environment if needed and set `PYTHONPATH` when running Puff.
 
@@ -183,21 +186,21 @@ fn main() -> ExitCode {
 Python: 
 
 ```python title="/app/py_code/my_python_app.py"
-from puff import global_state
+from puff import global_state, wrap_async
 
-rust_obj = global_state()
+rust_obj = global_state
 
 def hello_world():
     print(rust_obj.hello_from_rust("Hello from Python!"))
     # Rust functions that execute async code need to be passed a special return function.
-    print(puff.wrap_async(lambda ret_func: rust_obj.hello_from_rust_async(ret_func, "hello async")))
+    print(wrap_async(lambda ret_func: rust_obj.hello_from_rust_async(ret_func, "hello async")))
 ```
 
 ## Puff ♥ Django
 
 While it can run any WSGI app, Puff has a special affection for Django. Puff believes that business logic should be implemented on a higher level layer and Rust should be used as an optimization. Django is a perfect high level framework to use with Puff as it handles migrations, admin, etc. Puff mimics the psycopg2 drivers and cache so that Django uses the Puff Database and Redis pool.
 
-Transform your sync Django project into a highly concurrent Puff program with a few lines of code. Puff wraps the management commands so migrate, etc. all work as expected. Simply run `cargo run django [command]` instead of using `./manage.py [command]`. For example `cargo run django migrate`. Don't use django's dev server, instead use Puff's with `cargo run runserver`.
+Transform your sync Django project into a highly concurrent Puff program with a few lines of code. Puff wraps the management commands so migrate, etc. all work as expected. Simply run `poetry run run_cargo django [command]` instead of using `./manage.py [command]`. For example `poetry run run_cargo django migrate`. Don't use django's dev server, instead use Puff's with `poetry run run_cargo runserver`.
 
 
 ```rust title="/app/src/main.rs" no_run
@@ -236,11 +239,11 @@ Puff exposes Graphql Mutations, Queries and Subscriptions based on Python Class 
 GrapqhQL python functions can pass off Pure SQL queries to Puff and puff will render and transform the query without needing to return to python. This allows the Python Graphql interface to be largely IO free, but still flexible to have access to Puff resources when needed.
 
 ```python title="/app/py_code/my_python_gql_app.py"
-from puff import graphql
 from dataclasses import dataclass
 from typing import Optional, Tuple, List, Any
+from puff.pubsub import global_pubsub
 
-pubsub = puff.global_pubsub()
+pubsub = global_pubsub
 CHANNEL = "my_puff_chat_channel"
 
 @dataclass
@@ -372,9 +375,9 @@ Integrate with pytest to easily test your Graphql and Puff apps. Simply add the 
 
 ```python title="/app/src/py_code/test_gql.py"
 from hello_world_py_app import __version__
-from puff import global_graphql
+from puff.graphql import global_graphql
 
-gql = global_graphql()
+gql = global_graphql
 
 
 def test_version():
@@ -408,7 +411,7 @@ from fastapi import FastAPI
 from puff import global_state, wrap_async
 
 
-state = global_state()
+state = global_state
 
 app = FastAPI()
 
@@ -558,7 +561,7 @@ You can have as many tasks running as you want (use `set_task_queue_concurrent_t
 ```python title="/app/src/py_code/task_queue_example.py"
 from puff.task_queue import global_task_queue
 
-task_queue = global_task_queue()
+task_queue = global_task_queue
 
 
 def run_main():
@@ -622,7 +625,7 @@ Puff has a built-in asynchronous HTTP client based on reqwests that can handle H
 ```python
 from puff.http import global_http_client
 
-http_client = global_http_client()
+http_client = global_http_client
 
 
 async def do_http_request():
@@ -640,7 +643,7 @@ You can set the HTTP client options through RuntimeConfig. If your program is on
 
 ```rust
 use puff_rs::runtime::RuntimeConfig;
-use reqwest::ClientBuilder;
+use puff_rs::reqwest::ClientBuilder;
 
 // Force HTTP2
 RuntimeConfig::default()

@@ -1,7 +1,7 @@
 from puff.http import global_http_client
 from asgiref.sync import async_to_sync
 
-http_client = global_http_client()
+http_client = global_http_client
 
 
 def test_req_post_json():

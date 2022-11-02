@@ -1,6 +1,6 @@
 from puff.task_queue import global_task_queue
 
-task_queue = global_task_queue()
+task_queue = global_task_queue
 
 
 def run_main():

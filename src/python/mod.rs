@@ -24,7 +24,7 @@ use crate::python::graphql::GlobalGraphQL;
 use crate::python::postgres::{add_pg_puff_exceptions, PostgresGlobal};
 use tracing::log::info;
 
-use crate::json::{dump, dumps, load, loads};
+use crate::json::{dump, dumps, load, loads, loadb, dumpb};
 use crate::python::pubsub::GlobalPubSub;
 pub use pyo3::prelude::*;
 
@@ -211,10 +211,12 @@ pub(crate) fn bootstrap_puff_globals(config: RuntimeConfig) -> PuffResult<()> {
         puff_rust_functions.setattr("dispatch_asyncio_coro", PyDispatchAsyncCoro.into_py(py))?;
         puff_json_mod.add_function(wrap_pyfunction!(load, puff_json_mod)?)?;
         puff_json_mod.add_function(wrap_pyfunction!(loads, puff_json_mod)?)?;
+        puff_json_mod.add_function(wrap_pyfunction!(loadb, puff_json_mod)?)?;
         puff_json_mod.add_function(wrap_pyfunction!(dump, puff_json_mod)?)?;
         puff_json_mod.add_function(wrap_pyfunction!(dumps, puff_json_mod)?)?;
+        puff_json_mod.add_function(wrap_pyfunction!(dumpb, puff_json_mod)?)?;
         add_pg_puff_exceptions(py)?;
-        puff_rust_functions.setattr("global_state", global_state)?;
+        puff_mod.setattr("global_state", global_state)?;
         puff_rust_functions.setattr("read_file_bytes", ReadFileBytes.into_py(py))?;
         puff_rust_functions.setattr("sleep_ms", PySleepMs.into_py(py))?;
         puff_mod.call_method0("patch_libs")?;

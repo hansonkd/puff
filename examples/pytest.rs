@@ -7,6 +7,7 @@ fn main() -> ExitCode {
         .add_python_path("./examples")
         .set_asyncio(true)
         .set_task_queue(true)
+        .set_redis(true)
         .set_pubsub(true);
 
     Program::new("my_first_app")

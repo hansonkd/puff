@@ -1,6 +1,12 @@
 from puff.task_queue import global_task_queue
+from puff.pubsub import global_pubsub
+from puff.redis import global_redis
+from puff.json import loadb, dumpb
+import secrets
 
-task_queue = global_task_queue()
+task_queue = global_task_queue
+pubsub = global_pubsub
+redis = global_redis
 
 
 def test_task_queue_async_sync():
@@ -31,3 +37,38 @@ def example_task(payload):
 async def example_task_async(payload):
     assert payload["type"] == "async"
     return f"async-{payload['x'][0]}"
+
+
+def test_task_queue_pubsub_realtime():
+    conn = pubsub.connection()
+    this_channel = secrets.token_hex(6)
+    conn.subscribe(this_channel)
+    task_queue.schedule_function(
+        example_task_pubsub_async, {"channel": this_channel, "x": [42]}
+    )
+    result = conn.receive()
+    data = result.json()
+    assert data["my_result"] == "pubsub-42"
+
+
+async def example_task_pubsub_async(payload):
+    channel = payload["channel"]
+    await pubsub.publish_json_as(pubsub.new_connection_id(), channel, {"my_result": f"pubsub-{payload['x'][0]}"})
+    return None
+
+
+def test_task_queue_lpop_realtime():
+    this_channel = secrets.token_hex(6)
+    task_queue.schedule_function(
+        example_task_lpush_async, {"channel": this_channel, "x": [42]}
+    )
+    # Wait for the result.
+    result = redis.blpop(this_channel.encode("utf8"), 0)
+    data = result and loadb(result[1])
+    assert data["my_result"] == "lpop-42"
+
+
+async def example_task_lpush_async(payload):
+    channel = payload["channel"]
+    await redis.lpush(channel.encode("utf8"), dumpb({"my_result": f"lpop-{payload['x'][0]}"}))
+    return None

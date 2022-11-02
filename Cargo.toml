@@ -1,6 +1,6 @@
 [package]
 name = "puff-rs"
-version = "0.1.3"
+version = "0.1.4"
 description = "Puff - Deep Stack Python Runtime and GraphQL library."
 license = "MIT"
 edition = "2021"

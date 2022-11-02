@@ -33,7 +33,7 @@ use error::*;
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyFloat, PyList, PyTuple};
+use pyo3::types::{PyAny, PyDict, PyFloat, PyList, PyTuple, PyBytes};
 use pyo3::wrap_pyfunction;
 
 use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
@@ -118,6 +118,29 @@ pub fn loads(
     )
 }
 
+// This function is a poor man's implementation of
+// impl From<&str> for PyResult<PyObject>, which is not possible,
+// because we have none of these types under our control.
+// Note: Encoding param is deprecated and ignored.
+#[pyfunction]
+pub fn loadb(
+    py: Python,
+    s: &PyBytes,
+    _encoding: Option<PyObject>,
+    _cls: Option<PyObject>,
+    _object_hook: Option<PyObject>,
+    parse_float: Option<PyObject>,
+    parse_int: Option<PyObject>,
+    _kwargs: Option<&PyDict>,
+) -> PyResult<PyObject> {
+    run_load_bytes(
+        py,
+        s.as_bytes(),
+        parse_float,
+        parse_int
+    )
+}
+
 #[pyfunction]
 // ensure_ascii, check_circular, allow_nan, cls, indent, separators, default, sort_keys, kwargs = "**")]
 #[allow(unused_variables)]
@@ -138,6 +161,29 @@ pub fn dumps(
     let s = dump_string(py, obj, indent, sort_keys)?;
 
     Ok(s.to_object(py))
+}
+
+
+#[pyfunction]
+// ensure_ascii, check_circular, allow_nan, cls, indent, separators, default, sort_keys, kwargs = "**")]
+#[allow(unused_variables)]
+pub fn dumpb(
+        py: Python,
+        obj: PyObject,
+        _skipkeys: Option<PyObject>,
+        _ensure_ascii: Option<PyObject>,
+        _check_circular: Option<PyObject>,
+        _allow_nan: Option<PyObject>,
+        _cls: Option<PyObject>,
+        _indent: Option<PyObject>,
+        _separators: Option<PyObject>,
+        _default: Option<PyObject>,
+        sort_keys: Option<PyObject>,
+        _kwargs: Option<&PyDict>,
+        ) -> PyResult<PyObject> {
+    let s = dump_vec(py, obj, sort_keys)?;
+
+    Ok(PyBytes::new(py, s.as_slice()).into_py(py))
 }
 
 pub fn dump_vec(

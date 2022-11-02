@@ -1,7 +1,17 @@
+# 0.1.4
+
+* Improve Redis compatibility
+* Improve task queue responsiveness
+* Add bytes version of json serialization
+
+# 0.1.3
+
+* Performance improvements
+
 # 0.1.2
 
 * HTTP Client
-* TaskQueue
+* Distributed TaskQueue
 * Rust based JSON serialization, using hyperjson
 
 # 0.1.1

@@ -55,6 +55,7 @@ impl TaskQueue {
         timeout_ms: usize,
         keep_results_for_ms: usize,
         async_fn: bool,
+        trigger: bool
     ) -> PyResult<()> {
         let params = pythonize::depythonize(py_params.as_ref(py))
             .map_err(|_| PyException::new_err("Could not convert python value to json"))?;
@@ -69,6 +70,7 @@ impl TaskQueue {
                 timeout_ms,
                 keep_results_for_ms,
                 async_fn,
+                trigger
             ),
         );
         Ok(())
@@ -146,6 +148,7 @@ pub async fn add_task<T: Into<Text>>(
     timeout_ms: usize,
     keep_results_for_ms: usize,
     async_fn: bool,
+    trigger: bool
 ) -> PuffResult<Py<PyBytes>> {
     let id = uuid::Uuid::new_v4();
     let item_key = id.into_bytes();
@@ -162,13 +165,25 @@ pub async fn add_task<T: Into<Text>>(
     let mut r = task_queue.pool.get().await?;
     let task_hmap = task_hmap_key(&task_queue);
     let task_queue_key = task_queue_key(&task_queue);
+    let queue_wait_key = queue_wait_key(&task_queue);
+
     let cmd2 = Cmd::hset(task_hmap.as_slice(), &item_key, to_send);
     let cmd = Cmd::zadd(task_queue_key.as_slice(), &item_key, unix_time_ms);
-    Pipeline::new()
-        .add_command(cmd2)
-        .add_command(cmd)
+    let mut pipe = Pipeline::new();
+
+    pipe
+    .add_command(cmd2).ignore()
+    .add_command(cmd).ignore();
+
+    if trigger {
+        let cmd3 = Cmd::zadd(queue_wait_key.as_slice(), b"1", 0);
+        pipe.add_command(cmd3).ignore();
+    }
+
+    pipe
         .query_async(&mut *r)
         .await?;
+
     Python::with_gil(|py| Ok(PyBytes::new(py, &item_key).into_py(py)))
 }
 
@@ -186,6 +201,10 @@ fn task_hmap_key(task_queue: &TaskQueue) -> Vec<u8> {
 
 fn task_queue_key(task_queue: &TaskQueue) -> Vec<u8> {
     [task_queue.queue_name.as_bytes(), b"-queue"].concat()
+}
+
+fn queue_wait_key(task_queue: &TaskQueue) -> Vec<u8> {
+    [task_queue.queue_name.as_bytes(), b"-wait"].concat()
 }
 
 pub async fn finish_task(
@@ -311,6 +330,8 @@ pub async fn next_task(
     let mut r = task_queue.pool.get().await?;
     let task_hmap_key = task_hmap_key(task_queue);
     let task_queue_key = task_queue_key(task_queue);
+    let queue_wait_key = queue_wait_key(&task_queue);
+    let wait_duration_secs = wait_duration.as_secs() as f64 + wait_duration.subsec_nanos() as f64 * 1e-9;
 
     loop {
         let unix_time_ms = SystemTime::now()
@@ -348,18 +369,18 @@ pub async fn next_task(
 
                 if !locked && !completed {
                     let maybe_task: Option<Vec<u8>> = Cmd::hget(&task_hmap_key, &item)
-                        .query_async(&mut *r)
-                        .await?;
+                    .query_async(&mut *r)
+                    .await?;
 
                     let t: Task = if let Some(task) = maybe_task {
                         match serde_json::de::from_slice(task.as_slice()) {
                             Ok(t) => t,
                             Err(e) => {
                                 finish_task(
-                                    &task_queue,
-                                    item.as_slice(),
-                                    Err(format!("Could not deserialize {}", e).into()),
-                                    30 * 1000,
+                                        &task_queue,
+                                item.as_slice(),
+                                Err(format!("Could not deserialize {}", e).into()),
+                                30 * 1000,
                                 )
                                 .await?;
                                 continue;
@@ -371,14 +392,14 @@ pub async fn next_task(
 
                     let item_key = item_key_lock(task_queue, item.as_slice());
                     let claimed: bool = Cmd::new()
-                        .arg("SET")
-                        .arg(item_key)
-                        .arg("1")
-                        .arg("NX")
-                        .arg("PX")
-                        .arg(t.timeout_ms)
-                        .query_async(&mut *r)
-                        .await?;
+                    .arg("SET")
+                    .arg(item_key)
+                    .arg("1")
+                    .arg("NX")
+                    .arg("PX")
+                    .arg(t.timeout_ms)
+                    .query_async(&mut *r)
+                    .await?;
                     if claimed {
                         return Ok(t);
                     }
@@ -391,7 +412,9 @@ pub async fn next_task(
                 offset += tasks_per_loop;
             }
         }
-        tokio::time::sleep(wait_duration).await;
+        let mut blocking_cmd = Cmd::new();
+        blocking_cmd.arg("BZPOPMIN").arg(queue_wait_key.as_slice()).arg(wait_duration_secs);
+        let _fut = blocking_cmd.query_async::<_, i64>(&mut *r).await;
     }
 }
 
