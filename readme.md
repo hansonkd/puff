@@ -30,7 +30,7 @@ The deep stack framework.
       - [Benefits of Deep Stack](#benefits-of-deep-stack)
   * Links
       - [CHANGELOG](https://github.com/hansonkd/puff/blob/master/CHANGELOG.md)
-      - [Building RPC with Puff](https://github.com/hansonkd/puff/blob/master/book/RPC.md)
+      - [Building an RPC with Puff](https://github.com/hansonkd/puff/blob/master/book/RPC.md)
 
 # What is Puff?
 
