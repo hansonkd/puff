@@ -471,6 +471,10 @@ pub fn loop_tasks(
             tokio::time::sleep(startup_wait_duration).await;
         }
 
+        if num_workers == 0 {
+            tokio::time::sleep(Duration::from_secs(u64::MAX)).await;
+        }
+
         while let Some(()) = rec.recv().await {
             let new_sender = sender.clone();
             let new_tq = task_queue.clone();
