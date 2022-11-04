@@ -63,6 +63,7 @@ Create a new file called `my_puff_project/graphql.py`
 ```python
 from typing import Optional, Iterable, List, Any, Tuple
 from dataclasses import dataclass
+from puff import graphql
 from puff.pubsub import global_pubsub as pubsub
 from puff.contrib.django import query_and_params
 import django
@@ -84,13 +85,16 @@ class UserType:
 @dataclass
 class Query:
     @classmethod
+    @graphql.borrow_db_context  
     def lookup_user(cls, context, /, user_id: int) -> Optional[UserType]:
         # Lookup a user by their user_id
+        # borrow_db_context lets Django have access to Puff Connection to use for query
         return User.objects.filter(id=user_id).first()
 
     @classmethod
     def list_users(cls, context, /) -> Tuple[List[UserType], str, List[Any]]:
         # List all Users. Offload the query into the puff runtime.
+        # The ellipsis is a placeholder allowing the Python type system to know which Field type it should transform into.
         query, params = query_and_params(User.objects.order_by('id').all())
         return ..., query, params
 

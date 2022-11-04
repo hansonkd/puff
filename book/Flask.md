@@ -41,13 +41,25 @@ poetry run puff runserver
 Create a new file called `my_puff_project/graphql.py`
 
 ```python
-from typing import Optional, Iterable
+from typing import Optional, Iterable, Tuple, List, Any
 from dataclasses import dataclass
 from puff.pubsub import global_pubsub as pubsub
 
 
 @dataclass
+class DbObject:
+    was_input: int
+    title: str
+    
+
+@dataclass
 class Query:
+    @classmethod
+    def hello_world(cls, parents, context, /, my_input: int) -> Tuple[List[DbObject], str, List[Any]]:
+        # Return a Raw query for Puff to execute in Postgres.
+        # The ellipsis is a placeholder allowing the Python type system to know which Field type it should transform into.
+        return ..., "SELECT $1::int as was_input, \'hi from pg\'::TEXT as title", [my_input]
+
     @classmethod
     def auth_token(cls, context, /) -> str:
         # All GraphQL queries have access to the Bearer token if set.
@@ -63,7 +75,6 @@ class Query:
 class Mutation:
     @classmethod
     def send_message_to_channel(cls, context, /, connection_id: str, channel: str, message: str) -> bool:
-        print(context.auth_token) #  Authorization bearer token passed in the context
         return pubsub.publish_as(connection_id, channel, message)
 
 
