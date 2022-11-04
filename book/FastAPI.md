@@ -53,6 +53,11 @@ from puff.pubsub import global_pubsub as pubsub
 @dataclass
 class Query:
     @classmethod
+    def auth_token(cls, context, /) -> str:
+        # All GraphQL queries have access to the Bearer token if set.
+        return context.auth_token
+    
+    @classmethod
     def new_connection_id(cls, context, /) -> str:
         # Get a new connection identifier for pubsub.
         return pubsub.new_connection_id()
@@ -138,7 +143,6 @@ from my_puff_project.tasks import my_task
 class Mutation:
     @classmethod
     def send_message_to_channel(cls, context, /, connection_id: str, channel: str, message: str) -> bool:
-        print(context.auth_token) #  Authorization bearer token passed in the context
         tq.add_task(my_task, {"auth_token": context.auth_token, "connection_id": connection_id, "channel": channel, "message": message})
         return pubsub.publish_as(connection_id, channel, message)
 ```

@@ -61,13 +61,44 @@ poetry run puff runserver
 Create a new file called `my_puff_project/graphql.py`
 
 ```python
-from typing import Optional, Iterable
+from typing import Optional, Iterable, List, Any, Tuple
 from dataclasses import dataclass
 from puff.pubsub import global_pubsub as pubsub
+from puff.contrib.django import query_and_params
+import django
+from django.contrib.auth import get_user_model
+
+# Setup Django since Puff will import GraphQL first.
+django.setup()
+
+User = get_user_model()
 
 
 @dataclass
+class UserType:
+    id: int
+    username: str
+    email: str
+
+    
+@dataclass
 class Query:
+    @classmethod
+    def lookup_user(cls, context, /, user_id: int) -> Optional[UserType]:
+        # Lookup a user by their user_id
+        return User.objects.filter(id=user_id).first()
+
+    @classmethod
+    def list_users(cls, context, /) -> Tuple[List[UserType], str, List[Any]]:
+        # List all Users. Offload the query into the puff runtime.
+        query, params = query_and_params(User.objects.order_by('id').all())
+        return ..., query, params
+
+    @classmethod
+    def auth_token(cls, context, /) -> str:
+        # All GraphQL queries have access to the Bearer token if set.
+        return context.auth_token
+    
     @classmethod
     def new_connection_id(cls, context, /) -> str:
         # Get a new connection identifier for pubsub.
@@ -78,7 +109,6 @@ class Query:
 class Mutation:
     @classmethod
     def send_message_to_channel(cls, context, /, connection_id: str, channel: str, message: str) -> bool:
-        print(context.auth_token) #  Authorization bearer token passed in the context
         return pubsub.publish_as(connection_id, channel, message)
 
 
@@ -153,7 +183,6 @@ from my_puff_project.tasks import my_task
 class Mutation:
     @classmethod
     def send_message_to_channel(cls, context, /, connection_id: str, channel: str, message: str) -> bool:
-        print(context.auth_token) #  Authorization bearer token passed in the context
         tq.add_task(my_task, {"auth_token": context.auth_token, "connection_id": connection_id, "channel": channel, "message": message})
         return pubsub.publish_as(connection_id, channel, message)
 ```
