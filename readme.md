@@ -30,6 +30,10 @@ The deep stack framework.
       - [Benefits of Deep Stack](#benefits-of-deep-stack)
   * Links
       - [CHANGELOG](https://github.com/hansonkd/puff/blob/master/CHANGELOG.md)
+      - [Using the CLI](https://github.com/hansonkd/puff/blob/master/book/CLI.md)
+      - [Flask](https://github.com/hansonkd/puff/blob/master/book/Flask.md)
+      - [FastAPI](https://github.com/hansonkd/puff/blob/master/book/FastAPI.md)
+      - [Django](https://github.com/hansonkd/puff/blob/master/book/Django.md)
       - [Building an RPC with Puff](https://github.com/hansonkd/puff/blob/master/book/RPC.md)
 
 # What is Puff?

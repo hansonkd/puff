@@ -2,7 +2,7 @@
 
 You don't need to know any Rust to use Puff.
 
-Install Rust for your platform and then compile and install Puff for your platform.
+[Install Rust for your platform](https://www.rust-lang.org/tools/install) and then compile and install Puff:
 
 ```bash
 cargo install puff-rs
@@ -68,34 +68,8 @@ Now run your function:
 poetry run puff hello_world
 ```
 
-# Step 2: Add an WSGI app
+# Step 2: Add a Web Service
 
-Install Flask to your your project:
-
-```
-poetry add flask
-```
-
-Add your flask application in a new file `my_puff_project/flask.py`
-
-```python
-from flask import Flask
-
-app = Flask(__name__)
-
-@app.route("/")
-def hello_world():
-return "<p>Hello, World!</p>"
-```
-
-update `puff.toml`
-
-```toml
-wsgi = "my_puff_project.flask.app"
-```
-
-Run the server:
-
-```bash
-poetry run puff runserver
-```
+* [Flask](https://github.com/hansonkd/puff/blob/master/book/Flask.md)
+* [FastAPI](https://github.com/hansonkd/puff/blob/master/book/FastAPI.md)
+* [Django](https://github.com/hansonkd/puff/blob/master/book/Django.md)
