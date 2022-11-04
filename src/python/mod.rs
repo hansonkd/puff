@@ -7,7 +7,7 @@ use crate::runtime::RuntimeConfig;
 use crate::tasks::GlobalTaskQueue;
 use crate::types::text::Text;
 use crate::web::client::GlobalHttpClient;
-use pyo3::types::{PyBytes, PyDict, PyString, PyTuple};
+use pyo3::types::{IntoPyDict, PyBytes, PyDict, PyString, PyTuple};
 use pyo3::wrap_pyfunction;
 use tokio::runtime::Handle;
 
@@ -181,9 +181,38 @@ pub fn log_traceback_with_label(label: &str, e: &PyErr) {
     });
 }
 
+const ACTIVATE_THIS: &'static str = r#"
+import sys
+import os
+
+old_os_path = os.environ.get('PATH', '')
+os.environ['PATH'] = os.path.dirname(os.path.abspath(abs_file)) + os.pathsep + old_os_path
+base = os.path.dirname(os.path.dirname(os.path.abspath(abs_file)))
+if sys.platform == 'win32':
+    site_packages = os.path.join(base, 'Lib', 'site-packages')
+else:
+    site_packages = os.path.join(base, 'lib', 'python%s' % sys.version.split(" ", 1)[0].rsplit(".", 1)[0], 'site-packages')
+prev_sys_path = list(sys.path)
+import site
+site.addsitedir(site_packages)
+sys.real_prefix = sys.prefix
+sys.prefix = base
+# Move the added items to the front of the path:
+new_sys_path = []
+for item in list(sys.path):
+    if item not in prev_sys_path:
+        new_sys_path.append(item)
+        sys.path.remove(item)
+sys.path[:0] = new_sys_path
+"#;
+
 pub(crate) fn bootstrap_puff_globals(config: RuntimeConfig) -> PuffResult<()> {
     let global_state = config.global_state()?;
     Python::with_gil(|py| {
+        if let Ok(v) = std::env::var("VIRTUAL_ENV") {
+            let locals = [("abs_file", format!("{}/bin/activate", v))].into_py_dict(py);
+            py.run(ACTIVATE_THIS, None, Some(locals))?;
+        }
         let sys_path = py.import("sys")?.getattr("path")?;
         let mut paths = config.python_paths();
         paths.reverse();

@@ -34,6 +34,7 @@ impl PytestCommand {
 impl RunnableCommand for PytestCommand {
     fn cli_parser(&self) -> Command {
         Command::new("pytest")
+            .about("Run pytest in a Puff Context")
             .arg(
                 Arg::new("arg")
                     .num_args(1..)

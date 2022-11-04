@@ -1,0 +1,10 @@
+redis = true
+postgres = true
+task_queue = true
+wsgi_app = "flask_example.app"
+asgi_app = "fast_api_example.app"
+pytest_path = "./"
+
+[[commands]]
+function = "task_queue_example.run_main"
+command_name = "queue_task"

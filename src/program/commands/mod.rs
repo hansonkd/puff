@@ -30,22 +30,29 @@ pub mod wsgi;
 
 /// Expose a future to the command line.
 pub struct BasicCommand<F: Future<Output = PuffResult<ExitCode>> + 'static> {
-    name: Text,
+    command: Command,
     inner_func: Mutex<Option<F>>,
 }
 
 impl<Fut: Future<Output = PuffResult<ExitCode>> + 'static> BasicCommand<Fut> {
     pub fn new<T: Into<Text>>(name: T, f: Fut) -> Self {
         Self {
-            name: name.into(),
             inner_func: Mutex::new(Some(f)),
+            command: Command::new(name.into().to_string()),
+        }
+    }
+
+    pub fn new_with_options(command: Command, f: Fut) -> Self {
+        Self {
+            inner_func: Mutex::new(Some(f)),
+            command: command,
         }
     }
 }
 
 impl<F: Future<Output = PuffResult<ExitCode>> + 'static> RunnableCommand for BasicCommand<F> {
     fn cli_parser(&self) -> Command {
-        Command::new(self.name.to_string())
+        self.command.clone()
     }
 
     fn make_runnable(&mut self, _args: &ArgMatches, _context: PuffContext) -> Result<Runnable> {
