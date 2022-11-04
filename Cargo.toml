@@ -45,8 +45,8 @@ tokio-postgres = {version = "0.7.7", features=["with-serde_json-1", "with-chrono
 bb8-postgres = "0.8.1"
 pythonize = "0.16.0"
 pyo3-chrono = "0.4.0"
-juniper = { package="juniper_puff", version = "0.16.0-dev", path="../juniper_puff/juniper", features=["chrono", "uuid"] }
-juniper_graphql_ws = { package="juniper_graphql_ws_puff", version = "0.4.0-dev", path = "../juniper_puff/juniper_graphql_ws" }
+juniper = { package="juniper_puff", version = "0.16.0-dev", features=["chrono", "uuid"] }
+juniper_graphql_ws = { package="juniper_graphql_ws_puff", version = "0.4.0-dev" }
 async-trait = "0.1.57"
 tokio-stream = "0.1.10"
 base64 = "0.13.0"
