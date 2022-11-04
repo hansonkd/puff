@@ -107,6 +107,7 @@ Update `puff.toml` with the following lines
 
 ```toml
 pubsub = true
+postgres = true
 graphql = "my_puff_project.graphql.Schema"
 graphql_url = "/graphql/"
 graphql_subscription_url = "/subscriptions/"
