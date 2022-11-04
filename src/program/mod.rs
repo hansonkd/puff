@@ -258,7 +258,7 @@ impl Program {
     /// This will parse the command line arguments, start a new runtime and blocks until
     /// the command finishes.
     pub fn try_run(self) -> Result<ExitCode> {
-        tracing_subscriber::fmt::init();
+        tracing_subscriber::fmt::try_init().unwrap_or_default();
 
         let mut top_level = self.clap_command();
         let rt_config = self.runtime_config.clone();

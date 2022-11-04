@@ -18,6 +18,7 @@ struct Config {
     greenlets: Option<bool>,
     asyncio: Option<bool>,
     dotenv: Option<bool>,
+    add_cwd_to_path: Option<bool>,
     dotenv_path: Option<String>,
     pytest_path: Option<String>,
     wsgi: Option<String>,
@@ -44,6 +45,7 @@ fn help_text() -> String {
         greenlets: Some(true),
         asyncio: Some(false),
         dotenv: Some(false),
+        add_cwd_to_path: Some(true),
         dotenv_path: Some(".env".to_owned()),
         pytest_path: Some("./".to_owned()),
         wsgi: Some("my_wsgi.app".to_owned()),
@@ -63,17 +65,22 @@ fn help_text() -> String {
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> ExitCode {
-    let puff_config_path = std::env::var("PUFF_CONFG").unwrap_or("puff.toml".to_owned());
+    tracing_subscriber::fmt::init();
 
-    let contents = fs::read_to_string(&puff_config_path).expect(&format!(
-        "Could not read Puff TOML config file {}",
-        &puff_config_path
-    ));
+    let puff_config_path = std::env::var("PUFF_CONFIG").unwrap_or("puff.toml".to_owned());
 
-    let config: Config = toml::from_str(&contents).expect(&format!(
-        "Could not parse Puff TOML config file {}",
-        &puff_config_path
-    ));
+    let config: Config = if let Ok(contents) = fs::read_to_string(&puff_config_path) {
+        toml::from_str(&contents).expect(&format!(
+            "Could not parse Puff TOML config file {}",
+            &puff_config_path
+        ))
+    } else {
+        info!(
+            "Could not read Puff TOML config file {}, using default config.",
+            &puff_config_path
+        );
+        toml::from_str("").expect("Couldn't parse default.")
+    };
 
     if config.dotenv.unwrap_or(true) {
         if let Some(p) = config.dotenv_path {
@@ -98,6 +105,10 @@ fn main() -> ExitCode {
         rc = rc.set_gql_schema_class(schema);
     }
 
+    if config.add_cwd_to_path.unwrap_or(true) {
+        rc = rc.add_cwd_to_python_path();
+    }
+
     let mut program = Program::new("puff")
         .about("Puff CLI. Reads puff.toml or configuration file specified with PUFF_CONFG")
         .version(VERSION)
@@ -115,12 +126,12 @@ fn main() -> ExitCode {
     if let Some(wsgi_app) = config.wsgi {
         if config.graphql_url.as_ref().is_some() || config.graphql_subscription_url.as_ref().is_some() {
             let mut router = Router::new();
-            if let Some(asgi_app) = &config.graphql_url {
-                router = router.post(asgi_app, handle_graphql())
+            if let Some(url) = &config.graphql_url {
+                router = router.post(url, handle_graphql())
             }
 
-            if let Some(asgi_app) = &config.graphql_subscription_url {
-                router = router.get(asgi_app, handle_subscriptions())
+            if let Some(url) = &config.graphql_subscription_url {
+                router = router.get(url, handle_subscriptions())
             }
 
             program = program.command(WSGIServerCommand::new_with_router(wsgi_app, router))
@@ -132,11 +143,11 @@ fn main() -> ExitCode {
     if let Some(asgi_app) = config.asgi {
         if config.graphql_url.as_ref().is_some() || config.graphql_subscription_url.as_ref().is_some() {
             let mut router = Router::new();
-            if let Some(ref url) = &config.graphql_url {
+            if let Some(url) = &config.graphql_url {
                 router = router.post(url, handle_graphql())
             }
 
-            if let Some(ref url) = &config.graphql_subscription_url {
+            if let Some(url) = &config.graphql_subscription_url {
                 router = router.get(url, handle_subscriptions())
             }
 

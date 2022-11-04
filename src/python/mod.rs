@@ -27,6 +27,7 @@ use tracing::log::info;
 use crate::json::{dump, dumpb, dumps, load, loadb, loads};
 use crate::python::pubsub::GlobalPubSub;
 pub use pyo3::prelude::*;
+use std::str;
 
 use self::queue::PyEventLoopQueue;
 
@@ -213,6 +214,7 @@ pub(crate) fn bootstrap_puff_globals(config: RuntimeConfig) -> PuffResult<()> {
             let locals = [("abs_file", format!("{}/bin/activate", v))].into_py_dict(py);
             py.run(ACTIVATE_THIS, None, Some(locals))?;
         }
+        
         let sys_path = py.import("sys")?.getattr("path")?;
         let mut paths = config.python_paths();
         paths.reverse();
