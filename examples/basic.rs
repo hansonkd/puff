@@ -9,7 +9,7 @@ fn main() -> ExitCode {
     Program::new("my_first_app")
         .runtime_config(config)
         .about("This is my first app")
-        .command(BasicCommand::new("my_command", my_command()))
+        .command(BasicCommand::new("my_command", |_| my_command()))
         .run()
 }
 

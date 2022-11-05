@@ -33,7 +33,15 @@ wsgi = "my_puff_project.flask.app"
 Run the server:
 
 ```bash
-poetry run puff runserver
+poetry run puff serve
+```
+
+To use Puff in development mode, use `puff-watch` which is a wrapper around puff that will restart the process when files change in the directory.
+
+```bash
+poetry run puff-watch serve
+# Spawn multiple processes on the same Port to simulate gunicorn workers
+PUFF_REUSE_PORT=true poetry run puff-watch --num 2 serve
 ```
 
 # Step 3: Add GraphQL
@@ -57,13 +65,13 @@ class Query:
     @classmethod
     def hello_world(cls, parents, context, /, my_input: int) -> Tuple[List[DbObject], str, List[Any]]:
         # Return a Raw query for Puff to execute in Postgres.
-        # The ellipsis is a placeholder allowing the Python type system to know which Field type it should transform into.
+        # The ellipsis is a placeholder allowing the Python type system to know which field type it should transform into.
         return ..., "SELECT $1::int as was_input, \'hi from pg\'::TEXT as title", [my_input]
 
     @classmethod
     def auth_token(cls, context, /) -> str:
         # All GraphQL queries have access to the Bearer token if set.
-        return context.auth_token
+        return context.auth_token()
     
     @classmethod
     def new_connection_id(cls, context, /) -> str:
@@ -115,12 +123,13 @@ Update `puff.toml` with the following lines
 ```toml
 pubsub = true
 postgres = true
-graphql = "my_puff_project.graphql.Schema"
+graphql_schema = "my_puff_project.graphql.Schema"
 graphql_url = "/graphql/"
 graphql_subscription_url = "/subscriptions/"
+graphql_playground_url = "/playground/"
 ```
 
-Run the server and go to `http://localhost:7777/graphql/`
+Run the server and go to `http://localhost:7777/playground/`
 
 # Step 4: Add Distributed Tasks
 
@@ -150,7 +159,7 @@ from my_puff_project.tasks import my_task
 class Mutation:
     @classmethod
     def send_message_to_channel(cls, context, /, connection_id: str, channel: str, message: str) -> bool:
-        tq.add_task(my_task, {"auth_token": context.auth_token, "connection_id": connection_id, "channel": channel, "message": message})
+        tq.add_task(my_task, {"auth_token": context.auth_token(), "connection_id": connection_id, "channel": channel, "message": message})
         return pubsub.publish_as(connection_id, channel, message)
 ```
 
@@ -160,8 +169,8 @@ Run a worker server by using wait_forever in another tab:
 poetry run puff wait_forever
 ```
 
-Now run the server and calling the mutation will trigger tasks.
+Now run the server. Going to `http://localhost:7777/graphql/` calling the mutation will trigger tasks.
 
 ```bash
-poetry run puff runserver
+poetry run puff serve
 ```

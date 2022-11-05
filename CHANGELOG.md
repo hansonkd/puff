@@ -1,3 +1,12 @@
+# 0.1.7
+
+* Improve GraphQL return type compatibility and subscription URLs.
+* Update to pyo3 0.17
+* Rename runserver to serve
+* Don't require Postgres for GraphQL
+* Add CORS, Compression support.
+* Add puff-watch
+
 # 0.1.6
 
 * Add Puff CLI

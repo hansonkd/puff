@@ -14,7 +14,7 @@ fn main() -> ExitCode {
         .add_python_path("examples/");
 
     let router = Router::new()
-        .get("/", playground("/graphql", "/subscriptions"))
+        .get("/", playground("/graphql", Some("/subscriptions")))
         .post("/graphql", handle_graphql())
         .get("/subscriptions", handle_subscriptions());
 

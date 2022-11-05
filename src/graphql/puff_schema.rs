@@ -32,24 +32,32 @@ static NUMBERS: &'static [&'static str] = &["0", "1", "2", "3", "4", "5", "6", "
 
 pub struct AggroContext {
     bearer: Option<Text>,
-    conn: Mutex<Connection>,
+    conn: Option<Mutex<Connection>>,
 }
 
 impl juniper::Context for AggroContext {}
 
 impl AggroContext {
     pub fn new(bearer: Option<Text>) -> Self {
-        let pool = with_puff_context(|ctx| ctx.postgres().pool());
-        let conn = Mutex::new(Connection::new(pool));
+        let conn = if let Some(pg) = with_puff_context(|ctx| ctx.postgres_safe()) {
+            let pool = pg.pool();
+            Some(Mutex::new(Connection::new(pool)))
+        } else {
+            None
+        };
         Self { bearer, conn }
     }
 
     pub fn new_with_connection(bearer: Option<Text>, conn: Connection) -> Self {
-        let conn = Mutex::new(conn);
+        let conn = Some(Mutex::new(conn));
         Self { bearer, conn }
     }
 
     pub fn connection(&self) -> &Mutex<Connection> {
+        self.conn.as_ref().expect("Postgres not configured.")
+    }
+
+    pub fn maybe_connection(&self) -> &Option<Mutex<Connection>> {
         &self.conn
     }
 
@@ -487,18 +495,35 @@ pub async fn do_returned_values_into_stream(
                         cm.call(py, (py_extractor.clone(),), Some(arg_dict))
                     })?
                 } else {
-                    let conn = aggro_context.connection().lock().await;
-                    let py_extractor =
-                        PyContext::new(rows.clone(), aggro_context.token(), Some(conn.clone()));
                     let py_dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
-                    let rec = Python::with_gil(|py| {
-                        let arg_dict = args.into_py_dict(py);
-                        if aggro_field.is_async {
-                            py_dispatcher.dispatch_asyncio(py, cm, (py_extractor,), arg_dict)
-                        } else {
-                            py_dispatcher.dispatch(cm, (py_extractor,), Some(arg_dict))
-                        }
-                    })?;
+
+                    let rec = if let Some(s) = aggro_context.maybe_connection() {
+                        let conn = s.lock().await;
+
+                        let py_extractor =
+                            PyContext::new(rows.clone(), aggro_context.token(), Some(conn.clone()));
+
+                        // Method must be run with lock held to prevent concurrent access to db conn.
+                        Python::with_gil(|py| {
+                            let arg_dict = args.into_py_dict(py);
+                            if aggro_field.is_async {
+                                py_dispatcher.dispatch_asyncio(py, cm, (py_extractor,), arg_dict)
+                            } else {
+                                py_dispatcher.dispatch(cm, (py_extractor,), Some(arg_dict))
+                            }
+                        })?
+                    } else {
+                        let py_extractor =
+                            PyContext::new(rows.clone(), aggro_context.token(), None);
+                        Python::with_gil(|py| {
+                            let arg_dict = args.into_py_dict(py);
+                            if aggro_field.is_async {
+                                py_dispatcher.dispatch_asyncio(py, cm, (py_extractor,), arg_dict)
+                            } else {
+                                py_dispatcher.dispatch(cm, (py_extractor,), Some(arg_dict))
+                            }
+                        })?
+                    };
 
                     rec.await??
                 }
@@ -555,9 +580,6 @@ pub async fn do_returned_values_into_stream(
                 PythonMethodResult::SqlQuery(q, params) => {
                     let conn = aggro_context.connection().lock().await;
                     let (statement, rows) = execute_rust(&conn, q, params).await?;
-                    // let statement = txn.prepare(&q).await?;
-                    // let rowstream = txn.query_raw(&statement, &params).await?;
-                    // let rows = rowstream.try_collect().await?;
                     Arc::new(PostgresResultRows { statement, rows })
                 }
             };

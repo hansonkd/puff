@@ -204,7 +204,7 @@ def hello_world():
 
 While it can run any WSGI app, Puff has a special affection for Django. Puff believes that business logic should be implemented on a higher level layer and Rust should be used as an optimization. Django is a perfect high level framework to use with Puff as it handles migrations, admin, etc. Puff mimics the psycopg2 drivers and cache so that Django uses the Puff Database and Redis pool.
 
-Transform your sync Django project into a highly concurrent Puff program with a few lines of code. Puff wraps the management commands so migrate, etc. all work as expected. Simply run `poetry run run_cargo django [command]` instead of using `./manage.py [command]`. For example `poetry run run_cargo django migrate`. Don't use django's dev server, instead use Puff's with `poetry run run_cargo runserver`.
+Transform your sync Django project into a highly concurrent Puff program with a few lines of code. Puff wraps the management commands so migrate, etc. all work as expected. Simply run `poetry run run_cargo django [command]` instead of using `./manage.py [command]`. For example `poetry run run_cargo django migrate`. Don't use django's dev server, instead use Puff's with `poetry run run_cargo serve`.
 
 
 ```rust title="/app/src/main.rs" no_run
@@ -356,7 +356,7 @@ fn main() -> ExitCode {
         .set_gql_schema_class("my_python_gql_app.schema");
     
     let router = Router::new()
-            .get("/", playground("/graphql", "/subscriptions"))
+            .get("/", playground("/graphql", Some("/subscriptions")))
             .post("/graphql", handle_graphql())
             .get("/subscriptions", handle_subscriptions());
 

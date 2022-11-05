@@ -63,7 +63,7 @@ use std::net::SocketAddr;
 
 use axum::body::{Body, BoxBody, Bytes};
 use axum::handler::Handler;
-use axum::routing::{any_service, on, IntoMakeService, MethodFilter, MethodRouter};
+use axum::routing::{any_service, on, IntoMakeService, MethodFilter, MethodRouter, Route};
 
 use hyper::server::conn::AddrIncoming;
 use tower_service::Service;
@@ -212,6 +212,17 @@ where
         T::Future: Send + 'static,
     {
         Self(self.0.route(&path.into(), any_service(f)))
+    }
+
+    pub fn layer<L>(self, layer: L) -> Self
+    where
+        L: tower_layer::Layer<Route>,
+        L::Service: Service<Request> + Clone + Send + 'static,
+        <L::Service as Service<Request>>::Response: IntoResponse + 'static,
+        <L::Service as Service<Request>>::Error: Into<Infallible> + 'static,
+        <L::Service as Service<Request>>::Future: Send + 'static,
+    {
+        Self(self.0.layer(layer))
     }
 
     pub(crate) fn into_axum_router(self, puff_context: PuffContext) -> axum::Router<S> {

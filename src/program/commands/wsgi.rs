@@ -63,7 +63,9 @@ impl WSGIServerCommand {
 
 impl RunnableCommand for WSGIServerCommand {
     fn cli_parser(&self) -> Command {
-        HttpServerConfig::add_command_options(Command::new("runserver"))
+        HttpServerConfig::add_command_options(
+            Command::new("serve").about(format!("Run {} as an WSGI server.", self.app_path)),
+        )
     }
 
     fn make_runnable(&mut self, args: &ArgMatches, context: PuffContext) -> Result<Runnable> {

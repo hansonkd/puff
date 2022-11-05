@@ -11,6 +11,7 @@ use std::future;
 use std::sync::Arc;
 
 use crate::graphql::scalar::AggroScalarValue;
+use crate::types::Text;
 use juniper::http::{GraphQLBatchRequest, GraphQLBatchResponse, GraphQLRequest};
 
 use crate::context::with_puff_context;
@@ -380,13 +381,15 @@ pub fn handle_subscriptions() -> impl FnOnce(
     }
 }
 
-pub fn playground<'a>(
-    graphql_endpoint_url: &str,
-    subscriptions_endpoint_url: impl Into<Option<&'a str>>,
+pub fn playground<U: Into<Text>, S: Into<Text>>(
+    graphql_endpoint_url: U,
+    subscriptions_endpoint_url: Option<S>,
 ) -> impl FnOnce() -> future::Ready<Response> + Clone + Send {
+    let gurl = graphql_endpoint_url.into();
+    let surl = subscriptions_endpoint_url.map(|f| f.into());
     let html = Html(juniper::http::playground::playground_source(
-        graphql_endpoint_url,
-        subscriptions_endpoint_url.into(),
+        gurl.as_str(),
+        surl.as_deref(),
     ));
 
     || future::ready(html.into_response())

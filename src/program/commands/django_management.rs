@@ -22,12 +22,14 @@ impl DjangoManagementCommand {
 
 impl RunnableCommand for DjangoManagementCommand {
     fn cli_parser(&self) -> Command {
-        Command::new("django").arg(
-            Arg::new("arg")
-                .num_args(1..)
-                .value_name("ARG")
-                .help("Arguments to pass to Django."),
-        )
+        Command::new("django")
+            .about("Run django management commands (equivalent to ./manage.py)")
+            .arg(
+                Arg::new("arg")
+                    .num_args(1..)
+                    .value_name("ARG")
+                    .help("Arguments to pass to Django."),
+            )
     }
 
     fn make_runnable(&mut self, args: &ArgMatches, context: PuffContext) -> PuffResult<Runnable> {

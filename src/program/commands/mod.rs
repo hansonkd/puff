@@ -29,40 +29,52 @@ pub mod python;
 pub mod wsgi;
 
 /// Expose a future to the command line.
-pub struct BasicCommand<F: Future<Output = PuffResult<ExitCode>> + 'static> {
+pub struct BasicCommand<
+    Fc: FnOnce(&ArgMatches) -> F + 'static,
+    F: Future<Output = PuffResult<ExitCode>> + 'static,
+> {
     command: Command,
-    inner_func: Mutex<Option<F>>,
+    inner_func: Mutex<Option<Fc>>,
 }
 
-impl<Fut: Future<Output = PuffResult<ExitCode>> + 'static> BasicCommand<Fut> {
-    pub fn new<T: Into<Text>>(name: T, f: Fut) -> Self {
+impl<
+        Fc: FnOnce(&ArgMatches) -> Fut + 'static,
+        Fut: Future<Output = PuffResult<ExitCode>> + 'static,
+    > BasicCommand<Fc, Fut>
+{
+    pub fn new<T: Into<Text>>(name: T, f: Fc) -> Self {
         Self {
             inner_func: Mutex::new(Some(f)),
             command: Command::new(name.into().to_string()),
         }
     }
 
-    pub fn new_with_options(command: Command, f: Fut) -> Self {
+    pub fn new_with_options(command: Command, f: Fc) -> Self {
         Self {
             inner_func: Mutex::new(Some(f)),
-            command: command,
+            command,
         }
     }
 }
 
-impl<F: Future<Output = PuffResult<ExitCode>> + 'static> RunnableCommand for BasicCommand<F> {
+impl<
+        Fc: FnOnce(&ArgMatches) -> F + 'static,
+        F: Future<Output = PuffResult<ExitCode>> + 'static,
+    > RunnableCommand for BasicCommand<Fc, F>
+{
     fn cli_parser(&self) -> Command {
         self.command.clone()
     }
 
-    fn make_runnable(&mut self, _args: &ArgMatches, _context: PuffContext) -> Result<Runnable> {
+    fn make_runnable(&mut self, args: &ArgMatches, _context: PuffContext) -> Result<Runnable> {
         let this_self_func = self
             .inner_func
             .lock()
             .unwrap()
             .take()
             .ok_or(anyhow!("Already ran command."))?;
-        Ok(Runnable::new(this_self_func))
+        let fut = this_self_func(args);
+        Ok(Runnable::new(fut))
     }
 }
 

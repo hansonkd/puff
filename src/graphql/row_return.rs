@@ -12,6 +12,9 @@ use std::collections::HashMap;
 use tokio_postgres::{Column, Row, Statement};
 
 pub fn convert_pyany_to_jupiter(attribute_val: &PyAny) -> AggroValue {
+    if attribute_val.is_none() {
+        return AggroValue::Null;
+    }
     if let Ok(s) = attribute_val.extract() {
         return AggroValue::Scalar(AggroScalarValue::String(s));
     }
@@ -65,44 +68,68 @@ pub fn convert_postgres_to_juniper(
 ) -> Result<AggroValue> {
     match t {
         &tokio_postgres::types::Type::BOOL => {
-            let r: bool = r.get(column_index);
-            Ok(AggroValue::scalar(r))
+            if let Some(r) = r.get::<_, Option<bool>>(column_index) {
+                Ok(AggroValue::scalar(r))
+            } else {
+                Ok(AggroValue::null())
+            }
         }
         &tokio_postgres::types::Type::INT2 | &tokio_postgres::types::Type::INT4 => {
-            let r: i32 = r.get(column_index);
-            Ok(AggroValue::scalar(r))
+            if let Some(r) = r.get::<_, Option<i32>>(column_index) {
+                Ok(AggroValue::scalar(r))
+            } else {
+                Ok(AggroValue::null())
+            }
         }
         &tokio_postgres::types::Type::INT8 => {
-            let r: i64 = r.get(column_index);
-            Ok(if let Ok(s) = r.try_into() {
-                AggroValue::Scalar(AggroScalarValue::Int(s))
+            if let Some(r) = r.get::<_, Option<i64>>(column_index) {
+                Ok(if let Ok(s) = r.try_into() {
+                    AggroValue::Scalar(AggroScalarValue::Int(s))
+                } else {
+                    AggroValue::Scalar(AggroScalarValue::Long(r))
+                })
             } else {
-                AggroValue::Scalar(AggroScalarValue::Long(r))
-            })
+                Ok(AggroValue::null())
+            }
         }
         &tokio_postgres::types::Type::BYTEA => {
-            let r = r.get(column_index);
-            Ok(AggroValue::Scalar(AggroScalarValue::Binary(
-                Bytes::copy_from_slice(r),
-            )))
+            if let Some(r) = r.get::<_, Option<&[u8]>>(column_index) {
+                Ok(AggroValue::Scalar(AggroScalarValue::Binary(
+                    Bytes::copy_from_slice(r),
+                )))
+            } else {
+                Ok(AggroValue::null())
+            }
         }
         &tokio_postgres::types::Type::TIMESTAMP => {
-            let r = r.get(column_index);
-            Ok(AggroValue::Scalar(AggroScalarValue::Datetime(
-                UtcDateTime::new(r),
-            )))
+            if let Some(r) = r.get::<_, Option<_>>(column_index) {
+                Ok(AggroValue::Scalar(AggroScalarValue::Datetime(
+                    UtcDateTime::new(r),
+                )))
+            } else {
+                Ok(AggroValue::null())
+            }
         }
         &tokio_postgres::types::Type::UUID => {
-            let r = r.get(column_index);
-            Ok(AggroValue::Scalar(AggroScalarValue::Uuid(r)))
+            if let Some(r) = r.get::<_, Option<_>>(column_index) {
+                Ok(AggroValue::Scalar(AggroScalarValue::Uuid(r)))
+            } else {
+                Ok(AggroValue::null())
+            }
         }
         &tokio_postgres::types::Type::FLOAT4 | &tokio_postgres::types::Type::FLOAT8 => {
-            let r: f64 = r.get(column_index);
-            Ok(AggroValue::scalar(r))
+            if let Some(r) = r.get::<_, Option<f64>>(column_index) {
+                Ok(AggroValue::scalar(r))
+            } else {
+                Ok(AggroValue::null())
+            }
         }
         &tokio_postgres::types::Type::TEXT | &tokio_postgres::types::Type::VARCHAR => {
-            let r: &str = r.get(column_index);
-            Ok(AggroValue::scalar(r))
+            if let Some(r) = r.get::<_, Option<&str>>(column_index) {
+                Ok(AggroValue::scalar(r))
+            } else {
+                Ok(AggroValue::null())
+            }
         }
         t => {
             panic!("Unsupported postgres type {}", t)

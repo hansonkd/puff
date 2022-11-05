@@ -179,6 +179,11 @@ impl PuffContext {
             .expect("Postgres is not configured for this runtime.")
     }
 
+    /// The configured postgres client.
+    pub fn postgres_safe(&self) -> Option<PostgresClient> {
+        self.postgres.clone()
+    }
+
     /// The configured graphql root node. Panics if not enabled.
     pub fn gql(&self) -> PuffGraphqlRoot {
         self.gql_root

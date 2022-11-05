@@ -24,7 +24,7 @@ impl ServerCommand {
 
 impl RunnableCommand for ServerCommand {
     fn cli_parser(&self) -> Command {
-        HttpServerConfig::add_command_options(Command::new("runserver"))
+        HttpServerConfig::add_command_options(Command::new("serve"))
     }
 
     fn make_runnable(&mut self, args: &ArgMatches, context: PuffContext) -> Result<Runnable> {
