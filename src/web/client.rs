@@ -3,12 +3,13 @@ use std::time::Duration;
 
 use crate::json::{dump_string, run_loads};
 use crate::prelude::{run_python_async, with_puff_context, PuffResult};
+use crate::python::py_obj_to_bytes;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyString, PyTuple};
 use reqwest::header::{HeaderValue, CONTENT_TYPE};
 use reqwest::multipart::{Form, Part};
-use reqwest::{Client, ClientBuilder, Method, Response};
+use reqwest::{Client, ClientBuilder, Method, RequestBuilder, Response};
 
 /// Access the Global graphql context
 #[pyclass]
@@ -51,23 +52,7 @@ impl PyHttpClient {
             .map_err(|_| PyTypeError::new_err("Invalid method"))?;
         let mut rb = self.client.request(method, url);
 
-        if let Some(h) = headers {
-            for (k, v) in h.iter() {
-                if let Ok(key) = k.downcast::<PyString>() {
-                    if let Ok(value) = v.downcast::<PyBytes>() {
-                        rb = rb.header(
-                            key.to_str()?,
-                            HeaderValue::from_bytes(value.as_bytes())
-                                .map_err(|_| PyTypeError::new_err("Invalid HeaderName"))?,
-                        );
-                    } else {
-                        Err(PyTypeError::new_err("Header value should be bytes"))?
-                    }
-                } else {
-                    Err(PyTypeError::new_err("Header name should be string"))?
-                }
-            }
-        }
+        rb = build_headers(headers, rb)?;
 
         if let Some(b) = body {
             rb = rb.body(b)
@@ -165,25 +150,10 @@ impl PyHttpClient {
             .map_err(|_| PyTypeError::new_err("Invalid method"))?;
         let mut rb = self.client.request(method, url);
 
-        if let Some(h) = headers {
-            for (k, v) in h.iter() {
-                if let Ok(key) = k.downcast::<PyString>() {
-                    if let Ok(value) = v.downcast::<PyBytes>() {
-                        rb = rb.header(
-                            key.to_str()?,
-                            HeaderValue::from_bytes(value.as_bytes())
-                                .map_err(|_| PyTypeError::new_err("Invalid HeaderName"))?,
-                        );
-                    } else {
-                        Err(PyTypeError::new_err("Header value should be bytes"))?
-                    }
-                } else {
-                    Err(PyTypeError::new_err("Header name should be string"))?
-                }
-            }
-        }
+        rb = build_headers(headers, rb)?;
 
         rb = rb.header(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
         let obj = dump_string(py, body.into_py(py), None, None)?;
         rb = rb.body(obj);
 
@@ -208,6 +178,29 @@ impl PyHttpClient {
 
         Ok(())
     }
+}
+
+fn build_headers(headers: Option<&PyDict>, rb: RequestBuilder) -> PyResult<RequestBuilder> {
+    let mut rb = rb;
+    if let Some(h) = headers {
+        for (k, v) in h.iter() {
+            if let Ok(key) = k.downcast::<PyString>() {
+                if let Ok(value) = py_obj_to_bytes(v) {
+                    rb = rb.header(
+                        key.to_str()?,
+                        HeaderValue::from_bytes(value)
+                            .map_err(|_| PyTypeError::new_err("Invalid HeaderValue"))?,
+                    );
+                } else {
+                    Err(PyTypeError::new_err("Header value should be bytes"))?
+                }
+            } else {
+                Err(PyTypeError::new_err("Header name should be string"))?
+            }
+        }
+    }
+
+    Ok(rb)
 }
 
 #[pyclass]

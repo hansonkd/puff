@@ -31,26 +31,26 @@ use uuid::Uuid;
 static NUMBERS: &'static [&'static str] = &["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
 
 pub struct AggroContext {
-    bearer: Option<Text>,
+    auth: Option<PyObject>,
     conn: Option<Mutex<Connection>>,
 }
 
 impl juniper::Context for AggroContext {}
 
 impl AggroContext {
-    pub fn new(bearer: Option<Text>) -> Self {
+    pub fn new(auth: Option<PyObject>) -> Self {
         let conn = if let Some(pg) = with_puff_context(|ctx| ctx.postgres_safe()) {
             let pool = pg.pool();
             Some(Mutex::new(Connection::new(pool)))
         } else {
             None
         };
-        Self { bearer, conn }
+        Self { auth, conn }
     }
 
-    pub fn new_with_connection(bearer: Option<Text>, conn: Connection) -> Self {
-        let conn = Some(Mutex::new(conn));
-        Self { bearer, conn }
+    pub fn new_with_connection(auth: Option<PyObject>, conn: Option<Connection>) -> Self {
+        let conn = conn.map(|c| Mutex::new(c));
+        Self { auth, conn }
     }
 
     pub fn connection(&self) -> &Mutex<Connection> {
@@ -61,8 +61,8 @@ impl AggroContext {
         &self.conn
     }
 
-    pub fn token(&self) -> Option<Text> {
-        self.bearer.clone()
+    pub fn auth(&self) -> Option<PyObject> {
+        self.auth.clone()
     }
 }
 
@@ -167,11 +167,20 @@ fn decode_type(t: &PyAny) -> PyResult<DecodedType> {
 }
 
 pub fn convert(
+    py: Python,
     schema: &PyAny,
     type_to_description: &PyAny,
-) -> PyResult<(BTreeMap<Text, AggroObject>, BTreeMap<Text, AggroObject>)> {
-    let (all_types, input_types): (&PyDict, &PyDict) =
-        type_to_description.call1((schema,))?.extract()?;
+) -> PyResult<(Option<PyObject>, bool, BTreeMap<Text, AggroObject>, BTreeMap<Text, AggroObject>)> {
+    let description = type_to_description.call1((schema,))?;
+    let all_types: &PyDict = description.getattr("all_types")?.extract()?;
+    let input_types: &PyDict = description.getattr("input_types")?.extract()?;
+    let py_auth_function = description.getattr("auth_function")?;
+    let py_auth_async: bool = description.getattr("auth_async")?.extract()?;
+    let auth_function = if py_auth_function.is_none() {
+        Some(py_auth_function.into_py(py))
+    } else {
+        None
+    };
 
     let mut return_objs = BTreeMap::new();
     for (k, v) in all_types.iter() {
@@ -186,7 +195,7 @@ pub fn convert(
         let obj = convert_obj(s.as_str(), v.extract()?)?;
         return_inputs.insert(s.to_text(), obj);
     }
-    Ok((return_objs, return_inputs))
+    Ok((auth_function, py_auth_async, return_objs, return_inputs))
 }
 
 pub fn convert_obj(name: &str, desc: BTreeMap<String, &PyAny>) -> PyResult<AggroObject> {
@@ -236,18 +245,18 @@ pub fn convert_obj(name: &str, desc: BTreeMap<String, &PyAny>) -> PyResult<Aggro
 pub struct PyContext {
     conn: Option<Connection>,
     extractor: Arc<dyn ExtractValues + Send + Sync>,
-    bearer: Option<Text>,
+    auth: Option<PyObject>,
 }
 
 impl PyContext {
     pub fn new(
         extractor: Arc<dyn ExtractValues + Send + Sync>,
-        bearer: Option<Text>,
+        auth: Option<PyObject>,
         conn: Option<Connection>,
     ) -> Self {
         Self {
             extractor,
-            bearer,
+            auth,
             conn,
         }
     }
@@ -260,10 +269,9 @@ impl PyContext {
         Ok(rows.into_py(py))
     }
 
-    fn auth_token(&self, py: Python) -> Option<Py<PyString>> {
-        self.bearer
-            .as_ref()
-            .map(|f| PyString::new(py, f.as_str()).into_py(py))
+    fn auth(&self) -> Option<PyObject> {
+        self.auth
+            .clone()
     }
 
     fn connection(&self, py: Python) -> Option<PyObject> {
@@ -489,7 +497,7 @@ pub async fn do_returned_values_into_stream(
         Some(cm) => {
             let result = {
                 if !aggro_field.is_async && aggro_field.safe_without_context {
-                    let py_extractor = PyContext::new(rows.clone(), aggro_context.token(), None);
+                    let py_extractor = PyContext::new(rows.clone(), aggro_context.auth(), None);
                     Python::with_gil(|py| {
                         let arg_dict = args.into_py_dict(py);
                         cm.call(py, (py_extractor.clone(),), Some(arg_dict))
@@ -501,7 +509,7 @@ pub async fn do_returned_values_into_stream(
                         let conn = s.lock().await;
 
                         let py_extractor =
-                            PyContext::new(rows.clone(), aggro_context.token(), Some(conn.clone()));
+                            PyContext::new(rows.clone(), aggro_context.auth(), Some(conn.clone()));
 
                         // Method must be run with lock held to prevent concurrent access to db conn.
                         Python::with_gil(|py| {
@@ -514,7 +522,7 @@ pub async fn do_returned_values_into_stream(
                         })?
                     } else {
                         let py_extractor =
-                            PyContext::new(rows.clone(), aggro_context.token(), None);
+                            PyContext::new(rows.clone(), aggro_context.auth(), None);
                         Python::with_gil(|py| {
                             let arg_dict = args.into_py_dict(py);
                             if aggro_field.is_async {
@@ -817,12 +825,13 @@ impl LookAheadFields {
 pub fn selection_to_fields(
     py: Python,
     field: &AggroField,
-    c: &LookAheadSelection<AggroScalarValue>,
+    look_ahead_selection: &LookAheadSelection<AggroScalarValue>,
     all_inputs: &Arc<BTreeMap<Text, AggroObject>>,
     all_objects: &Arc<BTreeMap<Text, AggroObject>>,
 ) -> PuffResult<LookAheadFields> {
-    let args = collect_arguments_for_python(py, all_inputs, field, c.arguments())?;
-    if c.has_children() {
+    let args =
+        collect_arguments_for_python(py, all_inputs, field, look_ahead_selection.arguments())?;
+    if look_ahead_selection.has_children() {
         let t = match &field.return_type.type_info {
             AggroTypeInfo::Object(t) => t,
             AggroTypeInfo::List(inner) => match &inner.type_info {
@@ -837,7 +846,7 @@ pub fn selection_to_fields(
         };
 
         if let Some(obj) = all_objects.get(t) {
-            let children = c.children();
+            let children = look_ahead_selection.children();
             let mut final_res = BTreeMap::new();
             for child in children {
                 let child_text_name = child.field_name().to_text();
@@ -882,7 +891,7 @@ pub struct SubscriptionSender {
     look_ahead: LookAheadFields,
     field: AggroField,
     all_objs: Arc<BTreeMap<Text, AggroObject>>,
-    bearer: Option<Text>,
+    auth: Option<PyObject>,
     rows: Arc<dyn ExtractValues + Send + Sync>,
 }
 
@@ -892,7 +901,7 @@ impl SubscriptionSender {
         look_ahead: LookAheadFields,
         field: AggroField,
         all_objs: Arc<BTreeMap<Text, AggroObject>>,
-        bearer: Option<Text>,
+        auth: Option<PyObject>,
         rows: Arc<dyn ExtractValues + Send + Sync>,
     ) -> Self {
         Self {
@@ -900,7 +909,7 @@ impl SubscriptionSender {
             look_ahead,
             field,
             all_objs,
-            bearer,
+            auth,
             rows,
         }
     }
@@ -912,7 +921,7 @@ impl SubscriptionSender {
         let this_lookahead = self.look_ahead.clone();
         let this_field = self.field.clone();
         let all_objects = self.all_objs.clone();
-        let bearer = self.bearer.clone();
+        let auth = self.auth.clone();
         let this_sender = self.sender.clone();
         let rows = self.rows.clone();
         run_python_async(ret_func, async move {
@@ -923,7 +932,7 @@ impl SubscriptionSender {
                 &this_lookahead,
                 &my_field,
                 all_objects,
-                &AggroContext::new(bearer),
+                &AggroContext::new(auth),
             )
             .await?;
             for r in res {

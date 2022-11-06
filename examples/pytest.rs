@@ -7,6 +7,7 @@ fn main() -> ExitCode {
         .set_asyncio(true)
         .set_task_queue(true)
         .set_redis(true)
+        .set_postgres(true)
         .set_pubsub(true);
 
     Program::new("my_first_app")

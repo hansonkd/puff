@@ -26,6 +26,7 @@ use tracing::log::info;
 
 use crate::json::{dump, dumpb, dumps, load, loadb, loads};
 use crate::python::pubsub::GlobalPubSub;
+use pyo3::exceptions::PyTypeError;
 pub use pyo3::prelude::*;
 use std::str;
 
@@ -473,4 +474,17 @@ pub fn setup_python_executors(
     handle: Handle,
 ) -> PyResult<PythonDispatcher> {
     PythonDispatcher::new(config, context_waiting, handle)
+}
+
+pub fn py_obj_to_bytes(val: &PyAny) -> PyResult<&[u8]> {
+    if let Ok(r) = val.downcast::<PyString>() {
+        Ok(r.to_str()?.as_bytes())
+    } else if let Ok(r) = val.downcast::<PyBytes>() {
+        Ok(r.as_bytes())
+    } else {
+        Err(PyTypeError::new_err(format!(
+            "Expected str or bytes, got {}",
+            val.to_string()
+        )))
+    }
 }

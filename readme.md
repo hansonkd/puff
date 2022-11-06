@@ -353,7 +353,7 @@ fn main() -> ExitCode {
         .set_postgres(true)
         .set_redis(true)
         .set_pubsub(true)
-        .set_gql_schema_class("my_python_gql_app.schema");
+        .set_gql_schema("my_python_gql_app.schema");
     
     let router = Router::new()
             .get("/", playground("/graphql", Some("/subscriptions")))

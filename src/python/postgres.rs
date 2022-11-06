@@ -1,14 +1,13 @@
 use crate::context::with_puff_context;
 use crate::errors::{handle_puff_error, PuffResult};
 use crate::python::async_python::{handle_python_return, handle_return};
-use crate::python::log_traceback_with_label;
-use crate::python::postgres::TxnCommand::ExecuteMany;
+use crate::python::{get_cached_object, log_traceback_with_label};
 
 use anyhow::anyhow;
 use bb8_postgres::bb8::Pool;
 
 use bb8_postgres::PostgresConnectionManager;
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use futures_util::{StreamExt, TryStreamExt};
 use pyo3::create_exception;
 
@@ -20,9 +19,10 @@ use std::fmt::{Debug, Formatter};
 use std::future::{ready, Future};
 use std::pin::Pin;
 
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Mutex};
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type};
@@ -62,14 +62,14 @@ impl PostgresGlobal {
 pub struct Connection {
     pool: Pool<PostgresConnectionManager<NoTls>>,
     transaction_loop: Arc<Mutex<Option<Sender<TxnCommand>>>>,
-    closed: bool,
+    closed: Arc<AtomicBool>,
 }
 
-fn get_sender(
+async fn get_sender(
     loop_pool: Pool<PostgresConnectionManager<NoTls>>,
     transaction_loop: Arc<Mutex<Option<Sender<TxnCommand>>>>,
 ) -> Sender<TxnCommand> {
-    let mut x = transaction_loop.lock().unwrap();
+    let mut x = transaction_loop.lock().await;
     if let Some(l) = x.as_ref() {
         l.clone()
     } else {
@@ -87,7 +87,7 @@ pub async fn execute_rust(
     params: Vec<PythonSqlValue>,
 ) -> PuffResult<(Statement, Vec<Row>)> {
     let transaction_loop_inner = conn.transaction_loop.clone();
-    let sender = get_sender(conn.pool.clone(), transaction_loop_inner);
+    let sender = get_sender(conn.pool.clone(), transaction_loop_inner).await;
     let (one_sender, rec) = oneshot::channel();
     sender
         .send(TxnCommand::ExecuteRust(one_sender, q, params))
@@ -98,7 +98,7 @@ pub async fn execute_rust(
 pub async fn close_conn(conn: &Connection) {
     let transaction_loop_inner = &conn.transaction_loop;
     let sender = {
-        let job_sender = transaction_loop_inner.lock().unwrap();
+        let job_sender = transaction_loop_inner.lock().await;
         job_sender.clone()
     };
     if let Some(s) = sender {
@@ -112,7 +112,7 @@ impl Connection {
     pub fn new(pool: Pool<PostgresConnectionManager<NoTls>>) -> Self {
         Self {
             pool,
-            closed: false,
+            closed: Arc::new(AtomicBool::new(false)),
             transaction_loop: Arc::new(Mutex::new(None)),
         }
     }
@@ -122,14 +122,15 @@ impl Connection {
 impl Connection {
     #[getter]
     fn get_closed(&self) -> bool {
-        self.closed
+        self.closed.load(Ordering::Acquire)
     }
+
     fn set_auto_commit(&self, ret_func: PyObject, new_autocommit: bool) {
         let ctx = with_puff_context(|ctx| ctx);
         let loop_pool = self.pool.clone();
         let transaction_loop_inner = self.transaction_loop.clone();
         ctx.handle().spawn(async move {
-            let sender = get_sender(loop_pool, transaction_loop_inner);
+            let sender = get_sender(loop_pool, transaction_loop_inner).await;
             sender
                 .send(TxnCommand::SetAutoCommit(ret_func, new_autocommit))
                 .await
@@ -137,13 +138,13 @@ impl Connection {
     }
 
     fn close(&mut self) {
-        self.closed = true;
+        self.closed.store(true, Ordering::SeqCst);
         let ctx = with_puff_context(|ctx| ctx);
         let transaction_loop_inner = self.transaction_loop.clone();
         ctx.handle().spawn(async move {
             let sender = {
                 let local_loop = transaction_loop_inner.clone();
-                let job_sender = local_loop.lock().unwrap();
+                let job_sender = local_loop.lock().await;
                 job_sender.clone()
             };
 
@@ -154,12 +155,15 @@ impl Connection {
             }
         });
     }
-    fn commit(&self, return_fun: PyObject) {
+    fn commit(&self, return_fun: PyObject) -> PyResult<()> {
+        if self.get_closed() {
+            return Err(OperationalError::new_err("Cursor has closed."));
+        }
         let ctx = with_puff_context(|ctx| ctx);
         let transaction_loop_inner = self.transaction_loop.clone();
         ctx.handle().spawn(async move {
             let sender = {
-                let job_sender = transaction_loop_inner.lock().unwrap();
+                let job_sender = transaction_loop_inner.lock().await;
                 job_sender.clone()
             };
             if let Some(s) = sender {
@@ -169,13 +173,15 @@ impl Connection {
                 return Ok(());
             }
         });
+
+        Ok(())
     }
     fn rollback(&self, return_fun: PyObject) {
         let ctx = with_puff_context(|ctx| ctx);
         let transaction_loop_inner = self.transaction_loop.clone();
         ctx.handle().spawn(async move {
             let sender = {
-                let job_sender = transaction_loop_inner.lock().unwrap();
+                let job_sender = transaction_loop_inner.lock().await;
                 job_sender.clone()
             };
 
@@ -191,6 +197,7 @@ impl Connection {
         let cursor = Cursor {
             pool: self.pool.clone(),
             is_closed: false,
+            conn_closed: self.closed.clone(),
             transaction_loop: self.transaction_loop.clone(),
             arraysize: 1,
         };
@@ -198,19 +205,17 @@ impl Connection {
     }
 }
 
+#[derive(Clone)]
 #[pyclass]
 pub struct Cursor {
     pool: Pool<PostgresConnectionManager<NoTls>>,
     transaction_loop: Arc<Mutex<Option<Sender<TxnCommand>>>>,
     is_closed: bool,
+    conn_closed: Arc<AtomicBool>,
     arraysize: i32,
 }
 
 impl Cursor {
-    fn get_sender(&self) -> Sender<TxnCommand> {
-        get_sender(self.pool.clone(), self.transaction_loop.clone())
-    }
-
     fn spawn_and_recover<F: Future<Output = PuffResult<()>> + Send + Sync + 'static>(
         &self,
         return_fun: PyObject,
@@ -242,7 +247,7 @@ impl Cursor {
 impl Cursor {
     #[getter]
     fn get_closed(&self) -> bool {
-        self.is_closed
+        self.is_closed || self.conn_closed.load(Ordering::Acquire)
     }
 
     #[getter]
@@ -260,7 +265,7 @@ impl Cursor {
         let inner_loop = self.transaction_loop.clone();
         self.spawn_and_recover(return_fun.clone(), async move {
             let txn_loop = {
-                let m = inner_loop.lock().unwrap();
+                let m = inner_loop.lock().await;
                 m.clone()
             };
             match txn_loop {
@@ -291,18 +296,35 @@ impl Cursor {
         return_func: PyObject,
         operation: String,
         seq_of_parameters: Option<PyObject>,
-    ) {
-        let job_sender = py.allow_threads(|| self.get_sender());
+    ) -> PyResult<()> {
+        if self.get_closed() {
+            return Err(OperationalError::new_err("Cursor has closed."));
+        }
+
+        let seqs = if let Some(seq) = seq_of_parameters {
+            let mut seqs = Vec::new();
+            for pyparams in seq.as_ref(py).iter()? {
+                let mut params = Vec::new();
+                for pyparam in pyparams?.iter()? {
+                    params.push(PythonSqlValue(pyparam?.into_py(py)));
+                }
+                seqs.push(params)
+            }
+            seqs
+        } else {
+            Vec::new()
+        };
+
+        let this_self = self.clone();
+
         self.spawn_and_recover(return_func.clone(), async move {
+            let job_sender = get_sender(this_self.pool, this_self.transaction_loop).await;
             Ok(job_sender
-                .send(ExecuteMany(
-                    return_func,
-                    operation,
-                    seq_of_parameters
-                        .unwrap_or(Python::with_gil(|py| PyList::empty(py).into_py(py))),
-                ))
+                .send(TxnCommand::ExecuteMany(return_func, operation, seqs))
                 .await?)
-        })
+        });
+
+        Ok(())
     }
 
     fn execute(
@@ -310,40 +332,68 @@ impl Cursor {
         py: Python,
         return_func: PyObject,
         operation: String,
-        parameters: Option<Vec<PyObject>>,
-    ) {
-        let job_sender = py.allow_threads(|| self.get_sender());
+        maybe_params: Option<&PyAny>,
+    ) -> PyResult<()> {
+        if self.get_closed() {
+            return Err(OperationalError::new_err("Cursor has closed."));
+        }
+
+        let sql_p = if let Some(pyparams) = maybe_params {
+            let mut params = Vec::new();
+            for pyparam in pyparams.iter()? {
+                params.push(PythonSqlValue(pyparam?.into_py(py)));
+            }
+            params
+        } else {
+            Vec::new()
+        };
+
+        let this_self = self.clone();
         self.spawn_and_recover(return_func.clone(), async move {
-            let p = parameters.unwrap_or_default();
-            let sql_p = p.into_iter().map(PythonSqlValue).collect();
+            let job_sender = get_sender(this_self.pool, this_self.transaction_loop).await;
             Ok(job_sender
                 .send(TxnCommand::Execute(return_func, operation, sql_p))
                 .await?)
         });
+
+        Ok(())
     }
 
     fn callproc(&self, _procname: &PyString, _parameters: Option<&PyList>) {}
 
-    fn fetchone(&mut self, py: Python, return_func: PyObject) {
-        let job_sender = py.allow_threads(|| self.get_sender());
+    fn description(&mut self, return_func: PyObject) {
+        let this_self = self.clone();
         self.spawn_and_recover(return_func.clone(), async move {
+            let job_sender = get_sender(this_self.pool, this_self.transaction_loop).await;
+            Ok(job_sender
+                .send(TxnCommand::Description(return_func))
+                .await?)
+        });
+    }
+
+    fn fetchone(&mut self, return_func: PyObject) {
+        let this_self = self.clone();
+        self.spawn_and_recover(return_func.clone(), async move {
+            let job_sender = get_sender(this_self.pool, this_self.transaction_loop).await;
             Ok(job_sender.send(TxnCommand::FetchOne(return_func)).await?)
         });
     }
 
-    fn fetchmany(&mut self, py: Python, return_func: PyObject, rowcount: Option<i32>) {
+    fn fetchmany(&mut self, return_func: PyObject, rowcount: Option<i32>) {
         let real_row_count = rowcount.unwrap_or(self.arraysize);
-        let job_sender = py.allow_threads(|| self.get_sender());
+        let this_self = self.clone();
         self.spawn_and_recover(return_func.clone(), async move {
+            let job_sender = get_sender(this_self.pool, this_self.transaction_loop).await;
             Ok(job_sender
                 .send(TxnCommand::FetchMany(return_func, real_row_count))
                 .await?)
         });
     }
 
-    fn fetchall(&mut self, py: Python, return_func: PyObject) {
-        let job_sender = py.allow_threads(|| self.get_sender());
+    fn fetchall(&mut self, return_func: PyObject) {
+        let this_self = self.clone();
         self.spawn_and_recover(return_func.clone(), async move {
+            let job_sender = get_sender(this_self.pool, this_self.transaction_loop).await;
             Ok(job_sender.send(TxnCommand::FetchAll(return_func)).await?)
         });
     }
@@ -357,6 +407,14 @@ pub(crate) fn column_to_python(
 ) -> PyResult<Py<PyAny>> {
     let val = match c.type_().clone() {
         Type::BOOL => row.get::<_, Option<bool>>(ix).into_py(py),
+        Type::TIME => row
+            .get::<_, Option<NaiveTime>>(ix)
+            .map(|f| pyo3_chrono::NaiveTime::from(f))
+            .into_py(py),
+        Type::DATE => row
+            .get::<_, Option<NaiveDate>>(ix)
+            .map(|f| pyo3_chrono::NaiveDate::from(f))
+            .into_py(py),
         Type::TIMESTAMP => row
             .get::<_, Option<NaiveDateTime>>(ix)
             .map(|f| pyo3_chrono::NaiveDateTime::from(f))
@@ -380,20 +438,35 @@ pub(crate) fn column_to_python(
         Type::UUID => pythonize::pythonize(py, &row.get::<_, Option<Uuid>>(ix))?,
         Type::JSON => pythonize::pythonize(py, &row.get::<_, Option<serde_json::Value>>(ix))?,
         Type::JSONB => pythonize::pythonize(py, &row.get::<_, Option<serde_json::Value>>(ix))?,
-        Type::BOOL_ARRAY => row.get::<_, Option<Vec<bool>>>(ix).into_py(py),
-        Type::TEXT_ARRAY => row.get::<_, Option<Vec<&str>>>(ix).into_py(py),
-        Type::VARCHAR_ARRAY => row.get::<_, Option<Vec<&str>>>(ix).into_py(py),
-        Type::NAME_ARRAY => row.get::<_, Option<Vec<&str>>>(ix).into_py(py),
-        Type::CHAR_ARRAY => row.get::<_, Option<Vec<i8>>>(ix).into_py(py),
-        Type::INT2_ARRAY => row.get::<_, Option<Vec<i16>>>(ix).into_py(py),
-        Type::INT4_ARRAY => row.get::<_, Option<Vec<i32>>>(ix).into_py(py),
-        Type::INT8_ARRAY => row.get::<_, Option<Vec<i64>>>(ix).into_py(py),
-        Type::FLOAT4_ARRAY => row.get::<_, Option<Vec<f32>>>(ix).into_py(py),
-        Type::FLOAT8_ARRAY => row.get::<_, Option<Vec<f64>>>(ix).into_py(py),
-        Type::OID_ARRAY => row.get::<_, Option<Vec<u32>>>(ix).into_py(py),
-        Type::BYTEA_ARRAY => row.get::<_, Option<Vec<&[u8]>>>(ix).into_py(py),
-        Type::UUID_ARRAY => pythonize::pythonize(py, &row.get::<_, Vec<Uuid>>(ix))?,
-
+        Type::BOOL_ARRAY => row.get::<_, Option<Vec<Option<bool>>>>(ix).into_py(py),
+        Type::TEXT_ARRAY => row.get::<_, Option<Vec<Option<&str>>>>(ix).into_py(py),
+        Type::VARCHAR_ARRAY => row.get::<_, Option<Vec<Option<&str>>>>(ix).into_py(py),
+        Type::NAME_ARRAY => row.get::<_, Option<Vec<Option<&str>>>>(ix).into_py(py),
+        Type::CHAR_ARRAY => row.get::<_, Option<Vec<Option<i8>>>>(ix).into_py(py),
+        Type::INT2_ARRAY => row.get::<_, Option<Vec<Option<i16>>>>(ix).into_py(py),
+        Type::INT4_ARRAY => row.get::<_, Option<Vec<Option<i32>>>>(ix).into_py(py),
+        Type::INT8_ARRAY => row.get::<_, Option<Vec<Option<i64>>>>(ix).into_py(py),
+        Type::FLOAT4_ARRAY => row.get::<_, Option<Vec<Option<f32>>>>(ix).into_py(py),
+        Type::FLOAT8_ARRAY => row.get::<_, Option<Vec<Option<f64>>>>(ix).into_py(py),
+        Type::OID_ARRAY => row.get::<_, Option<Vec<Option<u32>>>>(ix).into_py(py),
+        Type::BYTEA_ARRAY => row.get::<_, Option<Vec<Option<&[u8]>>>>(ix).into_py(py),
+        Type::UUID_ARRAY => pythonize::pythonize(py, &row.get::<_, Vec<Option<Uuid>>>(ix))?,
+        Type::TIME_ARRAY => row
+            .get::<_, Option<Vec<Option<NaiveTime>>>>(ix)
+            .map(|f| {
+                f.into_iter()
+                    .map(|v| v.map(pyo3_chrono::NaiveTime))
+                    .collect::<Vec<_>>()
+            })
+            .into_py(py),
+        Type::DATE_ARRAY => row
+            .get::<_, Option<Vec<Option<NaiveDate>>>>(ix)
+            .map(|f| {
+                f.into_iter()
+                    .map(|v| v.map(pyo3_chrono::NaiveDate::from))
+                    .collect::<Vec<_>>()
+            })
+            .into_py(py),
         t => {
             return Err(NotSupportedError::new_err(format!(
                 "Unsupported postgres type {:?}",
@@ -421,7 +494,7 @@ enum TxnCommand {
         String,
         Vec<PythonSqlValue>,
     ),
-    ExecuteMany(PyObject, String, PyObject),
+    ExecuteMany(PyObject, String, Vec<Vec<PythonSqlValue>>),
     FetchOne(PyObject),
     FetchMany(PyObject, i32),
     FetchAll(PyObject),
@@ -429,12 +502,26 @@ enum TxnCommand {
     Rollback(PyObject),
     RowCount(PyObject),
     SetAutoCommit(PyObject, bool),
+    Description(PyObject),
     Close(Arc<Mutex<Option<Sender<TxnCommand>>>>),
 }
 
 impl Debug for TxnCommand {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        "TxnCommand".fmt(f)
+        match self {
+            TxnCommand::Execute(_, _, _) => f.write_str("Execute"),
+            TxnCommand::ExecuteRust(_, _, _) => f.write_str("ExecuteRust"),
+            TxnCommand::ExecuteMany(_, _, _) => f.write_str("ExecuteMany"),
+            TxnCommand::FetchOne(_) => f.write_str("FetchOne"),
+            TxnCommand::FetchMany(_, _) => f.write_str("FetchMany"),
+            TxnCommand::FetchAll(_) => f.write_str("FetchAll"),
+            TxnCommand::Commit(_) => f.write_str("Commit"),
+            TxnCommand::Rollback(_) => f.write_str("Rollback"),
+            TxnCommand::RowCount(_) => f.write_str("RowCount"),
+            TxnCommand::SetAutoCommit(_, _) => f.write_str("SetAutoCommit"),
+            TxnCommand::Description(_) => f.write_str("Description"),
+            TxnCommand::Close(_) => f.write_str("Close"),
+        }
     }
 }
 #[derive(Debug, Clone)]
@@ -667,18 +754,74 @@ async fn run_loop(
     Ok(())
 }
 
+fn pg_type_to_db2_type(py: Python, ty: &Type) -> PyResult<PyObject> {
+    match ty.clone() {
+        Type::TIME => get_cached_object(py, "puff.postgres.TIME".into()),
+        Type::DATE => get_cached_object(py, "puff.postgres.DATE".into()),
+        Type::TIMESTAMP => get_cached_object(py, "puff.postgres.DATETIME".into()),
+        Type::TIMESTAMPTZ => get_cached_object(py, "puff.postgres.DATETIME".into()),
+        Type::TEXT => get_cached_object(py, "puff.postgres.STRING".into()),
+        Type::VARCHAR => get_cached_object(py, "puff.postgres.STRING".into()),
+        Type::INT2 => get_cached_object(py, "puff.postgres.NUMBER".into()),
+        Type::INT4 => get_cached_object(py, "puff.postgres.NUMBER".into()),
+        Type::INT8 => get_cached_object(py, "puff.postgres.NUMBER".into()),
+        Type::FLOAT4 => get_cached_object(py, "puff.postgres.NUMBER".into()),
+        Type::FLOAT8 => get_cached_object(py, "puff.postgres.NUMBER".into()),
+        Type::OID => get_cached_object(py, "puff.postgres.ROWID".into()),
+        Type::BYTEA => get_cached_object(py, "puff.postgres.BINARY".into()),
+        t => get_cached_object(py, "puff.postgres.TypeObject".into())?.call1(py, (t.to_string(),)),
+    }
+}
+
+fn statement_to_description(statement: &Option<Statement>) -> PyResult<Option<PyObject>> {
+    match statement.as_ref() {
+        Some(st) => {
+            let cols = st.columns();
+            if cols.len() == 0 {
+                Ok(None)
+            } else {
+                Python::with_gil(|py| {
+                    let desc = PyList::empty(py);
+                    for col in cols {
+                        let col_t = pg_type_to_db2_type(py, col.type_())?;
+                        let tup = PyTuple::new(
+                            py,
+                            vec![
+                                col.name().into_py(py),
+                                col_t,
+                                py.None(),
+                                py.None(),
+                                py.None(),
+                                py.None(),
+                                py.None(),
+                            ],
+                        );
+                        desc.append(tup)?;
+                    }
+                    Ok(Some(desc.into_py(py)))
+                })
+            }
+        }
+        None => Ok(None),
+    }
+}
+
 async fn run_txn_loop<'a>(
     first_msg: TxnCommand,
     txn: Transaction<'a>,
     rec: &'a mut Receiver<TxnCommand>,
 ) -> PuffResult<LoopResult> {
     let mut row_count: i32 = -1;
-    let _statement: Option<Statement> = None;
+    let mut current_statement: Option<Statement> = None;
     let mut current_portal: Option<Portal> = None;
     let mut next_message = Some(first_msg);
     let mut is_first = true;
     while let Some(x) = next_message.take() {
         match x {
+            TxnCommand::Description(py_obj) => {
+                let py_res = statement_to_description(&current_statement);
+                handle_python_return(py_obj, ready(py_res)).await;
+            }
             TxnCommand::SetAutoCommit(py_obj, new) => {
                 handle_python_return(py_obj, ready(Ok(()))).await;
                 if new {
@@ -687,7 +830,7 @@ async fn run_txn_loop<'a>(
             }
             TxnCommand::Close(txn_loop) => {
                 txn.rollback().await?;
-                let mut m = txn_loop.lock().unwrap();
+                let mut m = txn_loop.lock().await;
                 *m = None;
                 return Ok(LoopResult::Stop);
             }
@@ -716,6 +859,9 @@ async fn run_txn_loop<'a>(
                 }
             }
             TxnCommand::ExecuteRust(sender, q, params) => {
+                current_statement = None;
+                row_count = -1;
+
                 let fut = async {
                     let statement = txn.prepare(&q).await?;
                     let rowstream = txn.query_raw(&statement, &params).await?;
@@ -725,13 +871,14 @@ async fn run_txn_loop<'a>(
                 sender.send(fut.await).unwrap_or(())
             }
             TxnCommand::Execute(ret, q, params) => {
-                row_count = 0;
+                current_statement = None;
+                row_count = -1;
                 is_first = false;
 
                 let stmt = txn.prepare(&q).await;
                 let real_return = match stmt {
                     Ok(r) => {
-                        // statement = Some(r.clone());
+                        current_statement = Some(r.clone());
                         if r.columns().len() == 0 {
                             let res = txn.execute_raw(&r, &params[..]).await;
                             match res {
@@ -747,6 +894,7 @@ async fn run_txn_loop<'a>(
                             match res {
                                 Ok(r) => {
                                     current_portal = Some(r);
+                                    row_count = -1;
                                     Ok(())
                                 }
                                 Err(e) => Err(postgres_to_python_exception(e)),
@@ -756,10 +904,38 @@ async fn run_txn_loop<'a>(
                     Err(e) => Err(postgres_to_python_exception(e)),
                 };
 
-                handle_python_return(ret, async { real_return }).await
+                handle_python_return(ret, ready(real_return)).await
             }
-            TxnCommand::ExecuteMany(_ret, _q, _param_seq) => {
-                todo!()
+            TxnCommand::ExecuteMany(ret, q, param_seq) => {
+                current_statement = None;
+                let fut = async {
+                    let stmt = txn.prepare(&q).await;
+                    row_count = -1;
+
+                    match stmt {
+                        Ok(r) => {
+                            let mut this_row_count = 0;
+
+                            for params in param_seq {
+                                let res = txn.execute_raw(&r, &params[..]).await;
+                                match res {
+                                    Ok(r) => {
+                                        current_portal = None;
+                                        this_row_count += r as i32;
+                                    }
+                                    Err(e) => return Err(postgres_to_python_exception(e)),
+                                }
+                            }
+
+                            row_count = this_row_count;
+
+                            Ok(())
+                        }
+                        Err(e) => Err(postgres_to_python_exception(e)),
+                    }
+                };
+
+                handle_python_return(ret, fut).await
             }
             TxnCommand::RowCount(ret) => handle_return(ret, async { Ok(row_count) }).await,
             TxnCommand::FetchOne(ret) => {
@@ -767,20 +943,15 @@ async fn run_txn_loop<'a>(
                     if let Some(v) = current_portal.as_ref() {
                         let result = txn.query_portal(v, 1).await;
                         match result {
-                            Ok(vec) => {
-                                row_count += 1;
-                                match vec.into_iter().next() {
-                                    Some(row) => {
-                                        Python::with_gil(
-                                            |py| Ok(row_to_pyton(py, row)?.into_py(py)),
-                                        )
-                                    }
-                                    None => {
-                                        current_portal = None;
-                                        Python::with_gil(|py| Ok(py.None()))
-                                    }
+                            Ok(vec) => match vec.into_iter().next() {
+                                Some(row) => {
+                                    Python::with_gil(|py| Ok(row_to_pyton(py, row)?.into_py(py)))
                                 }
-                            }
+                                None => {
+                                    current_portal = None;
+                                    Python::with_gil(|py| Ok(py.None()))
+                                }
+                            },
                             Err(e) => {
                                 current_portal = None;
                                 Err(postgres_to_python_exception(e))
@@ -802,7 +973,6 @@ async fn run_txn_loop<'a>(
                             Ok(vec) => Python::with_gil(|py| {
                                 let pylist = PyList::empty(py);
                                 for v in vec {
-                                    row_count += 1;
                                     pylist.append(row_to_pyton(py, v)?)?;
                                 }
                                 Ok(pylist.into_py(py))
@@ -826,7 +996,6 @@ async fn run_txn_loop<'a>(
                             Ok(vec) => Python::with_gil(|py| {
                                 let pylist = PyList::empty(py);
                                 for v in vec {
-                                    row_count += 1;
                                     pylist.append(row_to_pyton(py, v)?)?;
                                 }
                                 Ok(pylist.into_py(py))
@@ -856,11 +1025,15 @@ async fn run_autocommit_loop<'a>(
     rec: &'a mut Receiver<TxnCommand>,
 ) -> PuffResult<LoopResult> {
     let mut row_count: i32 = -1;
-    // let mut statement: Option<Statement> = None;
+    let mut current_statement: Option<Statement> = None;
     let mut current_stream: Option<Pin<Box<RowStream>>> = None;
     let mut next_message = Some(first_msg);
     while let Some(x) = next_message.take() {
         match x {
+            TxnCommand::Description(py_obj) => {
+                let py_res = statement_to_description(&current_statement);
+                handle_python_return(py_obj, ready(py_res)).await;
+            }
             TxnCommand::SetAutoCommit(ret, new) => {
                 handle_python_return(ret, ready(Ok(()))).await;
                 if !new {
@@ -868,7 +1041,7 @@ async fn run_autocommit_loop<'a>(
                 }
             }
             TxnCommand::Close(txn_loop) => {
-                let mut m = txn_loop.lock().unwrap();
+                let mut m = txn_loop.lock().await;
                 *m = None;
                 return Ok(LoopResult::Stop);
             }
@@ -888,16 +1061,17 @@ async fn run_autocommit_loop<'a>(
                 sender.send(fut.await).unwrap_or(());
             }
             TxnCommand::Execute(ret, q, params) => {
-                row_count = 0;
+                row_count = -1;
+                current_stream = None;
+
                 let stmt = client.prepare(&q).await;
                 let real_return = match stmt {
                     Ok(r) => {
-                        // statement = Some(r.clone());
+                        current_statement = Some(r.clone());
                         if r.columns().len() == 0 {
                             let res = client.execute_raw(&r, &params[..]).await;
                             match res {
                                 Ok(r) => {
-                                    current_stream = None;
                                     row_count = r as i32;
                                     Ok(())
                                 }
@@ -908,6 +1082,7 @@ async fn run_autocommit_loop<'a>(
                             match res {
                                 Ok(r) => {
                                     current_stream = Some(Box::pin(r));
+                                    row_count = -1;
                                     Ok(())
                                 }
                                 Err(e) => Err(postgres_to_python_exception(e)),
@@ -919,8 +1094,34 @@ async fn run_autocommit_loop<'a>(
 
                 handle_python_return(ret, async { real_return }).await
             }
-            TxnCommand::ExecuteMany(_ret, _q, _param_seq) => {
-                todo!()
+            TxnCommand::ExecuteMany(ret, q, param_seq) => {
+                current_statement = None;
+                let fut = async {
+                    let stmt = client.prepare(&q).await;
+                    row_count = -1;
+                    match stmt {
+                        Ok(r) => {
+                            let mut this_row_count = 0;
+                            for params in param_seq {
+                                let res = client.execute_raw(&r, &params[..]).await;
+                                match res {
+                                    Ok(r) => {
+                                        current_stream = None;
+                                        this_row_count += r as i32;
+                                    }
+                                    Err(e) => return Err(postgres_to_python_exception(e)),
+                                }
+
+                                row_count = this_row_count;
+                            }
+
+                            Ok(())
+                        }
+                        Err(e) => Err(postgres_to_python_exception(e)),
+                    }
+                };
+
+                handle_python_return(ret, fut).await
             }
             TxnCommand::RowCount(ret) => handle_return(ret, async { Ok(row_count) }).await,
             TxnCommand::FetchOne(ret) => {
@@ -929,7 +1130,6 @@ async fn run_autocommit_loop<'a>(
                         let result = v.next().await;
                         match result {
                             Some(Ok(row)) => {
-                                row_count += 1;
                                 Python::with_gil(|py| Ok(row_to_pyton(py, row)?.into_py(py)))
                             }
                             Some(Err(e)) => {
@@ -955,7 +1155,6 @@ async fn run_autocommit_loop<'a>(
                             let result = v.next().await;
                             match result {
                                 Some(Ok(row)) => {
-                                    row_count += 1;
                                     let obj = Python::with_gil(|py| {
                                         PyResult::Ok(row_to_pyton(py, row)?.into_py(py))
                                     })?;
@@ -986,7 +1185,6 @@ async fn run_autocommit_loop<'a>(
                             let result = v.next().await;
                             match result {
                                 Some(Ok(row)) => {
-                                    row_count += 1;
                                     let obj = Python::with_gil(|py| {
                                         PyResult::Ok(row_to_pyton(py, row)?.into_py(py))
                                     })?;

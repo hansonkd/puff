@@ -183,7 +183,7 @@ First add postgres and the gql_schema_class to your config in Rust.
         .set_redis(true)
         .set_pubsub(true)
         .set_postgres(true)
-        .set_gql_schema_class("my_puff_proj_py.Schema")
+        .set_gql_schema("my_puff_proj_py.Schema")
         .set_task_queue(true);
 ```
 

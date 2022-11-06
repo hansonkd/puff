@@ -8,7 +8,7 @@ pub use handlers::{handle_graphql, handle_subscriptions};
 pub mod handlers;
 mod puff_schema;
 mod row_return;
-mod scalar;
+pub(crate) mod scalar;
 mod schema;
 use crate::errors::PuffResult;
 pub use puff_schema::AggroContext;
@@ -20,13 +20,28 @@ use crate::python::PythonDispatcher;
 use crate::types::text::ToText;
 use crate::types::Text;
 
+
 pub(crate) type PuffGraphqlRoot =
     Arc<RootNode<'static, PuffGqlObject, PuffGqlObject, PuffGqlObject, AggroScalarValue>>;
+
+#[derive(Clone)]
+pub struct PuffGraphqlConfig {
+    root: PuffGraphqlRoot,
+    auth: Option<PyObject>,
+    auth_async: bool
+}
+
+impl PuffGraphqlConfig {
+    pub fn root(&self) -> PuffGraphqlRoot {
+        return self.root.clone()
+    }
+}
+
 
 pub(crate) async fn load_schema(
     module: Text,
     py_dispatcher: PythonDispatcher,
-) -> PyResult<PuffGraphqlRoot> {
+) -> PyResult<PuffGraphqlConfig> {
     let import_string_fn = Python::with_gil(|py| -> PyResult<_> {
         let puff = py.import("puff")?;
         let import_string_fn = puff.getattr("import_string")?.to_object(py);
@@ -37,12 +52,12 @@ pub(crate) async fn load_schema(
         .dispatch1(import_string_fn, (module,))?
         .await
         .unwrap()?;
-    let (converted_objs, input_objs) = Python::with_gil(|py| -> PyResult<_> {
+    let (auth, auth_async, converted_objs, input_objs) = Python::with_gil(|py| -> PyResult<_> {
         let puff_gql = py.import("puff.graphql")?;
         let t2d = puff_gql.getattr("type_to_description")?;
 
-        let (converted_objs, input_objs) = puff_schema::convert(schema.as_ref(py), t2d)?;
-        Ok((converted_objs, input_objs))
+        let ret = puff_schema::convert(py, schema.as_ref(py), t2d)?;
+        Ok(ret)
     })?;
 
     let info = schema::SchemaInfo {
@@ -74,7 +89,7 @@ pub(crate) async fn load_schema(
         subscription_info,
     );
 
-    Ok(Arc::new(schema))
+    Ok(PuffGraphqlConfig{root: Arc::new(schema), auth, auth_async})
 }
 
 pub(crate) fn juniper_value_to_python(py: Python, v: &AggroValue) -> PuffResult<Py<PyAny>> {

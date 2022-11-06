@@ -1,5 +1,10 @@
 # 0.1.7
 
+* Improve Postgres DBAPI2.0 Compliance.
+
+
+# 0.1.7
+
 * Improve GraphQL return type compatibility and subscription URLs.
 * Update to pyo3 0.17
 * Rename runserver to serve

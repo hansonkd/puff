@@ -1,7 +1,8 @@
+use std::collections::HashMap;
 use axum::extract::{FromRequest, Query, WebSocketUpgrade};
-use axum::http::{Method, Request, StatusCode};
+use axum::http::{HeaderMap, Method, Request, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
-use axum::{Json, TypedHeader};
+use axum::Json;
 use juniper::{
     BoxFuture, GraphQLSubscriptionType, GraphQLTypeAsync, InputValue, RootNode, ScalarValue,
 };
@@ -9,25 +10,28 @@ use std::convert::Infallible;
 use std::future;
 
 use std::sync::Arc;
+use anyhow::Error;
 
 use crate::graphql::scalar::AggroScalarValue;
 use crate::types::Text;
 use juniper::http::{GraphQLBatchRequest, GraphQLBatchResponse, GraphQLRequest};
 
 use crate::context::with_puff_context;
-use crate::graphql::AggroContext;
-use crate::prelude::ToText;
+use crate::graphql::{AggroContext, PuffGraphqlConfig};
 use crate::python::postgres::close_conn;
 use async_trait::async_trait;
 use axum::extract::ws::{Message, WebSocket};
-use axum::headers::authorization::Bearer;
-use axum::headers::Authorization;
+use futures_util::FutureExt;
 use hyper::Body;
 use juniper::futures::{SinkExt, StreamExt, TryStreamExt};
 use juniper_graphql_ws::{ClientMessage, Connection, ConnectionConfig, Schema};
+use pyo3::{IntoPy, PyObject, Python};
+use pyo3::types::{PyBytes, PyDict};
 use serde;
 use serde::Deserialize;
 use serde_json::{Map, Value};
+use crate::errors::{log_puff_error, PuffResult};
+use crate::python::{py_obj_to_bytes, PythonDispatcher};
 
 /// The query variables for a GET request
 #[derive(Deserialize, Debug)]
@@ -105,7 +109,7 @@ impl TryFrom<JsonRequestBody> for JuniperPuffRequest {
         match value {
             JsonRequestBody::Single(r) => JuniperPuffRequest::try_from(r),
             JsonRequestBody::Batch(requests) => {
-                let mut graphql_requests: Vec<GraphQLRequest<AggroScalarValue>> = Vec::new();
+                let mut graphql_requests: Vec<GraphQLRequest<AggroScalarValue>> = Vec::with_capacity(requests.len());
 
                 for request in requests {
                     let gq = GraphQLRequest::<AggroScalarValue>::try_from(request)?;
@@ -339,45 +343,122 @@ where
 }
 
 pub fn handle_graphql() -> impl FnOnce(
-    Option<TypedHeader<Authorization<Bearer>>>,
+    HeaderMap,
     JuniperPuffRequest,
-) -> BoxFuture<'static, JuniperPuffResponse>
+) -> BoxFuture<'static, Response>
        + Clone
        + Send
        + 'static {
-    move |bearer: Option<TypedHeader<Authorization<Bearer>>>,
+    move |headers: HeaderMap,
           JuniperPuffRequest(request): JuniperPuffRequest| {
         Box::pin(async move {
             let root_node = with_puff_context(|ctx| ctx.gql());
-            let header = bearer.map(|c| c.0 .0.token().to_text());
-            let new_ctx = AggroContext::new(header);
-            let resp = request.execute(&root_node, &new_ctx).await;
-            let conn = new_ctx.connection().lock().await;
-            close_conn(&conn).await;
-            JuniperPuffResponse(resp)
+            let dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
+
+            let s : PuffResult<PyObject> = auth_result(headers, &root_node, dispatcher).await;
+
+            match log_puff_error("GQL handler auth", s) {
+                Ok(v) => {
+                    let opt_res = auth_result_to_response(&v);
+
+                    if let Some(res) = log_puff_error("Construct GQL Rejection", opt_res).unwrap_or_default() {
+                        return res.into_response()
+                    }
+
+                    let new_ctx = AggroContext::new(Some(v));
+                    let resp = request.execute(&root_node.root(), &new_ctx).await;
+                    let conn = new_ctx.connection().lock().await;
+                    close_conn(&conn).await;
+                    JuniperPuffResponse(resp).into_response()
+                }
+                Err(_e) => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, "Internal Error").into_response()
+                }
+            }
         })
     }
 }
 
+fn auth_result_to_response(v: &PyObject) -> Result<Option<Response<String>>, Error> {
+    Python::with_gil(|py| {
+        if v.as_ref(py).hasattr("is_rejection").unwrap_or_default() {
+            let status = v.getattr(py, "status")?.extract::<u16>(py)?;
+            let message = v.getattr(py, "message")?.extract::<String>(py)?;
+            let header_v = v.getattr(py, "headers")?;
+            let headers = header_v.extract::<&PyDict>(py)?;
+            let mut r = Response::builder().status(status);
+            for (hn, hv) in headers {
+                r = r.header(hn.extract::<&str>()?, py_obj_to_bytes(hv)?)
+            }
+            Ok(Some(r.body(message)?))
+        } else {
+            Ok(None)
+        }
+    })
+}
+
+async fn auth_result(headers: HeaderMap, root_node: &PuffGraphqlConfig, dispatcher: PythonDispatcher) -> Result<PyObject, Error> {
+    if let Some(auth) = root_node.auth.clone() {
+        let headers = Python::with_gil(|py| {
+            let mut d: HashMap<String, PyObject> = HashMap::with_capacity(headers.len());
+            for (hn, hv) in headers {
+                if let Some(hn) = hn {
+                    d.insert(hn.to_string(), PyBytes::new(py, hv.as_bytes()).into_py(py));
+                }
+            }
+            d
+        });
+
+        if root_node.auth_async {
+            async {
+                Ok(Python::with_gil(|py| dispatcher.dispatch_asyncio(py, auth, (headers, ), PyDict::new(py)))?.await??)
+            }.await
+        } else {
+            async {
+                Ok(dispatcher.dispatch1(auth, (headers, ))?.await??)
+            }.await
+        }
+    } else {
+        Ok(Python::with_gil(|py| py.None()))
+    }
+}
+
 pub fn handle_subscriptions() -> impl FnOnce(
-    Option<TypedHeader<Authorization<Bearer>>>,
+    HeaderMap,
     WebSocketUpgrade,
     (),
-) -> future::Ready<Response>
+) -> BoxFuture<'static, Response>
        + Clone
        + Send {
-    move |bearer: Option<TypedHeader<Authorization<Bearer>>>, ws: WebSocketUpgrade, _| {
+    move |headers: HeaderMap, ws: WebSocketUpgrade, _| {
         let root_node = with_puff_context(|ctx| ctx.gql());
-        let header = bearer.map(|c| c.0 .0.token().to_text());
-        let new_ctx = AggroContext::new(header);
+        let dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
+        let fut = async {
+            let s: PuffResult<PyObject> = auth_result(headers, &root_node, dispatcher).await;
 
-        let s = ws
-            .protocols(["graphql-ws"])
-            .max_frame_size(1024)
-            .max_message_size(1024)
-            .max_send_queue(100)
-            .on_upgrade(move |socket| handle_graphql_socket(socket, root_node, new_ctx));
-        future::ready(s)
+            match log_puff_error("GQL subscription auth", s) {
+                Ok(v) => {
+                    let opt_res = auth_result_to_response(&v);
+
+                    if let Some(res) = log_puff_error("Construct GQL Rejection", opt_res).unwrap_or_default() {
+                        return res.into_response()
+                    }
+
+                    let new_ctx = AggroContext::new(Some(v));
+                    let s = ws
+                        .protocols(["graphql-ws"])
+                        .max_frame_size(1024)
+                        .max_message_size(1024)
+                        .max_send_queue(100)
+                        .on_upgrade(move |socket| handle_graphql_socket(socket, root_node.root(), new_ctx));
+                    s
+                }
+                Err(_e) => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, "Internal Error").into_response()
+                }
+            }
+        };
+        fut.boxed()
     }
 }
 

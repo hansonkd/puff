@@ -1,6 +1,7 @@
 //! Types used to interact with the Puff Runtime
 //!
 
+use std::collections::HashMap;
 use pyo3::prelude::PyObject;
 use pyo3::{PyResult, Python};
 use reqwest::ClientBuilder;
@@ -10,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::types::text::ToText;
-use crate::types::{Puff, Text};
+use crate::types::Text;
 
 /// Strategies for distributing tasks onto a coroutine worker thread.
 /// In general the strategy shouldn't matter that much if your tasks
@@ -59,7 +60,7 @@ pub struct RuntimeConfig {
     asyncio: bool,
     env_vars: Vec<(Text, Text)>,
     python_paths: Vec<Text>,
-    gql_module: Option<Text>,
+    gql_modules: HashMap<Text, Text>,
     global_state_fn: Option<Arc<dyn Fn(Python) -> PyResult<PyObject> + Send + Sync + 'static>>,
     blocking_task_keep_alive: Duration,
     strategy: Strategy,
@@ -141,9 +142,9 @@ impl RuntimeConfig {
     pub fn asyncio(&self) -> bool {
         self.asyncio
     }
-    /// Get the gql module that will be enabled.
-    pub fn gql_module(&self) -> Option<Text> {
-        self.gql_module.puff()
+    /// Get the gql modules that will be enabled.
+    pub fn gql_modules(&self) -> HashMap<Text, Text> {
+        self.gql_modules.clone()
     }
     /// Get all python paths to add to environment.
     pub fn python_paths(&self) -> Vec<Text> {
@@ -312,9 +313,18 @@ impl RuntimeConfig {
     /// If provided, will load the GraphQl configuration from the module path to the Schema.
     ///
     /// Default: None
-    pub fn set_gql_schema_class<T: Into<Text>>(self, schema_module_path: T) -> Self {
+    pub fn set_gql_schema<T: Into<Text>>(self, schema_module_path: T) -> Self {
         let mut new = self;
-        new.gql_module = Some(schema_module_path.into());
+        new.gql_modules.insert("default".into(), schema_module_path.into());
+        new
+    }
+
+    /// If provided, will load an additional GraphQl configuration from the path to the Schema.
+    ///
+    /// Default: None
+    pub fn set_gql_internal_schema_named<N: Into<Text>, T: Into<Text>>(self, name: N, schema_module_path: T) -> Self {
+        let mut new = self;
+        new.gql_modules.insert(name.into(), schema_module_path.into());
         new
     }
 
@@ -391,7 +401,7 @@ impl Default for RuntimeConfig {
             strategy: Strategy::RoundRobin,
             python_paths: Vec::new(),
             env_vars: Vec::new(),
-            gql_module: None,
+            gql_modules: HashMap::new(),
             http_client_builder: Arc::new(ClientBuilder::new),
         }
     }

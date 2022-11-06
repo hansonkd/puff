@@ -504,7 +504,7 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
         'e: 'res,
     {
         let context = executor.context();
-        let bearer = context.token();
+        let auth = context.auth();
 
         Box::pin(async move {
             let fut = async move {
@@ -535,7 +535,7 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                     look_ahead_fields,
                     field.clone(),
                     all_objects,
-                    context.token(),
+                    context.auth(),
                     parents.clone(),
                 );
 
@@ -545,7 +545,7 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                     .clone()
                     .expect("Subscription field needs an acceptor");
 
-                let python_context = PyContext::new(parents.clone(), bearer, None);
+                let python_context = PyContext::new(parents.clone(), auth, None);
                 py_dispatcher.dispatch::<_, &PyDict>(
                     acceptor_method,
                     (ss, python_context, args),

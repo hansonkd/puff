@@ -7,21 +7,23 @@ use crate::web::client::PyHttpClient;
 use futures_util::future::BoxFuture;
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 use crate::databases::postgres::PostgresClient;
 use crate::databases::pubsub::PubSubClient;
-use crate::graphql::PuffGraphqlRoot;
+use crate::graphql::PuffGraphqlConfig;
 use crate::python::PythonDispatcher;
 use std::sync::{Arc, Mutex};
-use tokio::runtime::{Handle, Runtime};
+use tokio::runtime::Handle;
 
 use tracing::{error, info};
 
 /// The central control structure for dispatching tasks onto coroutine workers.
 /// All tasks in the same runtime will have access to the same dispatcher. The dispatcher contains
 /// a reference to the parent Tokio Runtime as well as references to all coroutine workers.
-#[derive(Clone)]
-pub struct PuffContext {
+pub type PuffContext = Arc<RealPuffContext>;
+
+pub struct RealPuffContext {
     handle: Handle,
     http_client: Option<PyHttpClient>,
     redis: Option<RedisClient>,
@@ -29,7 +31,7 @@ pub struct PuffContext {
     python_dispatcher: Option<PythonDispatcher>,
     pubsub_client: Option<PubSubClient>,
     task_queue_client: Option<TaskQueue>,
-    gql_root: Option<PuffGraphqlRoot>,
+    gql_roots: Arc<HashMap<String, PuffGraphqlConfig>>
 }
 
 // Context consists of a hierarchy of Contexts. PUFF_CONTEXT is the primary thread local that holds
@@ -86,24 +88,24 @@ pub fn with_context(context: PuffContext) {
     PUFF_CONTEXT.with(|d| *d.borrow_mut() = Some(context.puff()));
 }
 
-impl PuffContext {
+impl RealPuffContext {
     /// Creates an empty RuntimeDispatcher with no active threads for testing.
     pub fn empty(handle: Handle) -> PuffContext {
-        Self {
+        Arc::new(Self {
             handle,
             redis: None,
             postgres: None,
             python_dispatcher: None,
             pubsub_client: None,
             task_queue_client: None,
-            gql_root: None,
+            gql_roots: Arc::new(HashMap::new()),
             http_client: None,
-        }
+        })
     }
 
     /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`.
     pub fn new(handle: Handle) -> PuffContext {
-        Self::new_with_options(handle, None, None, None, None, None, None, None)
+        Self::new_with_options(handle, None, None, None, None, None, HashMap::new(),None)
     }
 
     /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`. This function will start
@@ -115,21 +117,21 @@ impl PuffContext {
         python_dispatcher: Option<PythonDispatcher>,
         pubsub_client: Option<PubSubClient>,
         task_queue_client: Option<TaskQueue>,
-        gql_root: Option<PuffGraphqlRoot>,
+        gql_roots: HashMap<String, PuffGraphqlConfig>,
         http_client: Option<PyHttpClient>,
     ) -> PuffContext {
-        let arc_dispatcher = Self {
+        let ctx = Self {
             handle,
             redis,
             postgres,
             python_dispatcher,
             pubsub_client,
             task_queue_client,
-            gql_root,
-            http_client,
+            gql_roots: Arc::new(gql_roots),
+            http_client
         };
 
-        arc_dispatcher
+        Arc::new(ctx)
     }
 
     /// A Handle into the multi-threaded async runtime
@@ -185,18 +187,15 @@ impl PuffContext {
     }
 
     /// The configured graphql root node. Panics if not enabled.
-    pub fn gql(&self) -> PuffGraphqlRoot {
-        self.gql_root
-            .clone()
-            .expect("Postgres is not configured for this runtime.")
+    pub fn gql(&self) -> PuffGraphqlConfig {
+        self.gql_named("default")
     }
-}
 
-impl Default for PuffContext {
-    fn default() -> Self {
-        let rt = Runtime::new().unwrap();
-        let ctx = PuffContext::new(rt.handle().clone());
-        ctx
+    /// The configured named graphql root node. Panics if not enabled.
+    pub fn gql_named(&self, key: &str) -> PuffGraphqlConfig {
+        self.gql_roots.get(key)
+            .expect(&format!("Graphql named {} is not configured for this runtime.", key))
+            .clone()
     }
 }
 

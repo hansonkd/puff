@@ -57,7 +57,7 @@ use std::sync::{Arc, Mutex};
 
 use tokio::runtime::Builder;
 
-use crate::context::{set_puff_context, set_puff_context_waiting, PuffContext};
+use crate::context::{set_puff_context, set_puff_context_waiting, PuffContext, RealPuffContext};
 use crate::databases::postgres::{add_postgres_command_arguments, new_postgres_async};
 use crate::databases::pubsub::{add_pubsub_command_arguments, new_pubsub_async};
 use crate::errors::{handle_puff_error, PuffResult, Result};
@@ -373,25 +373,26 @@ impl Program {
                     );
                 }
 
-                let mut gql_root = None;
-                if let Some(mod_path) = rt_config.gql_module() {
+                let mut gql_roots = HashMap::new();
+                for (k, mod_path) in rt_config.gql_modules() {
                     let res = rt.block_on(load_schema(
                         mod_path,
                         python_dispatcher.clone().expect("GQL needs Python"),
                     ))?;
-                    gql_root = Some(res);
+                    gql_roots.insert(k.to_string(), res);
                 }
+
                 let client_builder = rt_config.http_client_builder();
                 let http_client = new_http_client(client_builder)?;
 
-                let context = PuffContext::new_with_options(
+                let context = RealPuffContext::new_with_options(
                     rt.handle().clone(),
                     redis,
                     postgres,
                     python_dispatcher,
                     pubsub_client.clone(),
                     task_queue_client.clone(),
-                    gql_root.clone(),
+                    gql_roots.clone(),
                     Some(http_client),
                 );
 

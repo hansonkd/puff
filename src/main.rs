@@ -405,7 +405,7 @@ fn main() -> ExitCode {
         .set_pubsub(config.pubsub.unwrap_or(false));
 
     if let Some(schema) = config.graphql_schema.as_ref() {
-        rc = rc.set_gql_schema_class(schema);
+        rc = rc.set_gql_schema(schema);
     }
 
     if config.add_cwd_to_path.unwrap_or(true) {
