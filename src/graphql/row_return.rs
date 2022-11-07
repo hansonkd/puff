@@ -139,8 +139,8 @@ pub fn convert_postgres_to_juniper(
 
 pub trait ExtractValues {
     fn len(&self) -> usize;
-    fn extract_values(&self, names: &[Text]) -> Result<Vec<Vec<AggroValue>>>;
-    fn extract_py_values(&self, py: Python, names: &[&PyString]) -> PuffResult<Py<PyList>>;
+    fn extract_values(&self, names: &[Text]) -> Result<Vec<Option<Vec<AggroValue>>>>;
+    fn extract_py_values(&self, py: Python, names: &[&PyString]) -> PuffResult<PyObject>;
     fn extract_first(&self) -> Result<Vec<AggroValue>>;
 }
 
@@ -154,7 +154,7 @@ impl ExtractValues for PostgresResultRows {
         self.rows.len()
     }
 
-    fn extract_values(&self, names: &[Text]) -> Result<Vec<Vec<AggroValue>>> {
+    fn extract_values(&self, names: &[Text]) -> Result<Vec<Option<Vec<AggroValue>>>> {
         let field_mapping: HashMap<&str, (usize, &Column)> = names
             .iter()
             .flat_map(|field_name| {
@@ -185,12 +185,12 @@ impl ExtractValues for PostgresResultRows {
                 let field_val = convert_postgres_to_juniper(row, *column_ix, c.type_())?;
                 row_vec.push(field_val);
             }
-            ret_vec.push(row_vec);
+            ret_vec.push(Some(row_vec));
         }
         Ok(ret_vec)
     }
 
-    fn extract_py_values(&self, py: Python, names: &[&PyString]) -> PuffResult<Py<PyList>> {
+    fn extract_py_values(&self, py: Python, names: &[&PyString]) -> PuffResult<PyObject> {
         let field_mapping: HashMap<&str, (usize, &Column)> = names
             .iter()
             .flat_map(|field_name| {
@@ -246,10 +246,10 @@ impl ExtractValues for ExtractorRootNode {
     fn len(&self) -> usize {
         1
     }
-    fn extract_values(&self, _names: &[Text]) -> Result<Vec<Vec<AggroValue>>> {
+    fn extract_values(&self, _names: &[Text]) -> Result<Vec<Option<Vec<AggroValue>>>> {
         bail!("Cannot extract values from the Root")
     }
-    fn extract_py_values(&self, _py: Python, _names: &[&PyString]) -> Result<Py<PyList>> {
+    fn extract_py_values(&self, _py: Python, _names: &[&PyString]) -> Result<PyObject> {
         bail!("Cannot extract values from the Root")
     }
     fn extract_first(&self) -> Result<Vec<AggroValue>> {
@@ -265,12 +265,16 @@ impl ExtractValues for PythonResultRows {
     fn len(&self) -> usize {
         Python::with_gil(|py| self.py_list.as_ref(py).len())
     }
-    fn extract_values(&self, names: &[Text]) -> Result<Vec<Vec<AggroValue>>> {
+    fn extract_values(&self, names: &[Text]) -> Result<Vec<Option<Vec<AggroValue>>>> {
         Python::with_gil(|py| {
             let l = self.py_list.as_ref(py);
             let mut ret_vec = Vec::with_capacity(l.len());
 
             for row in l {
+                if row.is_none() {
+                    ret_vec.push(None);
+                    continue;
+                }
                 let mut row_vec = Vec::with_capacity(names.len());
                 for name in names {
                     let val = if let Ok(d) = row.downcast::<PyDict>() {
@@ -285,18 +289,23 @@ impl ExtractValues for PythonResultRows {
                     let jupiter_val = convert_pyany_to_jupiter(val);
                     row_vec.push(jupiter_val)
                 }
-                ret_vec.push(row_vec);
+                ret_vec.push(Some(row_vec));
             }
             Ok(ret_vec)
         })
     }
 
-    fn extract_py_values(&self, py: Python, names: &[&PyString]) -> PuffResult<Py<PyList>> {
+    fn extract_py_values(&self, py: Python, names: &[&PyString]) -> PuffResult<PyObject> {
         let l = self.py_list.as_ref(py);
         let final_list = PyList::empty(py);
         for row in l {
             let row_vec = PyList::empty(py);
+            let none = row.is_none();
             for name in names {
+                if none {
+                    row_vec.append(py.None())?;
+                    continue;
+                }
                 let val = if let Ok(d) = row.downcast::<PyDict>() {
                     d.get_item(name.to_str()?)
                         .ok_or(PyKeyError::new_err(format!(
@@ -317,8 +326,11 @@ impl ExtractValues for PythonResultRows {
         Python::with_gil(|py| {
             let l = self.py_list.as_ref(py);
             let mut ret_vec = Vec::with_capacity(l.len());
-
             for row in l {
+                if row.is_none() {
+                    ret_vec.push(AggroValue::null());
+                    continue;
+                }
                 let val = convert_pyany_to_jupiter(row);
                 ret_vec.push(val);
             }

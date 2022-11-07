@@ -1,6 +1,8 @@
 # 0.1.7
 
 * Improve Postgres DBAPI2.0 Compliance.
+* Add multiple simultaneous Postgres, Redis, PubSub, Graphql Configurations
+* Improve Graphql Resolution - Error if returning null in a non-null field.
 
 
 # 0.1.7

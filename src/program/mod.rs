@@ -263,20 +263,20 @@ impl Program {
         let mut top_level = self.clap_command();
         let rt_config = self.runtime_config.clone();
 
-        if rt_config.postgres() {
-            top_level = add_postgres_command_arguments(top_level)
+        for config in rt_config.postgres() {
+            top_level = add_postgres_command_arguments(config.name.as_str(), top_level)
         }
 
-        if rt_config.redis() {
-            top_level = add_redis_command_arguments(top_level)
+        for config in rt_config.redis() {
+            top_level = add_redis_command_arguments(config.name.as_str(), top_level)
         }
 
-        if rt_config.pubsub() {
-            top_level = add_pubsub_command_arguments(top_level)
+        for config in rt_config.pubsub() {
+            top_level = add_pubsub_command_arguments(config.name.as_str(), top_level)
         }
 
-        if rt_config.task_queue() {
-            top_level = add_task_queue_command_arguments(top_level)
+        for config in rt_config.task_queue() {
+            top_level = add_task_queue_command_arguments(config.name.as_str(), top_level)
         }
 
         rt_config.apply_env_vars();
@@ -317,60 +317,70 @@ impl Program {
                     None
                 };
 
-                let mut redis = None;
-                if rt_config.redis() {
-                    redis = Some(rt.block_on(new_redis_async(
-                        arg_matches.get_one::<String>("redis_url").unwrap().as_str(),
-                        true,
-                        rt_config.redis_pool_size(),
-                    ))?);
-                }
-
-                let mut pubsub_client = None;
-                if rt_config.pubsub() {
-                    pubsub_client = Some(
-                        rt.block_on(new_pubsub_async(
-                            arg_matches
-                                .get_one::<String>("pubsub_url")
-                                .unwrap()
-                                .as_str(),
-                            true,
-                        ))?,
-                    );
-                }
-
-                let mut task_queue_client = None;
-                if rt_config.task_queue() {
-                    let task_queue = rt.block_on(new_task_queue_async(
+                let mut redis = HashMap::new();
+                for config in rt_config.redis() {
+                    let rc = rt.block_on(new_redis_async(
                         arg_matches
-                            .get_one::<String>("task_queue_url")
+                            .get_one::<String>(&format!("{}_redis_url", config.name.to_lowercase()))
                             .unwrap()
                             .as_str(),
                         true,
+                        config.pool_size,
+                    ))?;
+                    redis.insert(config.name.to_string(), rc);
+                }
+
+                let mut pubsub_client = HashMap::new();
+                for config in rt_config.pubsub() {
+                    let ps = rt.block_on(new_pubsub_async(
+                        arg_matches
+                            .get_one::<String>(&format!(
+                                "{}_pubsub_url",
+                                config.name.to_lowercase()
+                            ))
+                            .unwrap()
+                            .as_str(),
+                        true,
+                        config.pool_size,
+                    ))?;
+                    pubsub_client.insert(config.name.to_string(), ps);
+                }
+
+                let mut task_queue_client = HashMap::new();
+                for config in rt_config.task_queue() {
+                    let task_queue = rt.block_on(new_task_queue_async(
+                        arg_matches
+                            .get_one::<String>(&format!(
+                                "{}_task_queue_url",
+                                config.name.to_lowercase()
+                            ))
+                            .unwrap()
+                            .as_str(),
+                        true,
+                        config.pool_size,
                     ))?;
                     loop_tasks(
                         task_queue.clone(),
-                        rt_config.task_queue_max_concurrent_tasks(),
+                        config.max_concurrent_tasks as usize,
                         rt.handle().clone(),
                         python_dispatcher
                             .clone()
                             .expect("TaskQueue requires Python"),
                     );
-                    task_queue_client = Some(task_queue);
+                    task_queue_client.insert(config.name.to_string(), task_queue);
                 }
 
-                let mut postgres = None;
-                if rt_config.postgres() {
-                    postgres = Some(
-                        rt.block_on(new_postgres_async(
-                            arg_matches
-                                .get_one::<String>("postgres_url")
-                                .unwrap()
-                                .as_str(),
-                            true,
-                            rt_config.postgres_pool_size(),
-                        ))?,
-                    );
+                let mut postgres = HashMap::new();
+                for pg in rt_config.postgres() {
+                    let client = rt.block_on(new_postgres_async(
+                        arg_matches
+                            .get_one::<String>(&format!("{}_postgres_url", pg.name.to_lowercase()))
+                            .unwrap()
+                            .as_str(),
+                        true,
+                        pg.pool_size,
+                    ))?;
+                    postgres.insert(pg.name.to_string(), client);
                 }
 
                 let mut gql_roots = HashMap::new();
@@ -382,8 +392,11 @@ impl Program {
                     gql_roots.insert(k.to_string(), res);
                 }
 
-                let client_builder = rt_config.http_client_builder();
-                let http_client = new_http_client(client_builder)?;
+                let mut http_clients = HashMap::new();
+                for client_builder in rt_config.http_client_builder() {
+                    let http_client = new_http_client(client_builder)?;
+                    http_clients.insert(client_builder.name.to_string(), http_client);
+                }
 
                 let context = RealPuffContext::new_with_options(
                     rt.handle().clone(),
@@ -391,14 +404,16 @@ impl Program {
                     postgres,
                     python_dispatcher,
                     pubsub_client.clone(),
-                    task_queue_client.clone(),
-                    gql_roots.clone(),
-                    Some(http_client),
+                    task_queue_client,
+                    gql_roots,
+                    http_clients,
                 );
 
                 set_puff_context(context.puff());
 
-                pubsub_client.map(|c| c.start_supervised_listener());
+                for psc in pubsub_client.values() {
+                    psc.start_supervised_listener();
+                }
 
                 let context_to_set = context.puff();
                 {

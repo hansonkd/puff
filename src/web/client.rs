@@ -4,12 +4,13 @@ use std::time::Duration;
 use crate::json::{dump_string, run_loads};
 use crate::prelude::{run_python_async, with_puff_context, PuffResult};
 use crate::python::py_obj_to_bytes;
+use crate::runtime::HttpClientOpts;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyString, PyTuple};
 use reqwest::header::{HeaderValue, CONTENT_TYPE};
 use reqwest::multipart::{Form, Part};
-use reqwest::{Client, ClientBuilder, Method, RequestBuilder, Response};
+use reqwest::{Client, Method, RequestBuilder, Response};
 
 /// Access the Global graphql context
 #[pyclass]
@@ -285,8 +286,21 @@ impl PyHttpResponse {
 }
 
 /// Build a new TaskQueue with the provided connection information.
-pub fn new_http_client(client_builder: ClientBuilder) -> PuffResult<PyHttpClient> {
-    let client = client_builder.build()?;
+pub fn new_http_client(opts: &HttpClientOpts) -> PuffResult<PyHttpClient> {
+    let mut builder = reqwest::ClientBuilder::new();
+    if let Some(idle) = opts.opts.max_idle_connections {
+        builder = builder.pool_max_idle_per_host(idle as usize);
+    }
+
+    if let Some(true) = opts.opts.http2_prior_knowledge {
+        builder = builder.http2_prior_knowledge();
+    }
+
+    if let Some(s) = &opts.opts.user_agent {
+        builder = builder.user_agent(s);
+    }
+
+    let client = builder.build()?;
     let http_client = PyHttpClient { client };
     Ok(http_client)
 }

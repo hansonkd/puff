@@ -269,9 +269,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::PuffContext;
+    use crate::context::RealPuffContext;
     use crate::types::text::ToText;
-    use crate::types::Puff;
     use tokio::runtime::Runtime;
 
     #[test]
@@ -279,9 +278,9 @@ mod tests {
         let router: Router<()> = Router::new().get("/", || async { "ok".to_text() });
 
         let rt = Runtime::new().unwrap();
-        let puff_context = PuffContext::default();
+        let puff_context = RealPuffContext::empty(rt.handle().clone());
 
-        let fut = router.into_axum_router(puff_context.puff()).call(
+        let fut = router.into_axum_router(puff_context.clone()).call(
             AxumRequest::get("http://localhost/")
                 .body(Body::empty())
                 .unwrap(),

@@ -5,7 +5,7 @@ use puff_rs::prelude::*;
 use puff_rs::program::commands::BasicCommand;
 
 fn main() -> ExitCode {
-    let config = RuntimeConfig::default().set_redis(true);
+    let config = RuntimeConfig::default().add_default_redis();
     Program::new("my_first_app")
         .runtime_config(config)
         .about("This is my first app")

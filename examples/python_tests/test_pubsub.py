@@ -150,7 +150,6 @@ def test_publish_and_wait_string_multi_channels_multi_wait():
     assert greenlet2.join() == ("123456", "789", "abc")
 
 
-
 def test_pubsub_async():
     async_to_sync(publish_and_wait)()
 

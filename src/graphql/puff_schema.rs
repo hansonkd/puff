@@ -19,6 +19,7 @@ use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyBytes, PyDict, PyList, PyString};
 use std::collections::{BTreeMap, HashSet};
 
+use chrono::DateTime;
 use futures_util::future::join_all;
 use std::sync::Arc;
 
@@ -170,13 +171,18 @@ pub fn convert(
     py: Python,
     schema: &PyAny,
     type_to_description: &PyAny,
-) -> PyResult<(Option<PyObject>, bool, BTreeMap<Text, AggroObject>, BTreeMap<Text, AggroObject>)> {
+) -> PyResult<(
+    Option<PyObject>,
+    bool,
+    BTreeMap<Text, AggroObject>,
+    BTreeMap<Text, AggroObject>,
+)> {
     let description = type_to_description.call1((schema,))?;
     let all_types: &PyDict = description.getattr("all_types")?.extract()?;
     let input_types: &PyDict = description.getattr("input_types")?.extract()?;
     let py_auth_function = description.getattr("auth_function")?;
     let py_auth_async: bool = description.getattr("auth_async")?.extract()?;
-    let auth_function = if py_auth_function.is_none() {
+    let auth_function = if !py_auth_function.is_none() {
         Some(py_auth_function.into_py(py))
     } else {
         None
@@ -266,12 +272,11 @@ impl PyContext {
 impl PyContext {
     fn parent_values(&self, py: Python, names: Vec<&PyString>) -> PyResult<PyObject> {
         let rows = to_py_error("Gql Extract", self.extractor.extract_py_values(py, &names))?;
-        Ok(rows.into_py(py))
+        Ok(rows)
     }
 
     fn auth(&self) -> Option<PyObject> {
-        self.auth
-            .clone()
+        self.auth.clone()
     }
 
     fn connection(&self, py: Python) -> Option<PyObject> {
@@ -356,14 +361,20 @@ fn input_to_python(
                 Ok(PyBytes::new(py, &base64::decode(i.as_str())?).into_py(py))
             }
             LookAheadValue::Scalar(AggroScalarValue::Binary(i)) => Ok(i.clone().into_py(py)),
-            _ => bail!("Input non-string to a string input"),
+            _ => bail!("Binary input expected base64 string or binary"),
         },
         AggroTypeInfo::Datetime => match v {
             LookAheadValue::Scalar(AggroScalarValue::String(i)) => {
-                Ok(PyBytes::new(py, &base64::decode(i.as_str())?).into_py(py))
+                let py_obj = pyo3_chrono::NaiveDateTime::from(
+                    DateTime::parse_from_rfc3339(i.as_str())?.naive_utc(),
+                );
+                Ok(py_obj.into_py(py))
             }
-            LookAheadValue::Scalar(AggroScalarValue::Binary(i)) => Ok(i.clone().into_py(py)),
-            _ => bail!("Input non-string to a string input"),
+            LookAheadValue::Scalar(AggroScalarValue::Datetime(i)) => {
+                let py_obj = pyo3_chrono::NaiveDateTime::from(i.to_chrono().naive_utc());
+                Ok(py_obj.into_py(py))
+            }
+            _ => bail!("Datetime input expected string or datetime"),
         },
         AggroTypeInfo::Uuid => match v {
             LookAheadValue::Scalar(AggroScalarValue::String(i)) => {
@@ -515,18 +526,25 @@ pub async fn do_returned_values_into_stream(
                         Python::with_gil(|py| {
                             let arg_dict = args.into_py_dict(py);
                             if aggro_field.is_async {
-                                py_dispatcher.dispatch_asyncio(py, cm, (py_extractor,), arg_dict)
+                                py_dispatcher.dispatch_asyncio(
+                                    cm,
+                                    (py_extractor,),
+                                    Some(arg_dict.into_py(py)),
+                                )
                             } else {
                                 py_dispatcher.dispatch(cm, (py_extractor,), Some(arg_dict))
                             }
                         })?
                     } else {
-                        let py_extractor =
-                            PyContext::new(rows.clone(), aggro_context.auth(), None);
+                        let py_extractor = PyContext::new(rows.clone(), aggro_context.auth(), None);
                         Python::with_gil(|py| {
                             let arg_dict = args.into_py_dict(py);
                             if aggro_field.is_async {
-                                py_dispatcher.dispatch_asyncio(py, cm, (py_extractor,), arg_dict)
+                                py_dispatcher.dispatch_asyncio(
+                                    cm,
+                                    (py_extractor,),
+                                    Some(arg_dict.into_py(py)),
+                                )
                             } else {
                                 py_dispatcher.dispatch(cm, (py_extractor,), Some(arg_dict))
                             }
@@ -573,10 +591,13 @@ pub async fn do_returned_values_into_stream(
                             bail!("Expected to return a list.")
                         }
                     } else {
+                        let parent_len = rows.len();
+                        let mut new_v = Vec::with_capacity(parent_len);
+                        for _x in 0..parent_len {
+                            new_v.push(py_res.into_py(py));
+                        }
                         Ok((
-                            PythonMethodResult::PythonList(
-                                PyList::new(py, vec![py_res.into_py(py)]).into_py(py),
-                            ),
+                            PythonMethodResult::PythonList(PyList::new(py, new_v).into_py(py)),
                             None,
                         ))
                     }
@@ -602,39 +623,60 @@ pub async fn do_returned_values_into_stream(
                             let vals = rr.extract_values(&aggro_field.depends_on)?;
                             let mut ret_val = Vec::with_capacity(vals.len());
                             for val in vals {
-                                ret_val.push(val.into_iter().next().unwrap_or(AggroValue::Null));
+                                ret_val.push(
+                                    val.map(|v| v.into_iter().next())
+                                        .flatten()
+                                        .unwrap_or(AggroValue::Null),
+                                );
                             }
                             ret_val
                         }
                     } else {
                         let mut objs = Vec::with_capacity(rr.len());
-                        for _x in 0..rr.len() {
-                            objs.push(juniper::Object::<AggroScalarValue>::with_capacity(
-                                child_fields.len(),
-                            ))
-                        }
-                        let mut to_compute = Vec::with_capacity(child_fields.len());
-                        for (child, new_lookahead) in child_fields {
-                            let fut = async {
-                                let children = returned_values_into_stream(
-                                    rr.clone(),
-                                    new_lookahead,
-                                    &child,
-                                    all_objects.clone(),
-                                    aggro_context,
-                                )
-                                .await;
-                                (child, children)
-                            };
-                            to_compute.push(fut)
-                        }
-                        let children_results = join_all(to_compute).await;
-                        for (child, children) in children_results {
-                            for (obj, new_value) in objs.iter_mut().zip(children?) {
-                                obj.add_field(child.name.as_str(), new_value);
+                        for x in rr.extract_values(&[])? {
+                            if x.is_none() {
+                                objs.push(None)
+                            } else {
+                                objs.push(Some(juniper::Object::<AggroScalarValue>::with_capacity(
+                                    child_fields.len(),
+                                )))
                             }
                         }
-                        objs.into_iter().map(AggroValue::Object).collect::<Vec<_>>()
+                        if objs.iter().all(|f| f.is_none()) {
+                            objs.iter().map(|_| AggroValue::Null).collect::<Vec<_>>()
+                        } else {
+                            let mut to_compute = Vec::with_capacity(child_fields.len());
+                            for (child, new_lookahead) in child_fields {
+                                let fut = async {
+                                    let children = returned_values_into_stream(
+                                        rr.clone(),
+                                        new_lookahead,
+                                        &child,
+                                        all_objects.clone(),
+                                        aggro_context,
+                                    )
+                                    .await;
+                                    (child, children)
+                                };
+                                to_compute.push(fut)
+                            }
+                            let children_results = join_all(to_compute).await;
+                            for (child, children) in children_results {
+                                for (obj, new_value) in objs.iter_mut().zip(children?) {
+                                    if new_value.is_null() && !child.return_type.optional {
+                                        bail!("Missing value in return for field {} which is not optional.", child.name);
+                                    } else if let Some(o) = obj {
+                                        o.add_field(child.name.as_str(), new_value);
+                                    }
+                                }
+                            }
+                            objs.into_iter()
+                                .map(|f| match f {
+                                    Some(o) => AggroValue::Object(o),
+                                    None => AggroValue::null(),
+                                })
+                                .collect::<Vec<_>>()
+                        }
                     };
                     let mut final_vec = Vec::with_capacity(parent_row_len);
 
@@ -648,7 +690,15 @@ pub async fn do_returned_values_into_stream(
                         let mut child_iter = children_vec.into_iter();
 
                         for _ in 0..parent_row_len {
-                            final_vec.push(child_iter.next().unwrap_or(AggroValue::Null));
+                            if let Some(c) = child_iter.next() {
+                                final_vec.push(c)
+                            } else {
+                                if aggro_value_optional {
+                                    final_vec.push(AggroValue::Null)
+                                } else {
+                                    bail!("Missing value in return for field {} which is not optional. Only received {} of {} children.", aggro_field.name, final_vec.len(), parent_row_len);
+                                }
+                            }
                         }
                     }
 
@@ -656,100 +706,137 @@ pub async fn do_returned_values_into_stream(
                 }
                 Some((parent_cor, cor)) => {
                     let parent_vals = rows.extract_values(&parent_cor)?;
-                    let mapped_children = if child_fields.is_empty() {
-                        let mut rows_to_get = cor.clone();
-                        rows_to_get.extend_from_slice(aggro_field.depends_on.as_slice());
-                        let vals = rr.extract_values(rows_to_get.as_slice())?;
-                        let mut return_vec = BTreeMap::new();
-                        for v in vals {
-                            let mut row_iter = v.into_iter();
-
-                            let cor_val = key_from_extracted(&mut row_iter, cor.len());
-
-                            let value = if aggro_field.return_type.optional {
-                                row_iter.next().unwrap_or(AggroValue::Null)
-                            } else {
-                                row_iter.next().ok_or(anyhow!(
-                                    "Could not find a value for non-optional field {}",
-                                    aggro_field.name
-                                ))?
-                            };
-                            return_vec.insert(cor_val, value);
-                        }
-                        return_vec
+                    if parent_vals.iter().all(|f| f.is_none()) {
+                        Ok(parent_vals
+                            .iter()
+                            .map(|_| AggroValue::Null)
+                            .collect::<Vec<_>>())
                     } else {
-                        let mut objs = Vec::with_capacity(rr.len());
-                        for _x in 0..rr.len() {
-                            objs.push(juniper::Object::<AggroScalarValue>::with_capacity(
-                                child_fields.len(),
-                            ))
-                        }
-                        let mut to_compute = Vec::with_capacity(child_fields.len());
-                        for (child, new_lookahead) in child_fields {
-                            let fut = async {
-                                let children = returned_values_into_stream(
-                                    rr.clone(),
-                                    new_lookahead,
-                                    &child,
-                                    all_objects.clone(),
-                                    aggro_context,
-                                )
-                                .await;
-                                (child, children)
-                            };
-                            to_compute.push(fut)
-                        }
-                        let children_results = join_all(to_compute).await;
-                        for (child, children) in children_results {
-                            for (obj, new_value) in objs.iter_mut().zip(children?) {
-                                obj.add_field(child.name.as_str(), new_value);
-                            }
-                        }
+                        let mapped_children = if child_fields.is_empty() {
+                            let mut rows_to_get = cor.clone();
+                            rows_to_get.extend_from_slice(aggro_field.depends_on.as_slice());
+                            let vals = rr
+                                .extract_values(rows_to_get.as_slice())?
+                                .into_iter()
+                                .flatten()
+                                .collect::<Vec<_>>();
+                            let mut return_vec = BTreeMap::new();
+                            for v in vals {
+                                let mut row_iter = v.into_iter();
 
-                        let cor_vals = rr.extract_values(&cor)?;
-                        let cor_len = cor.len();
-                        if aggro_value_is_list {
-                            let mut hm = BTreeMap::new();
-                            for (obj, row_cor) in objs.into_iter().zip(cor_vals) {
-                                let mut row_cor_iter = row_cor.into_iter();
-                                let key = key_from_extracted(&mut row_cor_iter, cor_len);
-                                hm.entry(key)
-                                    .or_insert_with(|| Vec::with_capacity(1))
-                                    .push(AggroValue::Object(obj))
+                                let cor_val = key_from_extracted(&mut row_iter, cor.len());
+
+                                let value = if aggro_field.return_type.optional {
+                                    row_iter.next().unwrap_or(AggroValue::Null)
+                                } else {
+                                    row_iter.next().ok_or(anyhow!(
+                                        "Could not find a value for non-optional field {}",
+                                        aggro_field.name
+                                    ))?
+                                };
+                                return_vec.insert(cor_val, value);
                             }
-                            hm.into_iter()
-                                .map(|(k, v)| (k, AggroValue::List(v)))
-                                .collect::<BTreeMap<_, _>>()
+                            return_vec
                         } else {
-                            objs.into_iter()
-                                .zip(cor_vals)
-                                .map(|(val, row_cor)| {
+                            let mut objs = Vec::with_capacity(rr.len());
+                            for x in rr.extract_values(&[])? {
+                                if x.is_none() {
+                                    objs.push(None);
+                                } else {
+                                    objs.push(Some(
+                                        juniper::Object::<AggroScalarValue>::with_capacity(
+                                            child_fields.len(),
+                                        ),
+                                    ));
+                                }
+                            }
+                            let mut to_compute = Vec::with_capacity(child_fields.len());
+                            for (child, new_lookahead) in child_fields {
+                                let fut = async {
+                                    let children = returned_values_into_stream(
+                                        rr.clone(),
+                                        new_lookahead,
+                                        &child,
+                                        all_objects.clone(),
+                                        aggro_context,
+                                    )
+                                    .await;
+                                    (child, children)
+                                };
+                                to_compute.push(fut)
+                            }
+                            let children_results = join_all(to_compute).await;
+                            for (child, children) in children_results {
+                                for (obj, new_value) in objs.iter_mut().zip(children?) {
+                                    if new_value.is_null() && !child.return_type.optional {
+                                        bail!("Missing value in return for field {} which is not optional.", child.name);
+                                    } else if let Some(o) = obj {
+                                        o.add_field(child.name.as_str(), new_value);
+                                    }
+                                }
+                            }
+
+                            let cor_vals = rr
+                                .extract_values(&cor)?
+                                .into_iter()
+                                .flatten()
+                                .collect::<Vec<_>>();
+                            let cor_len = cor.len();
+                            if aggro_value_is_list {
+                                let mut hm = BTreeMap::new();
+                                for (obj, row_cor) in objs.into_iter().zip(cor_vals) {
                                     let mut row_cor_iter = row_cor.into_iter();
-                                    let cor_val = key_from_extracted(&mut row_cor_iter, cor_len);
-                                    (cor_val, AggroValue::Object(val))
-                                })
-                                .collect::<BTreeMap<_, _>>()
-                        }
-                    };
-                    let mut final_vec = Vec::with_capacity(parent_vals.len());
-                    for parent in parent_vals {
-                        let row_cor_len = parent.len();
-                        let mut row_cor_iter = parent.into_iter();
-                        let key = key_from_extracted(&mut row_cor_iter, row_cor_len);
-                        let r = mapped_children.get(&key).map(|f| f.clone());
-
-                        let val = if aggro_value_is_list {
-                            r.unwrap_or_else(|| AggroValue::List(vec![]))
-                        } else {
-                            if aggro_value_optional {
-                                r.unwrap_or(AggroValue::Null)
+                                    let key = key_from_extracted(&mut row_cor_iter, cor_len);
+                                    hm.entry(key).or_insert_with(|| Vec::with_capacity(1)).push(
+                                        match obj {
+                                            Some(o) => AggroValue::Object(o),
+                                            None => AggroValue::null(),
+                                        },
+                                    )
+                                }
+                                hm.into_iter()
+                                    .map(|(k, v)| (k, AggroValue::List(v)))
+                                    .collect::<BTreeMap<_, _>>()
                             } else {
-                                r.ok_or(anyhow!("Missing field {}", aggro_field.name))?
+                                objs.into_iter()
+                                    .zip(cor_vals)
+                                    .map(|(val, row_cor)| {
+                                        let mut row_cor_iter = row_cor.into_iter();
+                                        let cor_val =
+                                            key_from_extracted(&mut row_cor_iter, cor_len);
+                                        let ag_val = match val {
+                                            Some(o) => AggroValue::Object(o),
+                                            None => AggroValue::null(),
+                                        };
+                                        (cor_val, ag_val)
+                                    })
+                                    .collect::<BTreeMap<_, _>>()
                             }
                         };
-                        final_vec.push(val)
+                        let mut final_vec = Vec::with_capacity(parent_vals.len());
+                        for parent in parent_vals {
+                            if let Some(p) = parent {
+                                let row_cor_len = p.len();
+                                let mut row_cor_iter = p.into_iter();
+                                let key = key_from_extracted(&mut row_cor_iter, row_cor_len);
+                                let r = mapped_children.get(&key).map(|f| f.clone());
+
+                                let val = if aggro_value_is_list {
+                                    r.unwrap_or_else(|| AggroValue::List(vec![]))
+                                } else {
+                                    if aggro_value_optional {
+                                        r.unwrap_or(AggroValue::Null)
+                                    } else {
+                                        r.ok_or(anyhow!("Missing value in return for field {} which is not optional.", aggro_field.name))?
+                                    }
+                                };
+                                final_vec.push(val)
+                            } else {
+                                final_vec.push(AggroValue::null())
+                            }
+                        }
+                        Ok(final_vec)
                     }
-                    Ok(final_vec)
                 }
             }
         }
@@ -760,8 +847,20 @@ pub async fn do_returned_values_into_stream(
                 } else {
                     let vals = rows.extract_values(&aggro_field.depends_on)?;
                     let mut ret_val = Vec::with_capacity(vals.len());
+                    let mut pos = 0;
                     for val in vals {
-                        ret_val.push(val.into_iter().next().unwrap_or(AggroValue::Null));
+                        if let Some(v) = val {
+                            if let Some(s) = v.into_iter().next() {
+                                ret_val.push(s);
+                            } else if aggro_value_optional {
+                                ret_val.push(AggroValue::Null);
+                            } else {
+                                bail!("Missing value in return for field {} which is not optional. Value missing from row {} depends_on {:?}", aggro_field.name, pos, &aggro_field.depends_on);
+                            }
+                        } else {
+                            ret_val.push(AggroValue::Null)
+                        }
+                        pos += 1;
                     }
                     ret_val
                 };
@@ -793,7 +892,14 @@ pub async fn do_returned_values_into_stream(
                 let children_results = join_all(to_compute).await;
                 for (child, children) in children_results {
                     for (obj, new_value) in objs.iter_mut().zip(children?) {
-                        obj.add_field(child.name.as_str(), new_value);
+                        if new_value.is_null() && !child.return_type.optional {
+                            bail!(
+                                "Missing value in return for field {} which is not optional.",
+                                child.name
+                            );
+                        } else {
+                            obj.add_field(child.name.as_str(), new_value);
+                        }
                     }
                 }
 
@@ -927,6 +1033,9 @@ impl SubscriptionSender {
         run_python_async(ret_func, async move {
             let mut my_field = this_field;
             my_field.producer_method = Some(new_function);
+            my_field.is_async = false;
+            my_field.safe_without_context = true;
+
             let res = returned_values_into_stream(
                 rows,
                 &this_lookahead,
@@ -937,7 +1046,7 @@ impl SubscriptionSender {
             .await?;
             for r in res {
                 if !this_sender.send(Ok(r)).is_ok() {
-                    return Err(anyhow!("Subscription websocket has closed."));
+                    return Ok(false);
                 }
             }
             Ok(true)

@@ -25,13 +25,13 @@ pub type PuffContext = Arc<RealPuffContext>;
 
 pub struct RealPuffContext {
     handle: Handle,
-    http_client: Option<PyHttpClient>,
-    redis: Option<RedisClient>,
-    postgres: Option<PostgresClient>,
+    http_client: HashMap<String, PyHttpClient>,
+    redis: HashMap<String, RedisClient>,
+    postgres: HashMap<String, PostgresClient>,
     python_dispatcher: Option<PythonDispatcher>,
-    pubsub_client: Option<PubSubClient>,
-    task_queue_client: Option<TaskQueue>,
-    gql_roots: Arc<HashMap<String, PuffGraphqlConfig>>
+    pubsub_client: HashMap<String, PubSubClient>,
+    task_queue_client: HashMap<String, TaskQueue>,
+    gql_roots: HashMap<String, PuffGraphqlConfig>,
 }
 
 // Context consists of a hierarchy of Contexts. PUFF_CONTEXT is the primary thread local that holds
@@ -93,32 +93,41 @@ impl RealPuffContext {
     pub fn empty(handle: Handle) -> PuffContext {
         Arc::new(Self {
             handle,
-            redis: None,
-            postgres: None,
+            redis: HashMap::new(),
+            postgres: HashMap::new(),
             python_dispatcher: None,
-            pubsub_client: None,
-            task_queue_client: None,
-            gql_roots: Arc::new(HashMap::new()),
-            http_client: None,
+            pubsub_client: HashMap::new(),
+            task_queue_client: HashMap::new(),
+            gql_roots: HashMap::new(),
+            http_client: HashMap::new(),
         })
     }
 
     /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`.
     pub fn new(handle: Handle) -> PuffContext {
-        Self::new_with_options(handle, None, None, None, None, None, HashMap::new(),None)
+        Self::new_with_options(
+            handle,
+            HashMap::new(),
+            HashMap::new(),
+            None,
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+        )
     }
 
     /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`. This function will start
     /// the number of `coroutine_threads` specified in your config. Includes options.
     pub fn new_with_options(
         handle: Handle,
-        redis: Option<RedisClient>,
-        postgres: Option<PostgresClient>,
+        redis: HashMap<String, RedisClient>,
+        postgres: HashMap<String, PostgresClient>,
         python_dispatcher: Option<PythonDispatcher>,
-        pubsub_client: Option<PubSubClient>,
-        task_queue_client: Option<TaskQueue>,
+        pubsub_client: HashMap<String, PubSubClient>,
+        task_queue_client: HashMap<String, TaskQueue>,
         gql_roots: HashMap<String, PuffGraphqlConfig>,
-        http_client: Option<PyHttpClient>,
+        http_client: HashMap<String, PyHttpClient>,
     ) -> PuffContext {
         let ctx = Self {
             handle,
@@ -127,8 +136,8 @@ impl RealPuffContext {
             python_dispatcher,
             pubsub_client,
             task_queue_client,
-            gql_roots: Arc::new(gql_roots),
-            http_client
+            gql_roots,
+            http_client,
         };
 
         Arc::new(ctx)
@@ -141,23 +150,41 @@ impl RealPuffContext {
 
     /// The global configured PubSubClient
     pub fn pubsub(&self) -> PubSubClient {
+        self.pubsub_named("default")
+    }
+
+    /// The named configured PubSubClient
+    pub fn pubsub_named(&self, key: &str) -> PubSubClient {
         self.pubsub_client
-            .clone()
+            .get(key)
             .expect("PubSub is not configured for this runtime.")
+            .clone()
     }
 
     /// The global configured reqwest::Client
     pub fn http_client(&self) -> PyHttpClient {
+        self.http_client_named("default")
+    }
+
+    /// The global configured reqwest::Client
+    pub fn http_client_named(&self, key: &str) -> PyHttpClient {
         self.http_client
-            .clone()
+            .get(key)
             .expect("HttpClient is not configured for this runtime.")
+            .clone()
     }
 
     /// The global configured PubSubClient
     pub fn task_queue(&self) -> TaskQueue {
+        self.task_queue_named("default")
+    }
+
+    /// The global configured PubSubClient
+    pub fn task_queue_named(&self, key: &str) -> TaskQueue {
         self.task_queue_client
-            .clone()
+            .get(key)
             .expect("TaskQueue is not configured for this runtime.")
+            .clone()
     }
 
     /// A Handle into the multi-threaded async runtime
@@ -169,21 +196,44 @@ impl RealPuffContext {
 
     /// The configured redis client. Panics if not enabled.
     pub fn redis(&self) -> RedisClient {
+        self.redis_named("default")
+    }
+
+    /// The configured redis client. Panics if not enabled.
+    pub fn redis_named(&self, key: &str) -> RedisClient {
         self.redis
+            .get(key)
+            .expect(&format!(
+                "Redis named {} is not configured for this runtime.",
+                key
+            ))
             .clone()
-            .expect("Redis is not configured for this runtime.")
     }
 
     /// The configured postgres client. Panics if not enabled.
     pub fn postgres(&self) -> PostgresClient {
-        self.postgres
-            .clone()
-            .expect("Postgres is not configured for this runtime.")
+        self.postgres_named("default")
     }
 
     /// The configured postgres client.
     pub fn postgres_safe(&self) -> Option<PostgresClient> {
-        self.postgres.clone()
+        self.postgres_safe_named("default")
+    }
+
+    /// The configured postgres client. Panics if not enabled.
+    pub fn postgres_named(&self, key: &str) -> PostgresClient {
+        self.postgres
+            .get(key)
+            .expect(&format!(
+                "Postgres named {} is not configured for this runtime.",
+                key
+            ))
+            .clone()
+    }
+
+    /// The configured postgres client.
+    pub fn postgres_safe_named(&self, key: &str) -> Option<PostgresClient> {
+        self.postgres.get(key).map(|c| c.clone())
     }
 
     /// The configured graphql root node. Panics if not enabled.
@@ -193,8 +243,12 @@ impl RealPuffContext {
 
     /// The configured named graphql root node. Panics if not enabled.
     pub fn gql_named(&self, key: &str) -> PuffGraphqlConfig {
-        self.gql_roots.get(key)
-            .expect(&format!("Graphql named {} is not configured for this runtime.", key))
+        self.gql_roots
+            .get(key)
+            .expect(&format!(
+                "Graphql named {} is not configured for this runtime.",
+                key
+            ))
             .clone()
     }
 }

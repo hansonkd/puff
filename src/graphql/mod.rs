@@ -20,7 +20,6 @@ use crate::python::PythonDispatcher;
 use crate::types::text::ToText;
 use crate::types::Text;
 
-
 pub(crate) type PuffGraphqlRoot =
     Arc<RootNode<'static, PuffGqlObject, PuffGqlObject, PuffGqlObject, AggroScalarValue>>;
 
@@ -28,15 +27,14 @@ pub(crate) type PuffGraphqlRoot =
 pub struct PuffGraphqlConfig {
     root: PuffGraphqlRoot,
     auth: Option<PyObject>,
-    auth_async: bool
+    auth_async: bool,
 }
 
 impl PuffGraphqlConfig {
     pub fn root(&self) -> PuffGraphqlRoot {
-        return self.root.clone()
+        return self.root.clone();
     }
 }
-
 
 pub(crate) async fn load_schema(
     module: Text,
@@ -89,7 +87,11 @@ pub(crate) async fn load_schema(
         subscription_info,
     );
 
-    Ok(PuffGraphqlConfig{root: Arc::new(schema), auth, auth_async})
+    Ok(PuffGraphqlConfig {
+        root: Arc::new(schema),
+        auth,
+        auth_async,
+    })
 }
 
 pub(crate) fn juniper_value_to_python(py: Python, v: &AggroValue) -> PuffResult<Py<PyAny>> {

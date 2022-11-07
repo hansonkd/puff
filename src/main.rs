@@ -2,7 +2,7 @@ use axum::http;
 use axum::http::HeaderValue;
 use dotenvy::{dotenv, from_path};
 use hyper::Method;
-use puff_rs::graphql::handlers::{handle_graphql, handle_subscriptions, playground};
+use puff_rs::graphql::handlers::{handle_graphql_named, handle_subscriptions_named, playground};
 use puff_rs::prelude::*;
 use puff_rs::program::commands::{
     ASGIServerCommand, BasicCommand, DjangoManagementCommand, PytestCommand, PythonCommand,
@@ -20,10 +20,6 @@ use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
 #[serde(deny_unknown_fields)]
 struct Config {
     django: Option<bool>,
-    postgres: Option<bool>,
-    redis: Option<bool>,
-    pubsub: Option<bool>,
-    task_queue: Option<bool>,
     greenlets: Option<bool>,
     asyncio: Option<bool>,
     dotenv: Option<bool>,
@@ -33,12 +29,78 @@ struct Config {
     pytest_path: Option<String>,
     wsgi: Option<String>,
     asgi: Option<String>,
-    graphql_schema: Option<String>,
-    graphql_url: Option<String>,
-    graphql_subscription_url: Option<String>,
-    graphql_playground_url: Option<String>,
-    commands: Option<Vec<PyCommand>>,
     cors: Option<Cors>,
+    commands: Option<Vec<PyCommand>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    postgres: Vec<PostgresConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    redis: Vec<RedisConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pubsub: Vec<PubSubConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    task_queue: Vec<TaskQueueConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    http_client: Vec<HttpClientConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    graphql: Vec<GraphQLConfig>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GraphQLConfig {
+    #[serde(default = "default_name")]
+    name: String,
+    schema_module: String,
+    url: Option<String>,
+    subscription_url: Option<String>,
+    playground_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PostgresConfig {
+    #[serde(default = "default_name")]
+    name: String,
+    pool_size: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RedisConfig {
+    #[serde(default = "default_name")]
+    name: String,
+    pool_size: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PubSubConfig {
+    #[serde(default = "default_name")]
+    name: String,
+    pool_size: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TaskQueueConfig {
+    #[serde(default = "default_name")]
+    name: String,
+    pool_size: Option<u32>,
+    max_working_tasks: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HttpClientConfig {
+    #[serde(default = "default_name")]
+    name: String,
+    http2_prior_knowledge: Option<u32>,
+    max_idle_connections: Option<u32>,
+    user_agent: Option<HeaderName>,
+}
+
+fn default_name() -> String {
+    "default".to_owned()
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -297,10 +359,31 @@ struct PyCommand {
 fn help_text() -> String {
     let example_config = Config {
         django: Some(false),
-        redis: Some(false),
-        postgres: Some(false),
-        pubsub: Some(false),
-        task_queue: Some(false),
+        redis: vec![RedisConfig {
+            name: "default".into(),
+            pool_size: None,
+        }],
+        postgres: vec![PostgresConfig {
+            name: "default".into(),
+            pool_size: None,
+        }],
+        pubsub: vec![PubSubConfig {
+            name: "default".into(),
+            pool_size: None,
+        }],
+        task_queue: vec![TaskQueueConfig {
+            name: "default".into(),
+            pool_size: Some(10),
+            max_working_tasks: Some(100),
+        }],
+        http_client: vec![],
+        graphql: vec![GraphQLConfig {
+            name: "default".into(),
+            schema_module: "my_python_mod.Schema".into(),
+            url: Some("/graphql/".into()),
+            subscription_url: Some("/subscriptions/".into()),
+            playground_url: Some("/playground/".into()),
+        }],
         greenlets: Some(true),
         asyncio: Some(false),
         dotenv: Some(false),
@@ -310,10 +393,6 @@ fn help_text() -> String {
         pytest_path: Some("./".to_owned()),
         wsgi: Some("my_wsgi.app".to_owned()),
         asgi: Some("my_asgi.app".to_owned()),
-        graphql_schema: Some("my_graphql.Schema".to_owned()),
-        graphql_url: Some("/graphql/".to_owned()),
-        graphql_subscription_url: Some("/subscriptions/".to_owned()),
-        graphql_playground_url: Some("/playground/".to_owned()),
         commands: Some(vec![PyCommand {
             function: "my_python_mod.some_func".to_owned(),
             command_name: "execute_func".to_owned(),
@@ -398,14 +477,26 @@ fn main() -> ExitCode {
 
     let mut rc = RuntimeConfig::default()
         .set_greenlets(config.greenlets.unwrap_or(true))
-        .set_postgres(config.postgres.unwrap_or(false))
-        .set_redis(config.redis.unwrap_or(false))
-        .set_task_queue(config.task_queue.unwrap_or(false))
-        .set_asyncio(config.asyncio.unwrap_or(false))
-        .set_pubsub(config.pubsub.unwrap_or(false));
+        .set_asyncio(config.asyncio.unwrap_or(false));
 
-    if let Some(schema) = config.graphql_schema.as_ref() {
-        rc = rc.set_gql_schema(schema);
+    for c in config.graphql.iter() {
+        rc = rc.add_gql_schema_named(&c.name, &c.schema_module)
+    }
+
+    for c in config.postgres.iter() {
+        rc = rc.add_named_postgres(&c.name, c.pool_size.unwrap_or(10))
+    }
+
+    for c in config.redis.iter() {
+        rc = rc.add_named_redis(&c.name, c.pool_size.unwrap_or(10))
+    }
+
+    for c in config.task_queue.iter() {
+        rc = rc.add_named_task_queue(
+            &c.name,
+            c.pool_size.unwrap_or(10),
+            c.max_working_tasks.unwrap_or((num_cpus::get() * 4) as u32),
+        )
     }
 
     if config.add_cwd_to_path.unwrap_or(true) {
@@ -432,9 +523,7 @@ fn main() -> ExitCode {
     } else if let Some(asgi_app) = config.asgi.as_ref() {
         let router = build_service_layer(&config);
         program = program.command(ASGIServerCommand::new_with_router(asgi_app, router))
-    } else if config.graphql_url.as_ref().is_some()
-        || config.graphql_subscription_url.as_ref().is_some()
-    {
+    } else if config.graphql.iter().find(|x| x.url.is_some()).is_some() {
         let router = build_service_layer(&config);
         program = program.command(ServerCommand::new(router))
     }
@@ -458,23 +547,23 @@ fn main() -> ExitCode {
 
 fn build_service_layer(config: &Config) -> Router {
     let mut router = Router::new();
-    if let Some(url) = &config.graphql_url {
-        router = router.post(url, handle_graphql())
-    }
-
-    if let Some(url) = &config.graphql_subscription_url {
-        router = router.get(url, handle_subscriptions())
-    }
-
-    if let Some(url) = &config.graphql_playground_url {
-        let gql_url = config
-            .graphql_url
-            .as_ref()
-            .expect("can only use playground with graphql_url");
-        router = router.get(
-            url,
-            playground(gql_url.to_owned(), config.graphql_subscription_url.clone()),
-        )
+    for gql in config.graphql.iter() {
+        if let Some(url) = &gql.url {
+            router = router.post(url, handle_graphql_named(gql.name.clone()))
+        }
+        if let Some(url) = &gql.subscription_url {
+            router = router.get(url, handle_subscriptions_named(gql.name.clone()))
+        }
+        if let Some(url) = &gql.playground_url {
+            let gql_url = gql
+                .url
+                .as_ref()
+                .expect("can only use playground with graphql_url");
+            router = router.get(
+                url,
+                playground(gql_url.to_owned(), gql.subscription_url.clone()),
+            )
+        }
     }
 
     if config.compression_middleware.clone().unwrap_or(false) {

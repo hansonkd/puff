@@ -546,11 +546,19 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                     .expect("Subscription field needs an acceptor");
 
                 let python_context = PyContext::new(parents.clone(), auth, None);
-                py_dispatcher.dispatch::<_, &PyDict>(
-                    acceptor_method,
-                    (ss, python_context, args),
-                    None,
-                )?;
+                if field.is_async {
+                    py_dispatcher.dispatch_asyncio(
+                        acceptor_method,
+                        (ss, python_context, args),
+                        None,
+                    )?;
+                } else {
+                    py_dispatcher.dispatch::<_, &PyDict>(
+                        acceptor_method,
+                        (ss, python_context, args),
+                        None,
+                    )?;
+                }
 
                 let stream: ValuesStream<AggroScalarValue> =
                     Box::pin(UnboundedReceiverStream::new(ret));

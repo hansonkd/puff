@@ -11,9 +11,9 @@ fn main() -> ExitCode {
         .add_env("DJANGO_SETTINGS_MODULE", "puff_django_example.settings")
         .add_python_path("examples/puff_django_example")
         .add_python_path("examples/")
-        .set_postgres(true)
-        .set_redis(true)
-        .set_pubsub(true);
+        .add_default_postgres()
+        .add_default_redis()
+        .add_default_pubsub();
 
     Program::new("puff_django_app_example")
         .about("This is my first django app")

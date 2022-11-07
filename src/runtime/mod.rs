@@ -1,11 +1,11 @@
 //! Types used to interact with the Puff Runtime
 //!
 
-use std::collections::HashMap;
 use pyo3::prelude::PyObject;
 use pyo3::{PyResult, Python};
-use reqwest::ClientBuilder;
+use std::collections::HashMap;
 
+use reqwest::header::HeaderValue;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,22 +13,47 @@ use std::time::Duration;
 use crate::types::text::ToText;
 use crate::types::Text;
 
-/// Strategies for distributing tasks onto a coroutine worker thread.
-/// In general the strategy shouldn't matter that much if your tasks
-/// are roughly uniform in terms of computational requirements. However,
-/// some strategies might be better depending on the context of your application. For example,
-/// [Strategy::LeastBusy] can be useful if you have certain tasks that might be heavier than others.
-/// All counting and distributions are done with atomic counters for speed, however there may be
-/// some differences in practice from the described as atomic counters can be concurrently read.
-#[derive(Clone, Copy)]
-pub enum Strategy {
-    ///  Tracks the number of executing tasks on a coroutine, picks worker with fewest tasks.
-    LeastBusy,
-    /// Randomly selects worker for each task.
-    Random,
-    /// Keeps a queue of workers. On each task, takes a worker from the queue, runs the
-    /// task, then puts the worker at the back of the queue.
-    RoundRobin,
+#[derive(Clone)]
+pub struct DbOpts {
+    pub name: Text,
+    pub pool_size: u32,
+}
+
+#[derive(Clone)]
+pub struct TaskQueueOpts {
+    pub name: Text,
+    pub pool_size: u32,
+    pub max_concurrent_tasks: u32,
+}
+
+#[derive(Clone)]
+pub struct HttpClientOpts {
+    pub name: Text,
+    pub opts: HttpOpts,
+}
+
+#[derive(Clone, Default)]
+pub struct HttpOpts {
+    pub http2_prior_knowledge: Option<bool>,
+    pub max_idle_connections: Option<u32>,
+    pub user_agent: Option<HeaderValue>,
+}
+
+impl HttpOpts {
+    pub fn set_http2_prior_knowledge(mut self, val: bool) -> Self {
+        self.http2_prior_knowledge = Some(val);
+        self
+    }
+
+    pub fn set_max_idle_connections(mut self, val: u32) -> Self {
+        self.max_idle_connections = Some(val);
+        self
+    }
+
+    pub fn set_user_agent(mut self, val: HeaderValue) -> Self {
+        self.user_agent = Some(val);
+        self
+    }
 }
 
 /// Controls options for running puff tasks.
@@ -40,22 +65,19 @@ pub enum Strategy {
 /// # Examples
 ///
 /// ```
-/// use puff_rs::runtime::{RuntimeConfig, Strategy};
-/// let config = RuntimeConfig::default().set_strategy(Strategy::Random);
+/// use puff_rs::runtime::RuntimeConfig;
+/// let config = RuntimeConfig::default();
 /// ```
 #[derive(Clone)]
 pub struct RuntimeConfig {
     max_blocking_threads: usize,
     tokio_worker_threads: usize,
     python: bool,
-    redis: bool,
-    redis_pool_size: u32,
-    postgres_pool_size: u32,
-    postgres: bool,
-    pubsub: bool,
-    http_client_builder: Arc<dyn Fn() -> ClientBuilder>,
-    task_queue: bool,
-    task_queue_max_concurrent_tasks: usize,
+    redis: Vec<DbOpts>,
+    postgres: Vec<DbOpts>,
+    pubsub: Vec<DbOpts>,
+    http_client_builder: Vec<HttpClientOpts>,
+    task_queue: Vec<TaskQueueOpts>,
     greenlets: bool,
     asyncio: bool,
     env_vars: Vec<(Text, Text)>,
@@ -63,19 +85,12 @@ pub struct RuntimeConfig {
     gql_modules: HashMap<Text, Text>,
     global_state_fn: Option<Arc<dyn Fn(Python) -> PyResult<PyObject> + Send + Sync + 'static>>,
     blocking_task_keep_alive: Duration,
-    strategy: Strategy,
 }
 
 impl RuntimeConfig {
     /// Create a new default config.
     pub fn new() -> Self {
         Self::default()
-    }
-    /// Get the current strategy.
-    ///
-    /// See [Strategy] for more information about choosing a strategy.
-    pub fn strategy(&self) -> Strategy {
-        self.strategy
     }
     /// Get the current max_blocking_threads
     ///
@@ -100,40 +115,29 @@ impl RuntimeConfig {
         self.python
     }
     /// Get if a global redis will be enabled.
-    pub fn redis(&self) -> bool {
-        self.redis
+    pub fn redis(&self) -> &[DbOpts] {
+        self.redis.as_slice()
     }
     /// Get if a global postgres will be enabled.
-    pub fn postgres(&self) -> bool {
-        self.postgres
-    }
-    /// Get if a global redis will be enabled.
-    pub fn redis_pool_size(&self) -> u32 {
-        self.redis_pool_size
-    }
-    /// Get if a global postgres will be enabled.
-    pub fn postgres_pool_size(&self) -> u32 {
-        self.postgres_pool_size
-    }
-    /// Get if a global pubsub will be enabled.
-    pub fn pubsub(&self) -> bool {
-        self.pubsub
+    pub fn postgres(&self) -> &[DbOpts] {
+        self.postgres.as_slice()
     }
 
     /// Get if a global pubsub will be enabled.
-    pub fn http_client_builder(&self) -> ClientBuilder {
-        (self.http_client_builder)()
+    pub fn pubsub(&self) -> &[DbOpts] {
+        self.pubsub.as_slice()
+    }
+
+    /// Get if a global pubsub will be enabled.
+    pub fn http_client_builder(&self) -> &[HttpClientOpts] {
+        self.http_client_builder.as_slice()
     }
 
     /// Get if a global task_queue will be enabled.
-    pub fn task_queue(&self) -> bool {
-        self.task_queue
+    pub fn task_queue(&self) -> &[TaskQueueOpts] {
+        self.task_queue.as_slice()
     }
 
-    /// Get maximum number of concurrent tasks to pull from queue.
-    pub fn task_queue_max_concurrent_tasks(&self) -> usize {
-        self.task_queue_max_concurrent_tasks
-    }
     /// Get if greenlets will be enabled.
     pub fn greenlets(&self) -> bool {
         self.greenlets
@@ -196,15 +200,6 @@ impl RuntimeConfig {
         new
     }
 
-    /// Sets the strategy for distributing tasks onto a coroutine thread.
-    ///
-    /// Default: [Strategy::RoundRobin]
-    pub fn set_strategy(self, strategy: Strategy) -> Self {
-        let mut new = self;
-        new.strategy = strategy;
-        new
-    }
-
     /// Sets whether to start with python.
     ///
     /// Default: true
@@ -215,80 +210,109 @@ impl RuntimeConfig {
     }
 
     /// Sets whether to start with a global Redis pool.
-    ///
-    /// Default: false
-    pub fn set_redis(self, redis: bool) -> Self {
+    pub fn add_default_redis(self) -> Self {
         let mut new = self;
-        new.redis = redis;
+        new.redis.push(DbOpts {
+            name: "default".into(),
+            pool_size: 10,
+        });
+        new
+    }
+
+    /// Configure an additional named redis pool.
+    pub fn add_named_redis<N: Into<Text>>(self, name: N, pool_size: u32) -> Self {
+        let mut new = self;
+        new.redis.push(DbOpts {
+            name: name.into(),
+            pool_size,
+        });
         new
     }
 
     /// Sets whether to start with a global Postgres pool.
-    ///
-    /// Default: false
-    pub fn set_postgres(self, postgres: bool) -> Self {
+    pub fn add_default_postgres(self) -> Self {
         let mut new = self;
-        new.postgres = postgres;
+        new.postgres.push(DbOpts {
+            name: "default".into(),
+            pool_size: 10,
+        });
         new
     }
 
-    /// Sets the max size of postgres pool. Also enables postgres if not enabled already.
-    ///
-    /// Default: 10
-    pub fn set_postgres_pool_size(self, pool_size: u32) -> Self {
+    /// Configure an additional named Postgres pool.
+    pub fn add_named_postgres<N: Into<Text>>(self, name: N, pool_size: u32) -> Self {
         let mut new = self;
-        new.postgres = true;
-        new.postgres_pool_size = pool_size;
-        new
-    }
-
-    /// Sets the max size of redis pool. Also enables redis if not enabled already.
-    ///
-    /// Default: 10
-    pub fn set_redis_pool_size(self, pool_size: u32) -> Self {
-        let mut new = self;
-        new.redis = true;
-        new.redis_pool_size = pool_size;
+        new.postgres.push(DbOpts {
+            name: name.into(),
+            pool_size,
+        });
         new
     }
 
     /// Sets whether to start with a global PubSubClient.
-    ///
-    /// Default: false
-    pub fn set_pubsub(self, pubsub: bool) -> Self {
+    pub fn add_default_pubsub(self) -> Self {
         let mut new = self;
-        new.pubsub = pubsub;
+        new.pubsub.push(DbOpts {
+            name: "default".into(),
+            pool_size: 10,
+        });
         new
     }
 
-    /// Set a constructor function for the HTTP ClientBuilder
-    ///
-    /// Default: ClientBuilder::new
-    pub fn set_http_client_builder_fn<F: Fn() -> ClientBuilder + 'static>(
-        self,
-        builder: F,
-    ) -> Self {
+    /// Sets whether to start with a global PubSubClient.
+    pub fn add_named_pubsub<N: Into<Text>>(self, name: N, pool_size: u32) -> Self {
         let mut new = self;
-        new.http_client_builder = Arc::new(builder);
+        new.pubsub.push(DbOpts {
+            name: name.into(),
+            pool_size,
+        });
+        new
+    }
+
+    /// Add global HTTP Client
+    pub fn add_http_client(self) -> Self {
+        let mut new = self;
+        new.http_client_builder.push(HttpClientOpts {
+            name: "default".into(),
+            opts: HttpOpts::default(),
+        });
+        new
+    }
+
+    /// Add named HTTP Client
+    pub fn add_named_http_client<N: Into<Text>>(self, name: N, opts: HttpOpts) -> Self {
+        let mut new = self;
+        new.http_client_builder.push(HttpClientOpts {
+            name: name.into(),
+            opts,
+        });
         new
     }
 
     /// Sets whether to start with a global TaskQueue.
-    ///
-    /// Default: false
-    pub fn set_task_queue(self, task_queue: bool) -> Self {
+    pub fn add_default_task_queue(self) -> Self {
         let mut new = self;
-        new.task_queue = task_queue;
+        new.task_queue.push(TaskQueueOpts {
+            name: "default".into(),
+            pool_size: 10,
+            max_concurrent_tasks: (num_cpus::get() * 4) as u32,
+        });
         new
     }
 
-    /// Sets the number of tasks to run concurrently from the queue. Sets `task_queue` to true.
-    ///
-    /// Default: num_cpu * 4
-    pub fn set_task_queue_concurrent_tasks(self, max_workers: usize) -> Self {
+    /// Sets whether to start with a global TaskQueue.
+    pub fn add_named_task_queue<N: Into<Text>>(
+        self,
+        name: N,
+        pool_size: u32,
+        max_concurrent_tasks: u32,
+    ) -> Self {
         let mut new = self;
-        new = new.set_task_queue(true);
-        new.task_queue_max_concurrent_tasks = max_workers;
+        new.task_queue.push(TaskQueueOpts {
+            name: name.into(),
+            pool_size,
+            max_concurrent_tasks,
+        });
         new
     }
 
@@ -313,18 +337,24 @@ impl RuntimeConfig {
     /// If provided, will load the GraphQl configuration from the module path to the Schema.
     ///
     /// Default: None
-    pub fn set_gql_schema<T: Into<Text>>(self, schema_module_path: T) -> Self {
+    pub fn add_gql_schema<T: Into<Text>>(self, schema_module_path: T) -> Self {
         let mut new = self;
-        new.gql_modules.insert("default".into(), schema_module_path.into());
+        new.gql_modules
+            .insert("default".into(), schema_module_path.into());
         new
     }
 
     /// If provided, will load an additional GraphQl configuration from the path to the Schema.
     ///
     /// Default: None
-    pub fn set_gql_internal_schema_named<N: Into<Text>, T: Into<Text>>(self, name: N, schema_module_path: T) -> Self {
+    pub fn add_gql_schema_named<N: Into<Text>, T: Into<Text>>(
+        self,
+        name: N,
+        schema_module_path: T,
+    ) -> Self {
         let mut new = self;
-        new.gql_modules.insert(name.into(), schema_module_path.into());
+        new.gql_modules
+            .insert(name.into(), schema_module_path.into());
         new
     }
 
@@ -390,19 +420,16 @@ impl Default for RuntimeConfig {
             global_state_fn: None,
             greenlets: true,
             asyncio: false,
-            redis: false,
-            redis_pool_size: 10,
-            postgres_pool_size: 10,
-            postgres: false,
-            pubsub: false,
-            task_queue: false,
-            task_queue_max_concurrent_tasks: num_cpus::get() * 4,
+            redis: Vec::new(),
+            postgres: Vec::new(),
+            pubsub: Vec::new(),
+            task_queue: Vec::new(),
             blocking_task_keep_alive: Duration::from_secs(30),
-            strategy: Strategy::RoundRobin,
             python_paths: Vec::new(),
             env_vars: Vec::new(),
             gql_modules: HashMap::new(),
-            http_client_builder: Arc::new(ClientBuilder::new),
+            http_client_builder: Vec::new(),
         }
+        .add_http_client()
     }
 }

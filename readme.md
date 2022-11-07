@@ -217,9 +217,10 @@ use puff_rs::prelude::*;
 fn main() -> ExitCode {
     let rc = RuntimeConfig::default()
         .add_env("DJANGO_SETTINGS_MODULE", "puff_django_example.settings")
-        .set_postgres(true)
-        .set_redis(true)
-        .set_pubsub(true);
+        .add_default_postgres()
+        .add_default_redis()
+        .add_default_pubsub()
+;
 
     Program::new("puff_django_app_example")
         .about("This is my first django app")
@@ -350,9 +351,10 @@ use puff_rs::prelude::*;
 
 fn main() -> ExitCode {
     let rc = RuntimeConfig::default()
-        .set_postgres(true)
-        .set_redis(true)
-        .set_pubsub(true)
+        .add_default_postgres()
+        .add_default_redis()
+        .add_default_pubsub()
+
         .set_gql_schema("my_python_gql_app.schema");
     
     let router = Router::new()
@@ -610,7 +612,7 @@ fn main() -> ExitCode {
     let rc = RuntimeConfig::default()
         .add_python_path("./examples")
         .set_asyncio(true)
-        .set_task_queue(true);
+        .add_default_task_queue();
 
     Program::new("my_first_app")
         .about("This is my first app")
@@ -648,12 +650,12 @@ def do_http_request_greenlet():
 You can set the HTTP client options through RuntimeConfig. If your program is only talking to other Puff instances or HTTP2 services, it can make sense to turn on HTTP2 only. You can also configure user-agents as well as many other HTTP options through this method.
 
 ```rust
-use puff_rs::runtime::RuntimeConfig;
+use puff_rs::runtime::{RuntimeConfig, HttpOpts};
 use puff_rs::reqwest::ClientBuilder;
 
 // Force HTTP2
 RuntimeConfig::default()
-    .set_http_client_builder_fn(|| ClientBuilder::new().http2_prior_knowledge());
+    .add_named_http_client("default", HttpOpts::default().set_http2_prior_knowledge(true));
 ```
 
 ## FAQ

@@ -12,7 +12,7 @@ use bb8_redis::RedisConnectionManager;
 use clap::{Arg, Command};
 use pyo3::exceptions::{PyException, PyRuntimeError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict};
+use pyo3::types::PyBytes;
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
@@ -433,8 +433,7 @@ pub async fn do_loop_iteration(
     let json_text_res = async {
         let (f, p) = result?;
         let r = if task.async_fn {
-            Python::with_gil(|py| dispatcher.dispatch_asyncio(py, f, (p,), PyDict::new(py)))?
-                .await??
+            dispatcher.dispatch_asyncio(f, (p,), None)?.await??
         } else {
             dispatcher.dispatch1(f, (p,))?.await??
         };
@@ -508,10 +507,11 @@ pub fn loop_tasks(
 pub async fn new_task_queue_async<T: IntoConnectionInfo>(
     conn: T,
     check: bool,
+    pool_size: u32,
 ) -> PuffResult<TaskQueue> {
     let conn_info = conn.into_connection_info()?;
     let manager = RedisConnectionManager::new(conn_info.clone())?;
-    let pool = Pool::builder().build(manager).await?;
+    let pool = Pool::builder().max_size(pool_size).build(manager).await?;
     let local_pool = pool.clone();
     if check {
         info!("Checking TaskQueue connectivity...");
@@ -530,14 +530,16 @@ pub async fn new_task_queue_async<T: IntoConnectionInfo>(
     Ok(client)
 }
 
-pub(crate) fn add_task_queue_command_arguments(command: Command) -> Command {
+pub(crate) fn add_task_queue_command_arguments(name: &str, command: Command) -> Command {
+    let name_lower = name.to_lowercase();
+    let name_upper = name.to_uppercase();
     command.arg(
-        Arg::new("task_queue_url")
-            .long("task-queue-url")
+        Arg::new(format!("{}_task_queue_url", name_lower))
+            .long(format!("{}-task-queue-url", name_lower))
             .num_args(1)
-            .value_name("TASK_QUEUE_URL")
-            .env("PUFF_TASK_QUEUE_URL")
+            .value_name(format!("{}_TASK_QUEUE_URL", name_upper))
+            .env(format!("PUFF_{}_TASK_QUEUE_URL", name_upper))
             .default_value("redis://localhost:6379")
-            .help("Global Redis TaskQueue configuration."),
+            .help(format!("{} Redis TaskQueue configuration.", name)),
     )
 }

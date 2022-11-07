@@ -99,10 +99,7 @@ impl PyDispatchAsyncIO {
     pub fn __call__(&self, return_func: PyObject, f: PyObject) -> PyResult<()> {
         let dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
         run_python_async(return_func, async move {
-            Ok(
-                Python::with_gil(|py| dispatcher.dispatch_asyncio(py, f, (), PyDict::new(py)))?
-                    .await??,
-            )
+            Ok(dispatcher.dispatch_asyncio(f, (), None)?.await??)
         });
         Ok(())
     }
@@ -427,29 +424,30 @@ impl PythonDispatcher {
     }
 
     /// Executes the python function on the asyncio thread to create an awaitable to add.
-    pub fn dispatch_asyncio<A: IntoPy<Py<PyTuple>>, K: IntoPy<Py<PyDict>>>(
+    pub fn dispatch_asyncio<A: IntoPy<Py<PyTuple>>>(
         &self,
-        py: Python,
         function: PyObject,
         args: A,
-        kwargs: K,
+        kwargs: Option<Py<PyDict>>,
     ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
-        let (sender, rec) = oneshot::channel();
-        let returner = AsyncReturn::new(Some(sender));
-        self.asyncio_obj
-            .clone()
-            .expect("AsyncIO not enabled")
-            .call_method1(
-                py,
-                "spawn",
-                (
-                    function,
-                    args.into_py(py).to_object(py),
-                    kwargs.into_py(py).to_object(py),
-                    returner,
-                ),
-            )?;
-        Ok(rec)
+        Python::with_gil(|py| {
+            let (sender, rec) = oneshot::channel();
+            let returner = AsyncReturn::new(Some(sender));
+            self.asyncio_obj
+                .clone()
+                .expect("AsyncIO not enabled")
+                .call_method1(
+                    py,
+                    "spawn",
+                    (
+                        function,
+                        args.into_py(py).to_object(py),
+                        kwargs.unwrap_or(PyDict::new(py).into_py(py)).to_object(py),
+                        returner,
+                    ),
+                )?;
+            Ok(rec)
+        })
     }
 
     /// Dispatch an awaitable coroutine onto the event loop.

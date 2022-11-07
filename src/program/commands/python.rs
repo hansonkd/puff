@@ -5,7 +5,6 @@ use crate::program::{Runnable, RunnableCommand};
 use crate::types::Text;
 use clap::{ArgMatches, Command};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
 use serde::Serialize;
 use std::marker::PhantomData;
 use std::process::ExitCode;
@@ -53,14 +52,9 @@ impl RunnableCommand for PythonCommand {
         let fut = async move {
             info!("Running {}", fp);
             let res = if is_coroutine {
-                Python::with_gil(|py| {
-                    context.python_dispatcher().dispatch_asyncio(
-                        py,
-                        python_function,
-                        (),
-                        PyDict::new(py),
-                    )
-                })?
+                context
+                    .python_dispatcher()
+                    .dispatch_asyncio(python_function, (), None)?
             } else {
                 context.python_dispatcher().dispatch1(python_function, ())?
             };
@@ -116,12 +110,9 @@ impl<T: clap::Parser + clap::CommandFactory + Serialize + Sized + 'static> Runna
             let res = if is_coroutine {
                 Python::with_gil(|py| {
                     let payload = pythonize::pythonize(py, &c)?;
-                    context.python_dispatcher().dispatch_asyncio(
-                        py,
-                        python_function,
-                        (payload,),
-                        PyDict::new(py),
-                    )
+                    context
+                        .python_dispatcher()
+                        .dispatch_asyncio(python_function, (payload,), None)
                 })?
             } else {
                 context.python_dispatcher().dispatch1(python_function, ())?

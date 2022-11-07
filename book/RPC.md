@@ -37,7 +37,7 @@ use puff_rs::program::commands::{WaitForever, PythonCommand};
 fn main() -> ExitCode {
     let rc = RuntimeConfig::default()
         .set_asyncio(true)
-        .set_task_queue(true);
+        .add_default_task_queue();
 
     Program::new("my_first_app")
         .about("This is my first app")
@@ -85,8 +85,8 @@ First enable redis in Puff:
 ```rust
     let rc = RuntimeConfig::default()
         .set_asyncio(true)
-        .set_task_queue(true)
-        .set_redis(true);
+        .add_default_task_queue()
+        .add_default_redis;
 ```
 
 Update your code so that it instead stores `None` as the Task result and the real result is sent with `lpush`.
@@ -126,8 +126,9 @@ First enable redis in Puff:
 ```rust
     let rc = RuntimeConfig::default()
         .set_asyncio(true)
-        .set_task_queue(true)
-        .set_pubsub(true);
+        .add_default_task_queue()
+        .add_default_pubsub()
+;
 ```
 
 Now update your code to subscribe to channels:
@@ -180,11 +181,12 @@ First add postgres and the gql_schema_class to your config in Rust.
 ```rust
     let rc = RuntimeConfig::default()
         .set_asyncio(true)
-        .set_redis(true)
-        .set_pubsub(true)
-        .set_postgres(true)
+        .add_default_redis()
+        .add_default_pubsub()
+
+        .add_default_postgres()
         .set_gql_schema("my_puff_proj_py.Schema")
-        .set_task_queue(true);
+        .add_default_task_queue();
 ```
 
 Now setup the GraphQL schema and modify your task function to call GrapQL.

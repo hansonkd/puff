@@ -5,10 +5,12 @@ fn main() -> ExitCode {
     let rc = RuntimeConfig::default()
         .add_python_path("./examples")
         .set_asyncio(true)
-        .set_task_queue(true)
-        .set_redis(true)
-        .set_postgres(true)
-        .set_pubsub(true);
+        .add_default_task_queue()
+        .add_default_redis()
+        .add_default_postgres()
+        .add_default_pubsub()
+        .add_gql_schema("graphql_python.Schema")
+        .add_gql_schema_named("alt", "graphql_python.AltSchema");
 
     Program::new("my_first_app")
         .about("This is my first app")

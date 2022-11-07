@@ -50,14 +50,17 @@ pub fn with_redis<F: FnOnce(RedisClient) -> T, T>(f: F) -> T {
     with_puff_context(move |d| f(d.redis()))
 }
 
-pub(crate) fn add_redis_command_arguments(command: Command) -> Command {
+pub(crate) fn add_redis_command_arguments(name: &str, command: Command) -> Command {
+    let name_lower = name.to_lowercase();
+    let name_upper = name.to_uppercase();
+
     command.arg(
-        Arg::new("redis_url")
-            .long("redis-url")
+        Arg::new(format!("{}_redis_url", name_lower))
+            .long(format!("{}-redis-url", name_lower))
             .num_args(1)
-            .value_name("REDIS_URL")
-            .env("PUFF_REDIS_URL")
+            .value_name(format!("{}_REDIS_URL", name_upper))
+            .env(format!("PUFF_{}_REDIS_URL", name_upper))
             .default_value("redis://localhost:6379")
-            .help("Global Redis pool configuration."),
+            .help(format!("Redis pool configuration for '{}'.", name)),
     )
 }

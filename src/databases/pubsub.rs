@@ -375,10 +375,11 @@ impl PubSubConnection {
 pub async fn new_pubsub_async<T: IntoConnectionInfo>(
     conn: T,
     check: bool,
+    pool_size: u32,
 ) -> PuffResult<PubSubClient> {
     let conn_info = conn.into_connection_info()?;
     let manager = RedisConnectionManager::new(conn_info.clone())?;
-    let pool = Pool::builder().build(manager).await?;
+    let pool = Pool::builder().max_size(pool_size).build(manager).await?;
     let local_pool = pool.clone();
     if check {
         info!("Checking PubSub connectivity...");
@@ -402,14 +403,16 @@ pub async fn new_pubsub_async<T: IntoConnectionInfo>(
     Ok(client)
 }
 
-pub(crate) fn add_pubsub_command_arguments(command: Command) -> Command {
+pub(crate) fn add_pubsub_command_arguments(name: &str, command: Command) -> Command {
+    let name_lower = name.to_lowercase();
+    let name_upper = name.to_uppercase();
     command.arg(
-        Arg::new("pubsub_url")
-            .long("pubsub-url")
+        Arg::new(format!("{}_pubsub_url", name_lower))
+            .long(format!("{}-pubsub-url", name_lower))
             .num_args(1)
-            .value_name("PUBSUB_URL")
-            .env("PUFF_PUBSUB_URL")
+            .value_name(format!("{}_PUBSUB_URL", name_upper))
+            .env(format!("PUFF_{}_PUBSUB_URL", name_upper))
             .default_value("redis://localhost:6379")
-            .help("Global Redis PubSub configuration."),
+            .help(format!("PubSub configuration for '{}'.", name)),
     )
 }

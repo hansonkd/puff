@@ -56,9 +56,9 @@ fn main() -> ExitCode {
     let router = Router::new().get("/", handle_root);
 
     let rc = RuntimeConfig::default()
-        .set_postgres(true)
-        .set_redis(true)
-        .set_pubsub(true)
+        .add_default_postgres()
+        .add_default_redis()
+        .add_default_pubsub()
         .set_global_state_fn(|py| Ok(MyState.into_py(py)));
 
     Program::new("my_first_app")

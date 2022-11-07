@@ -55,14 +55,17 @@ pub fn with_postgres<F: FnOnce(PostgresClient) -> T, T>(f: F) -> T {
     with_puff_context(move |d| f(d.postgres()))
 }
 
-pub(crate) fn add_postgres_command_arguments(command: Command) -> Command {
+pub(crate) fn add_postgres_command_arguments(name: &str, command: Command) -> Command {
+    let name_lower = name.to_lowercase();
+    let name_upper = name.to_uppercase();
+
     command.arg(
-        Arg::new("postgres_url")
-            .long("postgres-url")
+        Arg::new(format!("{}_postgres_url", name_lower))
+            .long(format!("{}-postgres-url", name_lower))
             .num_args(1)
-            .value_name("POSTGRES_URL")
-            .env("PUFF_POSTGRES_URL")
+            .value_name(format!("{}_POSTGRES_URL", name_upper))
+            .env(format!("PUFF_{}_POSTGRES_URL", name_upper))
             .default_value("postgres://postgres:password@localhost:5432/postgres")
-            .help("Global Postgres pool configuration."),
+            .help(format!("Postgres pool configuration for '{}'.", name)),
     )
 }

@@ -6,7 +6,7 @@ use puff_rs::program::commands::ServerCommand;
 fn main() -> ExitCode {
     let app = Router::new().get("/", root).get("/ws", ws_handler);
 
-    let rc = RuntimeConfig::default().set_pubsub(true);
+    let rc = RuntimeConfig::default().add_default_pubsub();
 
     Program::new("my_first_ws_app")
         .about("This is my first websocket app")

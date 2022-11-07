@@ -53,7 +53,9 @@ def test_task_queue_pubsub_realtime():
 
 async def example_task_pubsub_async(payload):
     channel = payload["channel"]
-    await pubsub.publish_json_as(pubsub.new_connection_id(), channel, {"my_result": f"pubsub-{payload['x'][0]}"})
+    await pubsub.publish_json_as(
+        pubsub.new_connection_id(), channel, {"my_result": f"pubsub-{payload['x'][0]}"}
+    )
     return None
 
 
@@ -70,5 +72,7 @@ def test_task_queue_lpop_realtime():
 
 async def example_task_lpush_async(payload):
     channel = payload["channel"]
-    await redis.lpush(channel.encode("utf8"), dumpb({"my_result": f"lpop-{payload['x'][0]}"}))
+    await redis.lpush(
+        channel.encode("utf8"), dumpb({"my_result": f"lpop-{payload['x'][0]}"})
+    )
     return None

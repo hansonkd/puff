@@ -9,8 +9,8 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let config = RuntimeConfig::default()
-        .set_postgres(true)
-        .set_gql_schema("graphql_python.schema")
+        .add_default_postgres()
+        .add_gql_schema("graphql_python.Schema")
         .add_python_path("examples/");
 
     let router = Router::new()

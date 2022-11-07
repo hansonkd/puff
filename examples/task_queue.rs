@@ -5,7 +5,7 @@ fn main() -> ExitCode {
     let rc = RuntimeConfig::default()
         .add_python_path("./examples")
         .set_asyncio(true)
-        .set_task_queue(true);
+        .add_default_task_queue();
 
     Program::new("my_first_app")
         .about("This is my first app")
