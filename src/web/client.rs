@@ -288,15 +288,15 @@ impl PyHttpResponse {
 /// Build a new TaskQueue with the provided connection information.
 pub fn new_http_client(opts: &HttpClientOpts) -> PuffResult<PyHttpClient> {
     let mut builder = reqwest::ClientBuilder::new();
-    if let Some(idle) = opts.opts.max_idle_connections {
+    if let Some(idle) = opts.max_idle_connections {
         builder = builder.pool_max_idle_per_host(idle as usize);
     }
 
-    if let Some(true) = opts.opts.http2_prior_knowledge {
+    if let Some(true) = opts.http2_prior_knowledge {
         builder = builder.http2_prior_knowledge();
     }
 
-    if let Some(s) = &opts.opts.user_agent {
+    if let Some(s) = &opts.user_agent {
         builder = builder.user_agent(s);
     }
 

@@ -805,3 +805,7 @@ class DatabaseAPI20Test(unittest.TestCase):
 
     def test_ROWID(self):
         self.assertTrue(hasattr(self.driver, "ROWID"), "module.ROWID must be defined.")
+
+
+class AltDatabase20Test(DatabaseAPI20Test):
+    connect_kw_args = {"dbname": "altpostgres"}

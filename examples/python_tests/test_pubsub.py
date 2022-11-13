@@ -1,7 +1,7 @@
 import asyncio
 
 from puff import spawn, sleep_ms
-from puff.pubsub import global_pubsub
+from puff.pubsub import global_pubsub, named_client
 from asgiref.sync import async_to_sync, sync_to_async
 
 
@@ -138,7 +138,7 @@ def wait_for_message_string_unsubscribe():
     return msg.text, msg3.text
 
 
-def test_publish_and_wait_string_multi_channels_multi_wait():
+def test_publish_and_wait_string_multi_channels_multi_wait_missing_chan():
     greenlet = spawn(wait_for_message_string_unsubscribe)
     greenlet2 = spawn(wait_for_message_string_multi_channels)
     conn = global_pubsub.connection()
@@ -160,3 +160,21 @@ def test_pubsub_greenlet():
 
 def test_pubsub_sync_from_async():
     async_to_sync(publish_and_wait_sync_from_async)()
+
+
+alt_client = named_client("altpubsub")
+
+
+def wait_for_message_bytes_alt():
+    conn = alt_client.connection()
+    conn.subscribe("test-chan-alt")
+    msg = conn.receive()
+    return msg.body
+
+
+def test_alt_client():
+    greenlet = spawn(wait_for_message_bytes_alt)
+    conn = alt_client.connection()
+    sleep_ms(100)
+    conn.publish_bytes("test-chan-alt", b"alt")
+    assert greenlet.join() == b"alt"

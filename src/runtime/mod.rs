@@ -14,32 +14,109 @@ use crate::types::text::ToText;
 use crate::types::Text;
 
 #[derive(Clone)]
-pub struct DbOpts {
-    pub name: Text,
+pub struct PostgresOpts {
     pub pool_size: u32,
+}
+
+impl PostgresOpts {
+    pub fn set_pool_size(mut self, size: u32) -> Self {
+        self.pool_size = size;
+        self
+    }
+}
+
+impl Default for PostgresOpts {
+    fn default() -> Self {
+        Self { pool_size: 10 }
+    }
+}
+
+#[derive(Clone)]
+pub struct RedisOpts {
+    pub pool_size: u32,
+}
+
+impl RedisOpts {
+    pub fn set_pool_size(mut self, size: u32) -> Self {
+        self.pool_size = size;
+        self
+    }
+}
+
+impl Default for RedisOpts {
+    fn default() -> Self {
+        Self { pool_size: 10 }
+    }
+}
+
+#[derive(Clone)]
+pub struct PubSubOpts {
+    pub pool_size: u32,
+}
+
+impl PubSubOpts {
+    pub fn set_pool_size(mut self, size: u32) -> Self {
+        self.pool_size = size;
+        self
+    }
+}
+
+impl Default for PubSubOpts {
+    fn default() -> Self {
+        Self { pool_size: 10 }
+    }
 }
 
 #[derive(Clone)]
 pub struct TaskQueueOpts {
-    pub name: Text,
     pub pool_size: u32,
     pub max_concurrent_tasks: u32,
 }
 
+impl TaskQueueOpts {
+    pub fn set_pool_size(mut self, size: u32) -> Self {
+        self.pool_size = size;
+        self
+    }
+
+    pub fn set_max_concurrent_tasks(mut self, max_streams: u32) -> Self {
+        self.max_concurrent_tasks = max_streams;
+        self
+    }
+}
+
+impl Default for TaskQueueOpts {
+    fn default() -> Self {
+        Self {
+            pool_size: 10,
+            max_concurrent_tasks: (num_cpus::get() * 4) as u32,
+        }
+    }
+}
+
 #[derive(Clone)]
-pub struct HttpClientOpts {
-    pub name: Text,
-    pub opts: HttpOpts,
+pub struct GqlOpts {
+    pub schema_import: Text,
+    pub db: Option<Text>,
+}
+
+impl GqlOpts {
+    pub fn new<T: Into<Text>>(schema_import: T, db: Option<Text>) -> Self {
+        Self {
+            schema_import: schema_import.into(),
+            db,
+        }
+    }
 }
 
 #[derive(Clone, Default)]
-pub struct HttpOpts {
+pub struct HttpClientOpts {
     pub http2_prior_knowledge: Option<bool>,
     pub max_idle_connections: Option<u32>,
     pub user_agent: Option<HeaderValue>,
 }
 
-impl HttpOpts {
+impl HttpClientOpts {
     pub fn set_http2_prior_knowledge(mut self, val: bool) -> Self {
         self.http2_prior_knowledge = Some(val);
         self
@@ -73,16 +150,16 @@ pub struct RuntimeConfig {
     max_blocking_threads: usize,
     tokio_worker_threads: usize,
     python: bool,
-    redis: Vec<DbOpts>,
-    postgres: Vec<DbOpts>,
-    pubsub: Vec<DbOpts>,
-    http_client_builder: Vec<HttpClientOpts>,
-    task_queue: Vec<TaskQueueOpts>,
+    redis: HashMap<Text, RedisOpts>,
+    postgres: HashMap<Text, PostgresOpts>,
+    pubsub: HashMap<Text, PubSubOpts>,
+    http_client_builder: HashMap<Text, HttpClientOpts>,
+    task_queue: HashMap<Text, TaskQueueOpts>,
     greenlets: bool,
     asyncio: bool,
     env_vars: Vec<(Text, Text)>,
     python_paths: Vec<Text>,
-    gql_modules: HashMap<Text, Text>,
+    gql_modules: HashMap<Text, GqlOpts>,
     global_state_fn: Option<Arc<dyn Fn(Python) -> PyResult<PyObject> + Send + Sync + 'static>>,
     blocking_task_keep_alive: Duration,
 }
@@ -114,28 +191,29 @@ impl RuntimeConfig {
     pub fn python(&self) -> bool {
         self.python
     }
+
     /// Get if a global redis will be enabled.
-    pub fn redis(&self) -> &[DbOpts] {
-        self.redis.as_slice()
+    pub fn redis(&self) -> &HashMap<Text, RedisOpts> {
+        &self.redis
     }
     /// Get if a global postgres will be enabled.
-    pub fn postgres(&self) -> &[DbOpts] {
-        self.postgres.as_slice()
+    pub fn postgres(&self) -> &HashMap<Text, PostgresOpts> {
+        &self.postgres
     }
 
     /// Get if a global pubsub will be enabled.
-    pub fn pubsub(&self) -> &[DbOpts] {
-        self.pubsub.as_slice()
+    pub fn pubsub(&self) -> &HashMap<Text, PubSubOpts> {
+        &self.pubsub
     }
 
     /// Get if a global pubsub will be enabled.
-    pub fn http_client_builder(&self) -> &[HttpClientOpts] {
-        self.http_client_builder.as_slice()
+    pub fn http_client_builder(&self) -> &HashMap<Text, HttpClientOpts> {
+        &self.http_client_builder
     }
 
     /// Get if a global task_queue will be enabled.
-    pub fn task_queue(&self) -> &[TaskQueueOpts] {
-        self.task_queue.as_slice()
+    pub fn task_queue(&self) -> &HashMap<Text, TaskQueueOpts> {
+        &self.task_queue
     }
 
     /// Get if greenlets will be enabled.
@@ -147,8 +225,8 @@ impl RuntimeConfig {
         self.asyncio
     }
     /// Get the gql modules that will be enabled.
-    pub fn gql_modules(&self) -> HashMap<Text, Text> {
-        self.gql_modules.clone()
+    pub fn gql_modules(&self) -> &HashMap<Text, GqlOpts> {
+        &self.gql_modules
     }
     /// Get all python paths to add to environment.
     pub fn python_paths(&self) -> Vec<Text> {
@@ -212,107 +290,73 @@ impl RuntimeConfig {
     /// Sets whether to start with a global Redis pool.
     pub fn add_default_redis(self) -> Self {
         let mut new = self;
-        new.redis.push(DbOpts {
-            name: "default".into(),
-            pool_size: 10,
-        });
+        new.redis.insert("default".into(), RedisOpts::default());
         new
     }
 
     /// Configure an additional named redis pool.
-    pub fn add_named_redis<N: Into<Text>>(self, name: N, pool_size: u32) -> Self {
+    pub fn add_named_redis<N: Into<Text>>(self, name: N, opts: RedisOpts) -> Self {
         let mut new = self;
-        new.redis.push(DbOpts {
-            name: name.into(),
-            pool_size,
-        });
+        new.redis.insert(name.into(), opts);
         new
     }
 
     /// Sets whether to start with a global Postgres pool.
     pub fn add_default_postgres(self) -> Self {
         let mut new = self;
-        new.postgres.push(DbOpts {
-            name: "default".into(),
-            pool_size: 10,
-        });
+        new.postgres
+            .insert("default".into(), PostgresOpts::default());
         new
     }
 
     /// Configure an additional named Postgres pool.
-    pub fn add_named_postgres<N: Into<Text>>(self, name: N, pool_size: u32) -> Self {
+    pub fn add_named_postgres<N: Into<Text>>(self, name: N, opts: PostgresOpts) -> Self {
         let mut new = self;
-        new.postgres.push(DbOpts {
-            name: name.into(),
-            pool_size,
-        });
+        new.postgres.insert(name.into(), opts);
         new
     }
 
     /// Sets whether to start with a global PubSubClient.
     pub fn add_default_pubsub(self) -> Self {
         let mut new = self;
-        new.pubsub.push(DbOpts {
-            name: "default".into(),
-            pool_size: 10,
-        });
+        new.pubsub.insert("default".into(), PubSubOpts::default());
         new
     }
 
     /// Sets whether to start with a global PubSubClient.
-    pub fn add_named_pubsub<N: Into<Text>>(self, name: N, pool_size: u32) -> Self {
+    pub fn add_named_pubsub<N: Into<Text>>(self, name: N, config: PubSubOpts) -> Self {
         let mut new = self;
-        new.pubsub.push(DbOpts {
-            name: name.into(),
-            pool_size,
-        });
+        new.pubsub.insert(name.into(), config);
         new
     }
 
     /// Add global HTTP Client
     pub fn add_http_client(self) -> Self {
         let mut new = self;
-        new.http_client_builder.push(HttpClientOpts {
-            name: "default".into(),
-            opts: HttpOpts::default(),
-        });
+        new.http_client_builder
+            .insert("default".into(), HttpClientOpts::default());
         new
     }
 
     /// Add named HTTP Client
-    pub fn add_named_http_client<N: Into<Text>>(self, name: N, opts: HttpOpts) -> Self {
+    pub fn add_named_http_client<N: Into<Text>>(self, name: N, opts: HttpClientOpts) -> Self {
         let mut new = self;
-        new.http_client_builder.push(HttpClientOpts {
-            name: name.into(),
-            opts,
-        });
+        new.http_client_builder.insert(name.into(), opts);
         new
     }
 
     /// Sets whether to start with a global TaskQueue.
     pub fn add_default_task_queue(self) -> Self {
         let mut new = self;
-        new.task_queue.push(TaskQueueOpts {
-            name: "default".into(),
-            pool_size: 10,
-            max_concurrent_tasks: (num_cpus::get() * 4) as u32,
-        });
+        new.task_queue
+            .insert("default".into(), TaskQueueOpts::default());
         new
     }
 
     /// Sets whether to start with a global TaskQueue.
-    pub fn add_named_task_queue<N: Into<Text>>(
-        self,
-        name: N,
-        pool_size: u32,
-        max_concurrent_tasks: u32,
-    ) -> Self {
+    pub fn add_named_task_queue<N: Into<Text>>(self, name: N, opts: TaskQueueOpts) -> Self {
         let mut new = self;
-        new.task_queue.push(TaskQueueOpts {
-            name: name.into(),
-            pool_size,
-            max_concurrent_tasks,
-        });
+        new.task_queue.insert(name.into(), opts);
         new
     }
 
@@ -339,22 +383,22 @@ impl RuntimeConfig {
     /// Default: None
     pub fn add_gql_schema<T: Into<Text>>(self, schema_module_path: T) -> Self {
         let mut new = self;
-        new.gql_modules
-            .insert("default".into(), schema_module_path.into());
+        new.gql_modules.insert(
+            "default".into(),
+            GqlOpts {
+                schema_import: schema_module_path.into(),
+                db: None,
+            },
+        );
         new
     }
 
     /// If provided, will load an additional GraphQl configuration from the path to the Schema.
     ///
     /// Default: None
-    pub fn add_gql_schema_named<N: Into<Text>, T: Into<Text>>(
-        self,
-        name: N,
-        schema_module_path: T,
-    ) -> Self {
+    pub fn add_gql_schema_named<N: Into<Text>>(self, name: N, opts: GqlOpts) -> Self {
         let mut new = self;
-        new.gql_modules
-            .insert(name.into(), schema_module_path.into());
+        new.gql_modules.insert(name.into(), opts);
         new
     }
 
@@ -390,7 +434,6 @@ impl RuntimeConfig {
 
     /// Add the relative directory to the PYTHONPATH
     pub fn add_python_path<T: Into<Text>>(self, path: T) -> Self {
-        // let cwd_str = cwd.to_str().expect("Could not convert cwd path to string");
         let p: PathBuf = path
             .into()
             .parse()
@@ -420,15 +463,15 @@ impl Default for RuntimeConfig {
             global_state_fn: None,
             greenlets: true,
             asyncio: false,
-            redis: Vec::new(),
-            postgres: Vec::new(),
-            pubsub: Vec::new(),
-            task_queue: Vec::new(),
+            redis: HashMap::new(),
+            postgres: HashMap::new(),
+            pubsub: HashMap::new(),
+            task_queue: HashMap::new(),
             blocking_task_keep_alive: Duration::from_secs(30),
             python_paths: Vec::new(),
             env_vars: Vec::new(),
             gql_modules: HashMap::new(),
-            http_client_builder: Vec::new(),
+            http_client_builder: HashMap::new(),
         }
         .add_http_client()
     }

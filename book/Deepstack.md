@@ -1,6 +1,5 @@
 # ☁ Puff ☁
-
-Python with an async runtime built-in Rust for GraphQL, ASGI, WSGI, Postgres, PubSub, Redis, Distributed Tasks, and HTTP2 Client.
+The deep stack framework.
 
 [![Crates.io][crates-badge]][crates-url]
 [![MIT licensed][mit-badge]][mit-url]
@@ -14,6 +13,7 @@ Python with an async runtime built-in Rust for GraphQL, ASGI, WSGI, Postgres, Pu
 - [What is Puff?](#what-is-puff)
   * [Quick Start](#quick-start)
   * [Puff ♥ Python](#puff--python)
+  * [Puff ♥ Rust](#puff--rust)
   * [Puff ♥ Django](#puff--django)
   * [Puff ♥ Graphql](#puff--graphql)
   * [Puff ♥ Pytest](#puff--pytest)
@@ -21,9 +21,15 @@ Python with an async runtime built-in Rust for GraphQL, ASGI, WSGI, Postgres, Pu
   * [Puff ♥ Django + GraphQL](#puff--django--graphql)
   * [Puff ♥ Distributed Tasks](#puff--distributed-tasks)
   * [Puff ♥ HTTP](#puff--http)
+  * [FAQ](#faq)
+      - [Puff Dependencies](#why-a-monolithic-project)
+      - [Architecture](#architecture)
+      - [Why is Greenlet environment single threaded?](#why-is-greenlet-environment-single-threaded)
+      - [What is a Deep Stack Framework?](#what-is-a-deep-stack-framework)
+      - [Deep Stack Teams](#deep-stack-teams)
+      - [Benefits of Deep Stack](#benefits-of-deep-stack)
   * Links
       - [CHANGELOG](https://github.com/hansonkd/puff/blob/master/CHANGELOG.md)
-      - [Deepstack](https://github.com/hansonkd/puff/blob/master/book/Deepstack.md)
       - [Using the CLI](https://github.com/hansonkd/puff/blob/master/book/CLI.md)
       - [Flask](https://github.com/hansonkd/puff/blob/master/book/Flask.md)
       - [FastAPI](https://github.com/hansonkd/puff/blob/master/book/FastAPI.md)
@@ -32,7 +38,7 @@ Python with an async runtime built-in Rust for GraphQL, ASGI, WSGI, Postgres, Pu
 
 # What is Puff?
 
-Puff is a batteries included "deep stack" for Python. It's an experiment to minimize the barrier between Python and Rust to unlock the full potential of high level languages. Build your own Runtime using standard CPython and extend it with Rust. Imagine if GraphQL, Postgres, Redis and PubSu, Distributed Tasks were part of the standard library. That's Puff.
+Puff is a batteries included "deep stack" for Python. It's an experiment to minimize the barrier between Python and Rust to unlock the full potential of high level languages. Build your own Runtime using standard CPython and extend it with Rust. Imagine if GraphQL, Postgres, Redis and PubSub were part of the standard library. That's Puff.
 
 The old approach for integrating Rust in Python would be to make a Python package that uses rust and import it from Python. This approach has some flaws as the rust packages can't cooperate. Puff gives Rust its own layer, so you can build a cohesive set of tools in Rust that all work flawlessly together without having to re-enter Python.
 
@@ -72,40 +78,31 @@ leads to greater efficiency in terms of productivity, scalability and performanc
 The Zen of deepstack is recognizing that no language is the ultimate answer. Seek progress instead of perfection by using Python for rapid development and Rust to optimize the most critical paths once you find them later. Find the balance. 
 
 ## Quick Start
+Puff requires Python >= 3.10, Rust / Cargo. Python's [Poetry](https://python-poetry.org) is optional.
 
-Install Rust to compile Puff for your platform.
-
-#### Install Rust
-
-Follow the [instructions](https://www.rust-lang.org/tools/install) to install Cargo for your platform.
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
-
-#### Install Puff
-
-Use cargo to install Puff.
-
-```bash
-cargo install puff-rs
-```
-
-Puff requires Python >= 3.10. Python's [Poetry](https://python-poetry.org) is optional.
-
-Your Puff Project needs to find your Python project. Even if they are in the same folder, they need to be added to the PYTHONPATH.
+Your Rust Puff Project needs to find your Python project. Even if they are in the same folder, they need to be added to the PYTHONPATH.
 
 One way to set up a Puff project is like this:
 
 ```bash
+cargo new my_puff_proj --bin
+cd my_puff_proj
+cargo add puff-rs
 poetry new my_puff_proj_py
 cd my_puff_proj_py
 poetry add puff-py
 ```
 
-Now from `my_puff_proj_py` you can run your project with `poetry run puff` to access cargo from poetry and expose the virtual environment to Puff.
+And add the puff plugin for poetry.
 
-The Python project doesn't need to be inside off your Rust package. It only needs to be on the PYTHONPATH or inside an virtualenv. If you don't want to use poetry, you will have to set up a virtual environment when running Puff.
+```toml title="/app/my_puff_proj/my_puff_proj_py/pyproject.toml"
+[tool.poetry.scripts]
+run_cargo = "puff.poetry_plugins:run_cargo"
+```
+
+Now from `my_puff_proj_py` you can run your project with `poetry run run_cargo` to access cargo from poetry and expose the virtual environment to Puff.
+
+The Python project doesn't need to be inside off your Rust package. It only needs to be on the PYTHONPATH. If you don't want to use poetry, you will have to set up a virtual environment if needed and set `PYTHONPATH` when running Puff.
 
 
 ## Puff ♥ Python
@@ -114,17 +111,22 @@ Python programs in Puff are run by building a `Program` in Rust and registering 
 
 The Python method is bootstrapped and run as a greenlet in the Puff runtime.
 
-Create a `puff.toml`
 
-```toml title="puff.toml"
-[[commands]]
-function = "my_puff_proj_py.hello_world"
-command_name = "hello_world"
+```rust title="/app/src/main.rs" no_run
+use puff_rs::prelude::*;
+use puff_rs::program::commands::PythonCommand;
+
+fn main() -> ExitCode {
+    Program::new("my_first_app")
+        .about("This is my first app")
+        .command(PythonCommand::new("run_hello_world", "my_python_app.hello_world"))
+        .run()
+}
 ```
 
 Python: 
 
-```python title="/app/my_puff_proj_py/__init__.py"
+```python title="/app/py_code/my_python_app.py"
 import puff
 
 # Standard python functions run on Puff greenlets. You can only use special Puff async functions without pausing other greenlets.
@@ -143,6 +145,61 @@ def do_some_blocking_work(fn):
 ```
 
 
+## Puff ♥ Rust
+
+The primary feature of Puff is the seamless ability to go from python into Rust with little configuration.
+
+This makes the full Rust ecosystem available to your Python program with very little integration overhead or performance degradation.
+
+```rust title="/app/src/main.rs" no_run
+use puff_rs::prelude::*;
+use puff_rs::program::commands::PythonCommand;
+
+
+// Use pyo3 to generate Python compatible Rust classes.
+#[pyclass]
+struct MyPythonState;
+
+#[pymethods]
+impl MyPythonState {
+    fn hello_from_rust(&self, py_says: Text) -> Text {
+        format!("Hello from Rust! Python Says: {}", py_says).into()
+    }
+    
+    // Async Puff functions take a function to return the result with and offload the future onto Tokio.
+    fn hello_from_rust_async(&self, return_func: PyObject, py_says: Text) {
+        run_python_async(return_func, async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            debug!("Python says: {}", &py_says);
+            Ok(42)
+        })
+    }
+}
+
+
+fn main() -> ExitCode {
+    let rc = RuntimeConfig::default().set_global_state_fn(|py| Ok(MyPythonState.into_py(py)));
+    Program::new("my_first_app")
+        .about("This is my first app")
+        .runtime_config(rc)
+        .command(PythonCommand::new("run_hello_world", "my_python_app.hello_world"))
+        .run()
+}
+```
+
+Python: 
+
+```python title="/app/py_code/my_python_app.py"
+from puff import global_state, wrap_async
+
+rust_obj = global_state
+
+def hello_world():
+    print(rust_obj.hello_from_rust("Hello from Python!"))
+    # Rust functions that execute async code need to be passed a special return function.
+    print(wrap_async(lambda ret_func: rust_obj.hello_from_rust_async(ret_func, "hello async")))
+```
+
 ## Puff ♥ Django
 
 While it can run any WSGI app, Puff has a special affection for Django. Puff believes that business logic should be implemented on a higher level layer and Rust should be used as an optimization. Django is a perfect high level framework to use with Puff as it handles migrations, admin, etc. Puff mimics the psycopg2 drivers and cache so that Django uses the Puff Database and Redis pool.
@@ -150,17 +207,29 @@ While it can run any WSGI app, Puff has a special affection for Django. Puff bel
 Transform your sync Django project into a highly concurrent Puff program with a few lines of code. Puff wraps the management commands so migrate, etc. all work as expected. Simply run `poetry run run_cargo django [command]` instead of using `./manage.py [command]`. For example `poetry run run_cargo django migrate`. Don't use django's dev server, instead use Puff's with `poetry run run_cargo serve`.
 
 
-Create a `puff.toml`
+```rust title="/app/src/main.rs" no_run
+use puff_rs::program::commands::django_management::DjangoManagementCommand;
+use puff_rs::program::commands::pytest::PytestCommand;
+use puff_rs::program::commands::wsgi::WSGIServerCommand;
+use puff_rs::prelude::*;
 
-```toml title="puff.toml"
-django = true
-wsgi = "my_django_application.wsgi.application"
 
-[[postgres]]
-name = "default"
+fn main() -> ExitCode {
+    let rc = RuntimeConfig::default()
+        .add_env("DJANGO_SETTINGS_MODULE", "puff_django_example.settings")
+        .add_default_postgres()
+        .add_default_redis()
+        .add_default_pubsub()
+;
 
-[[redis]]
-name = "default"
+    Program::new("puff_django_app_example")
+        .about("This is my first django app")
+        .runtime_config(rc)
+        .command(WSGIServerCommand::new("puff_django_example.wsgi.application"))
+        .command(DjangoManagementCommand::new())
+        .command(PytestCommand::new("examples/puff_django_example"))
+        .run()
+}
 ```
 
 Use Puff everywhere in your Django app. Even create Django management commands that use Rust!
@@ -274,30 +343,32 @@ class Schema:
 
 Rust:
 
-```toml title="puff.toml"
-django = true
-pytest = true
+```rust title="/app/src/main.rs" no_run
+use puff_rs::program::commands::ServerCommand;
+use puff_rs::graphql::handlers::{handle_graphql, handle_subscriptions, playground};
+use puff_rs::prelude::*;
 
-[[postgres]]
-enable = true
 
-[[redis]]
-enable = true
+fn main() -> ExitCode {
+    let rc = RuntimeConfig::default()
+        .add_default_postgres()
+        .add_default_redis()
+        .add_default_pubsub()
 
-[[pubsub]]
-enable = true
+        .set_gql_schema("my_python_gql_app.schema");
+    
+    let router = Router::new()
+            .get("/", playground("/graphql", Some("/subscriptions")))
+            .post("/graphql", handle_graphql())
+            .get("/subscriptions", handle_subscriptions());
 
-[[graphql]]
-schema = "my_python_gql_app.Schema"
-url = "/graphql/"
-subscriptions_url = "/subscriptions/"
-playground_url = "/playground/"
-
-[[commands]]
-function = "my_puff_proj_py.hello_world"
-command_name = "hello_world"
+    Program::new("puff_gql_app_example")
+        .about("This is my first graphql app")
+        .runtime_config(rc)
+        .command(ServerCommand::new(router))
+        .run()
+}
 ```
-
 Produces a Graphql Schema like so:
 
 ![Schema](https://user-images.githubusercontent.com/496914/195461156-1613c3e6-7b82-4143-8796-1b95ff10f7c3.png)
@@ -306,11 +377,7 @@ In addition to making it easier to write the fastest queries, a layer based desi
 
 ## Puff ♥ Pytest
 
-Integrate with pytest to easily test your Graphql and Puff apps. Simply add the `PytestCommand` to your Program and write tests as normal only run them with `puff pytest`
-
-```toml title="puff.toml"
-pytest = true
-```
+Integrate with pytest to easily test your Graphql and Puff apps. Simply add the `PytestCommand` to your Program and write tests as normal only run them with `cargo run pytest`
 
 ```python title="/app/src/py_code/test_gql.py"
 from hello_world_py_app import __version__
@@ -361,11 +428,49 @@ async def read_root():
     return {"Hello": "World", "from": "Fast API", "rust_value": result}
 ```
 
-`puff.toml`
+Rust
 
-```toml title="puff.toml"
-asyncio = true
-asgi = "my_python_app.app"
+```rust title="/app/src/main.rs" no_run
+use puff_rs::prelude::*;
+use puff_rs::program::commands::ASGIServerCommand;
+
+
+// Use pyo3 to generate Python compatible Rust classes.
+#[pyclass]
+struct MyPythonState;
+
+#[pymethods]
+impl MyPythonState {
+    // Async Puff functions take a function to return the result with and offload the future onto Tokio.
+    fn hello_from_rust_async(&self, return_func: PyObject, py_says: Text) {
+        run_python_async(return_func, async move {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            debug!("Python says: {}", &py_says);
+            Ok(42)
+        })
+    }
+}
+
+fn main() -> ExitCode {
+    let app = Router::new().get("/", root);
+    let rc = RuntimeConfig::default()
+        .set_asyncio(true)
+        .set_global_state_fn(|py| Ok(MyPythonState.into_py(py)));
+        
+    Program::new("my_first_app")
+        .about("This is my first app")
+        .runtime_config(rc)
+        .command(ASGIServerCommand::new_with_router(
+            "fast_api_example.app",
+            app,
+        ))
+        .run()
+}
+
+// Basic handler that responds with a static string
+async fn root() -> Text {
+    "Ok".to_text()
+}
 ```
 
 ## Puff ♥ Django + Graphql
@@ -377,7 +482,6 @@ from dataclasses import dataclass
 from puff import graphql
 from polls.models import Question, Choice
 from django.utils import timezone
-from  puff.contrib.django import query_and_params
 
 
 @dataclass
@@ -400,7 +504,7 @@ class QuestionObject:
         parent_values = [r[0] for r in context.parent_values(["id"])]
         # Convert a Django queryset to sql and params to pass off to Puff. This function does 0 IO in Python.
         qs = Choice.objects.filter(question_id__in=parent_values)
-        sql_q, params = query_and_params(qs)
+        sql_q, params = puff.contrib.django.query_and_params(qs)
         return ..., sql_q, params, ["id"], ["question_id"]
 
 
@@ -442,6 +546,7 @@ class Schema:
     subscription: Subscription
 
 ```
+
 
 ## Puff ♥ Distributed Tasks
 
@@ -497,13 +602,28 @@ async def my_awesome_task_async(payload):
     return payload["x"][0]
 ```
 
-`puff.toml`
+Rust
 
-```toml title="puff.toml"
-asyncio = true
+```rust title="/app/src/main.rs" no_run
+use puff_rs::prelude::*;
+use puff_rs::program::commands::{WaitForever, PythonCommand};
 
-[[task_queue]]
-enable = true
+fn main() -> ExitCode {
+    let rc = RuntimeConfig::default()
+        .add_python_path("./examples")
+        .set_asyncio(true)
+        .add_default_task_queue();
+
+    Program::new("my_first_app")
+        .about("This is my first app")
+        .runtime_config(rc)
+        .command(PythonCommand::new(
+            "run_main",
+            "task_queue_example.run_main",
+        ))
+        .command(WaitForever)
+        .run()
+}
 ```
 
 ## Puff ♥ HTTP
@@ -529,95 +649,78 @@ def do_http_request_greenlet():
 
 You can set the HTTP client options through RuntimeConfig. If your program is only talking to other Puff instances or HTTP2 services, it can make sense to turn on HTTP2 only. You can also configure user-agents as well as many other HTTP options through this method.
 
-```toml title="puff.toml"
-asyncio = true
+```rust
+use puff_rs::runtime::{RuntimeConfig, HttpClientOpts};
+use puff_rs::reqwest::ClientBuilder;
 
-[[http_client]]
-http2_prior_knowledge = true
+// Force HTTP2
+RuntimeConfig::default()
+    .add_named_http_client("default", HttpClientOpts::default().set_http2_prior_knowledge(true));
 ```
 
-## Connect to Everything...
+## FAQ
 
-Puff supports multiple pools to services.
+#### Why a monolithic project?
 
-```toml title="puff.toml"
-[[postgres]]
-name = "default"
+Puff follows the Django model of having everything you need built-in. A modern SaaS App expects HTTP server, Postgres, Redis, PubSub and an API. Instead of
+saying that the default is an environment with none of these, Puff takes a practical approach and says that it is actually more
+of an edge case not to need those resources. Eventually these dependencies should be configurable via feature flags.
 
-[[postgres]]
-name = "readonly"
+While it has a heavy upfront compilation cost, with the following config the binary for the puff runtime ends up being around 4mb. 
 
-[[postgres]]
-name = "audit"
-
-[[redis]]
-name = "default"
-
-[[redis]]
-name = "other"
-
-[[http_client]]
-name = "default"
-
-[[http_client]]
-name = "internal"
-http2_prior_knowledge = true
-
-[[pubsub]]
-name = "default"
-
-[[pubsub]]
-name = "otherpubsub"
-
-[[graphql]]
-schema = "my_python_gql_app.Schema"
-url = "/graphql/"
-subscriptions_url = "/subscriptions/"
-playground_url = "/playground/"
-database = "readonly"
-
-[[graphql]]
-name = "audit"
-schema = "my_python_gql_app.AuditSchema"
-url = "/audit/graphql/"
-subscriptions_url = "/audit/subscriptions/"
-playground_url = "/audit/playground/"
-database = "audit"
-```
-
-Produces a Program with the following options:
-
-```bash
-Options:
-      --default-postgres-url <DEFAULT_POSTGRES_URL>
-          Postgres pool configuration for 'default'. [env: PUFF_DEFAULT_POSTGRES_URL=] [default: postgres://postgres:password@localhost:5432/postgres]
-      --audit-postgres-url <AUDIT_POSTGRES_URL>
-          Postgres pool configuration for 'audit'. [env: PUFF_AUDIT_POSTGRES_URL=] [default: postgres://postgres:password@localhost:5432/postgres]
-      --readonly-postgres-url <READONLY_POSTGRES_URL>
-          Postgres pool configuration for 'readonly'. [env: PUFF_READONLY_POSTGRES_URL=] [default: postgres://postgres:password@localhost:5432/postgres]
-      --default-redis-url <DEFAULT_REDIS_URL>
-          Redis pool configuration for 'default'. [env: PUFF_DEFAULT_REDIS_URL=] [default: redis://localhost:6379]
-      --other-redis-url <OTHER_REDIS_URL>
-          Redis pool configuration for 'other'. [env: PUFF_OTHER_REDIS_URL=] [default: redis://localhost:6379]
-      --default-pubsub-url <DEFAULT_PUBSUB_URL>
-          PubSub configuration for 'default'. [env: PUFF_DEFAULT_PUBSUB_URL=] [default: redis://localhost:6379]
-      --otherpubsub-pubsub-url <OTHERPUBSUB_PUBSUB_URL>
-          PubSub configuration for 'otherpubsub'. [env: PUFF_OTHERPUBSUB_PUBSUB_URL=] [default: redis://localhost:6379]
+```toml
+[profile.release]
+opt-level = 3
+strip = true
+debug = false
+codegen-units = 1
+lto = true
 ```
 
 
-## Deepstack
-
-Puff is designed so that you can build your own version using Puff as a library. This allows an incredible depth of performance optimization if necessary for your project.
-
-## Architecture
+#### Architecture
 
 Puff consists of multithreaded Tokio Runtime and a single thread which runs all Python computations on Greenlets. Python offloads the IO to Tokio which schedules it and returns it if necessary.
 
 ![Untitled Diagram-2](https://user-images.githubusercontent.com/496914/195153405-7a1c7bcf-a864-4502-806c-c7d5e7aac3b9.png)
 
 
-## Status
+#### Why is Greenlet environment single threaded?
+
+Only one thread can have the GIL at any particular time. All IO is done outside the GIL in the Rust layer and so the greenlets will only be utilizing the GIL efficiently most of the time. Adding more Python threads will not increase performance, however you can dispatch blocking greenlets which will run on their own thread if you need to do IO blocking work with the Python standard library or 3rd party packages.
+
+
+#### What is a Deep Stack Framework?
+Currently, you have the frontend and backend that makes up your "full stack". Deep stack is about safely controlling the runtime that your full stack app executes on. Think of an ASGI or WSGI server that is probably written in C or another low level language that executes your higher level Python backend code. Deep stack is about giving you full (and safe) control over that lower level server to run your higher level operations. Its aggressively embracing that different levels of languages have different pros and cons.
+
+![Untitled Diagram](https://user-images.githubusercontent.com/496914/195152641-2dc8567e-8d06-41d4-a651-413312f18aef.png)
+
+
+#### Deep Stack Teams
+
+The thesis of the deepstack project is to have two backend engineering roles: Scale and Deepstack. Deepstack engineers' primary goal should be to optimize and abstract the hot paths of the application into Rust to enable the Scale engineers who implement business logic in Python to achieve an efficient ratio between productivity, safety, and performance. Nothing is absolute and the decision to move code between Rust and Python is a gradient rather than binary.
+
+
+#### Benefits of Deep Stack
+
+* Control High performance async Rust Computations with Flexible Python Abstractions. 
+* Maximum Performance: Only enter the python GIL to get the query and parameters and exit to execute the query and compute the results in Rust.
+* Django compatible: Full Admin, Migrations, Views, Tests, etc...
+* Axum Compatible: All extractors are ready to be used.
+* Rapid iteration on the data control layer (Pyton / Django / Flask) without total recompilation of the deep stack layer.
+* Quickly scale the Flexibility of Python with the Performance and Safety of Rust.
+
+#### Performance
+
+Right now there hasn't been too much focus on raw performance in GraphQL, because ultimately performance comes from SQL query optimizations (indexes, no n+1, etc). Puff's structure encourages you write your queries in a layer basis without having to rely on dataloaders or complicated optimizers allowing you to directly express the proper SQL. Ultimately the performance of the GQL server is based on how optimized your queries are to the indexes and structure of your DB.
+
+Puff won't magically make WSGI faster, but where Puff really excels is pushing down tight loops or iterations into the Rust Layer. Think about if you wanted to run multiple queries in parallel and perform some computation on them, resulting in Bytes. It's better to push this function into Puff. See the `/examples/wsgi.rs::get_many` function for an example.
+
+AsyncIO / uvloop performance is about the same if not 10-25% faster as using hypercorn or similar when using 1 worker.
+
+When thinking about performance on Deep Stack, remember about the extra dimension it makes possible. For example, if you are making a micro-benchmark and wanted to compare a static json response from FastAPI, it would be more idiomatic for Puff to write the static JSON response as an Axum handler in Rust and instead of a FastAPI endpoint. This can deliver a 2-80x performance boost. Specializing a route in Rust is not cheating; it's how its designed.
+
+#### Status
 
 This is extremely early in development. The scope of the project is ambitious. Expect things to break. 
 

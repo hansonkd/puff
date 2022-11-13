@@ -5,6 +5,7 @@ use crate::databases::redis::{with_redis, RedisClient};
 use crate::python::async_python::run_python_async;
 use bb8_redis::redis::{Cmd, ErrorKind, FromRedisValue, RedisError, RedisResult, Value};
 
+use crate::context::with_puff_context;
 use crate::python;
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
@@ -23,6 +24,10 @@ impl ToPyObject for RedisGlobal {
 impl RedisGlobal {
     fn __call__(&self) -> PythonRedis {
         PythonRedis(with_redis(|r| r))
+    }
+
+    fn by_name(&self, name: &str) -> PythonRedis {
+        with_puff_context(|ctx| PythonRedis(ctx.redis_named(name)))
     }
 }
 

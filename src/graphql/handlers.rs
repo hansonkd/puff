@@ -18,7 +18,7 @@ use juniper::http::{GraphQLBatchRequest, GraphQLBatchResponse, GraphQLRequest};
 
 use crate::context::with_puff_context;
 use crate::errors::{log_puff_error, PuffResult};
-use crate::graphql::{AggroContext, PuffGraphqlConfig};
+use crate::graphql::PuffGraphqlConfig;
 use crate::python::postgres::close_conn;
 use crate::python::{py_obj_to_bytes, PythonDispatcher};
 use async_trait::async_trait;
@@ -371,7 +371,7 @@ pub fn handle_graphql_named<T: Into<Text>>(
                         return res.into_response();
                     }
 
-                    let new_ctx = AggroContext::new(Some(v));
+                    let new_ctx = root_node.new_context(Some(v));
                     let resp = request.execute(&root_node.root(), &new_ctx).await;
                     let conn = new_ctx.connection().lock().await;
                     close_conn(&conn).await;
@@ -457,7 +457,7 @@ pub fn handle_subscriptions_named<N: Into<Text>>(
                         return res.into_response();
                     }
 
-                    let new_ctx = AggroContext::new(Some(v));
+                    let new_ctx = root_node.new_context(Some(v));
                     let s = ws
                         .protocols(["graphql-ws"])
                         .max_frame_size(1024)

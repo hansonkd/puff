@@ -1,4 +1,4 @@
-from puff.task_queue import global_task_queue
+from puff.task_queue import global_task_queue, named_client, task
 from puff.pubsub import global_pubsub
 from puff.redis import global_redis
 from puff.json import loadb, dumpb
@@ -29,11 +29,36 @@ def test_task_queue_async_sync():
         assert result == expected
 
 
+alt_task_client = named_client("alttaskqueue")
+
+
+def test_task_queue_async_sync_alt():
+    all_tasks = []
+    for x in range(100):
+        task1 = alt_task_client.schedule_function(
+            example_task,
+            {"type": "coroutine", "x": [x]},
+            timeout_ms=100,
+            keep_results_for_ms=5 * 1000,
+        )
+        task2 = alt_task_client.schedule_function(
+            example_task_async, {"type": "async", "x": [x]}, scheduled_time_unix_ms=1
+        )
+        all_tasks.append((f"coroutine-{x}", task1))
+        all_tasks.append((f"async-{x}", task2))
+
+    for (expected, task) in all_tasks:
+        result = alt_task_client.wait_for_task_result(task)
+        assert result == expected
+
+
+@task
 def example_task(payload):
     assert payload["type"] == "coroutine"
     return f"coroutine-{payload['x'][0]}"
 
 
+@task
 async def example_task_async(payload):
     assert payload["type"] == "async"
     return f"async-{payload['x'][0]}"
@@ -51,6 +76,7 @@ def test_task_queue_pubsub_realtime():
     assert data["my_result"] == "pubsub-42"
 
 
+@task
 async def example_task_pubsub_async(payload):
     channel = payload["channel"]
     await pubsub.publish_json_as(
@@ -70,6 +96,7 @@ def test_task_queue_lpop_realtime():
     assert data["my_result"] == "lpop-42"
 
 
+@task
 async def example_task_lpush_async(payload):
     channel = payload["channel"]
     await redis.lpush(

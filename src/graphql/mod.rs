@@ -10,12 +10,14 @@ mod puff_schema;
 mod row_return;
 pub(crate) mod scalar;
 mod schema;
+use crate::context::with_puff_context;
 use crate::errors::PuffResult;
 pub use puff_schema::AggroContext;
 use pyo3::types::{PyDict, PyList, PyString};
 
 use crate::graphql::scalar::{AggroScalarValue, AggroValue};
 use crate::graphql::schema::PuffGqlObject;
+use crate::python::postgres::Connection;
 use crate::python::PythonDispatcher;
 use crate::types::text::ToText;
 use crate::types::Text;
@@ -26,6 +28,7 @@ pub(crate) type PuffGraphqlRoot =
 #[derive(Clone)]
 pub struct PuffGraphqlConfig {
     root: PuffGraphqlRoot,
+    db: Option<Text>,
     auth: Option<PyObject>,
     auth_async: bool,
 }
@@ -34,10 +37,29 @@ impl PuffGraphqlConfig {
     pub fn root(&self) -> PuffGraphqlRoot {
         return self.root.clone();
     }
+    pub fn new_context(&self, auth: Option<PyObject>) -> AggroContext {
+        if let Some(db) = self.db.clone() {
+            let pg = with_puff_context(|ctx| ctx.postgres_named(db.as_str()));
+            let pool = pg.pool();
+            let conn = Some(Connection::new(pool));
+            AggroContext::new_with_connection(auth, conn, self.clone())
+        } else {
+            AggroContext::new(auth, self.clone())
+        }
+    }
+
+    pub fn new_context_with_connection(
+        &self,
+        auth: Option<PyObject>,
+        conn: Option<Connection>,
+    ) -> AggroContext {
+        AggroContext::new_with_connection(auth, conn, self.clone())
+    }
 }
 
 pub(crate) async fn load_schema(
     module: Text,
+    db: Option<Text>,
     py_dispatcher: PythonDispatcher,
 ) -> PyResult<PuffGraphqlConfig> {
     let import_string_fn = Python::with_gil(|py| -> PyResult<_> {
@@ -91,6 +113,7 @@ pub(crate) async fn load_schema(
         root: Arc::new(schema),
         auth,
         auth_async,
+        db,
     })
 }
 

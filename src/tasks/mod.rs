@@ -1,3 +1,4 @@
+use anyhow::bail;
 use std::time::{Duration, SystemTime};
 
 use crate::context::is_puff_context_ready;
@@ -34,6 +35,9 @@ impl ToPyObject for GlobalTaskQueue {
 impl GlobalTaskQueue {
     fn __call__(&self, py: Python) -> PyObject {
         with_puff_context(|ctx| ctx.task_queue()).into_py(py)
+    }
+    fn by_name(&self, name: &str) -> TaskQueue {
+        with_puff_context(|ctx| ctx.task_queue_named(name))
     }
 }
 
@@ -265,7 +269,10 @@ pub async fn task_result(task_queue: TaskQueue, item: Vec<u8>) -> PuffResult<Opt
         Some(v) => {
             let task = serde_json::de::from_slice::<TaskResult>(&v)?;
             if let Some(e) = task.exception {
-                error!("Reading task result, but task resulted in an error {}", &e);
+                error!(
+                    "Reading task result, but task resulted in the following error: {}",
+                    &e
+                );
                 Err(PyRuntimeError::new_err(
                     "Task resulted in an error, see logs for details.",
                 ))?
@@ -424,32 +431,44 @@ pub async fn do_loop_iteration(
     task: Task,
     dispatcher: PythonDispatcher,
 ) -> PuffResult<()> {
-    let result: PyResult<_> = Python::with_gil(|py| {
+    let func_and_payload_result: PyResult<_> = Python::with_gil(|py| {
         let cached_obj = get_cached_object(py, task.func_import_path.clone())?;
         let py_params = pythonize::pythonize(py, &task.params)?;
         Ok((cached_obj, py_params))
     });
 
     let json_text_res = async {
-        let (f, p) = result?;
-        let r = if task.async_fn {
-            dispatcher.dispatch_asyncio(f, (p,), None)?.await??
+        let (func, payload) = func_and_payload_result?;
+        if !Python::with_gil(|py| func.as_ref(py).hasattr("__is_puff_task"))? {
+            bail!("Task does not have __is_puff_task set.");
+        }
+        let task_result = if task.async_fn {
+            dispatcher
+                .dispatch_asyncio(func, (payload,), None)?
+                .await??
         } else {
-            dispatcher.dispatch1(f, (p,))?.await??
+            dispatcher.dispatch1(func, (payload,))?.await??
         };
-        let new_r = Python::with_gil(|py| pythonize::depythonize(r.into_ref(py)))?;
-        Ok(new_r)
+        let json_value_result =
+            Python::with_gil(|py| pythonize::depythonize(task_result.into_ref(py)))?;
+        Ok(json_value_result)
     };
     let job_result = log_puff_error("task-queue-job", json_text_res.await);
-    let r = match to_py_error("task-loop", job_result) {
+    let json_plain_text_result = match to_py_error("task-loop", job_result) {
         Ok(r) => Ok(r),
         Err(e) => Err(Python::with_gil(|py| {
             let tb = e.traceback(py).map(|tb| tb.format().ok());
-            format!("{}\n{:?}", e, tb).to_text()
+            format!("{}\n{:?}", e, tb.flatten()).to_text()
         })),
     };
 
-    finish_task(task_queue, task.id.as_bytes(), r, task.keep_results_for_ms).await?;
+    finish_task(
+        task_queue,
+        task.id.as_bytes(),
+        json_plain_text_result,
+        task.keep_results_for_ms,
+    )
+    .await?;
     Ok(())
 }
 

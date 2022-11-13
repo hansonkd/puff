@@ -8,6 +8,9 @@ use puff_rs::program::commands::{
     ASGIServerCommand, BasicCommand, DjangoManagementCommand, PytestCommand, PythonCommand,
     ServerCommand, WSGIServerCommand, WaitForever,
 };
+use puff_rs::runtime::{
+    GqlOpts, HttpClientOpts, PostgresOpts, PubSubOpts, RedisOpts, TaskQueueOpts,
+};
 use serde::de::Visitor;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::str::FromStr;
@@ -48,10 +51,13 @@ struct Config {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GraphQLConfig {
+    #[serde(default = "default_true", skip_serializing)]
+    enable: bool,
     #[serde(default = "default_name")]
     name: String,
-    schema_module: String,
+    schema: String,
     url: Option<String>,
+    database: Option<String>,
     subscription_url: Option<String>,
     playground_url: Option<String>,
 }
@@ -59,6 +65,8 @@ struct GraphQLConfig {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PostgresConfig {
+    #[serde(default = "default_true", skip_serializing)]
+    enable: bool,
     #[serde(default = "default_name")]
     name: String,
     pool_size: Option<u32>,
@@ -67,6 +75,8 @@ struct PostgresConfig {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RedisConfig {
+    #[serde(default = "default_true", skip_serializing)]
+    enable: bool,
     #[serde(default = "default_name")]
     name: String,
     pool_size: Option<u32>,
@@ -75,6 +85,8 @@ struct RedisConfig {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PubSubConfig {
+    #[serde(default = "default_true", skip_serializing)]
+    enable: bool,
     #[serde(default = "default_name")]
     name: String,
     pool_size: Option<u32>,
@@ -83,24 +95,32 @@ struct PubSubConfig {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TaskQueueConfig {
+    #[serde(default = "default_true", skip_serializing)]
+    enable: bool,
     #[serde(default = "default_name")]
     name: String,
     pool_size: Option<u32>,
-    max_working_tasks: Option<u32>,
+    max_concurrent_tasks: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HttpClientConfig {
+    #[serde(default = "default_true", skip_serializing)]
+    enable: bool,
     #[serde(default = "default_name")]
     name: String,
-    http2_prior_knowledge: Option<u32>,
+    http2_prior_knowledge: Option<bool>,
     max_idle_connections: Option<u32>,
-    user_agent: Option<HeaderName>,
+    user_agent: Option<UserAgent>,
 }
 
 fn default_name() -> String {
     "default".to_owned()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -214,6 +234,49 @@ impl<'de> Deserialize<'de> for MatchAny {
             }
         }
         deserializer.deserialize_str(MatchAnyVisitor)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserAgent(HeaderValue);
+
+impl Serialize for UserAgent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.0.to_str().expect("Invalid UserAgent"))
+    }
+}
+
+impl<'de> Deserialize<'de> for UserAgent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct UserAgentVisitor;
+        impl<'de> Visitor<'de> for UserAgentVisitor {
+            type Value = UserAgent;
+
+            fn expecting(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+                write!(fmt, "a valid user agent",)
+            }
+
+            fn visit_str<E>(self, v: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                use serde::de::Unexpected;
+                let user_agent = axum::headers::UserAgent::from_str(v)
+                    .map_err(|_| E::invalid_value(Unexpected::Str(v), &self))?;
+
+                Ok(UserAgent(
+                    HeaderValue::from_str(user_agent.as_str())
+                        .map_err(|_| E::invalid_value(Unexpected::Str(v), &self))?,
+                ))
+            }
+        }
+        deserializer.deserialize_str(UserAgentVisitor)
     }
 }
 
@@ -360,26 +423,38 @@ fn help_text() -> String {
     let example_config = Config {
         django: Some(false),
         redis: vec![RedisConfig {
+            enable: true,
             name: "default".into(),
             pool_size: None,
         }],
         postgres: vec![PostgresConfig {
+            enable: true,
             name: "default".into(),
             pool_size: None,
         }],
         pubsub: vec![PubSubConfig {
+            enable: true,
             name: "default".into(),
             pool_size: None,
         }],
         task_queue: vec![TaskQueueConfig {
+            enable: true,
             name: "default".into(),
             pool_size: Some(10),
-            max_working_tasks: Some(100),
+            max_concurrent_tasks: Some(100),
         }],
-        http_client: vec![],
+        http_client: vec![HttpClientConfig {
+            enable: true,
+            name: "default".to_string(),
+            http2_prior_knowledge: Some(true),
+            max_idle_connections: Some(100),
+            user_agent: Some(UserAgent(HeaderValue::from_str("puff/0.1.0").unwrap())),
+        }],
         graphql: vec![GraphQLConfig {
+            enable: true,
             name: "default".into(),
-            schema_module: "my_python_mod.Schema".into(),
+            database: Some("default".into()),
+            schema: "my_python_mod.Schema".into(),
             url: Some("/graphql/".into()),
             subscription_url: Some("/subscriptions/".into()),
             playground_url: Some("/playground/".into()),
@@ -480,23 +555,69 @@ fn main() -> ExitCode {
         .set_asyncio(config.asyncio.unwrap_or(false));
 
     for c in config.graphql.iter() {
-        rc = rc.add_gql_schema_named(&c.name, &c.schema_module)
+        if !c.enable {
+            continue;
+        }
+        let opts = GqlOpts::new(&c.schema, c.database.as_ref().map(|d| d.into()));
+        rc = rc.add_gql_schema_named(&c.name, opts);
     }
 
     for c in config.postgres.iter() {
-        rc = rc.add_named_postgres(&c.name, c.pool_size.unwrap_or(10))
+        if !c.enable {
+            continue;
+        }
+        let mut opts = PostgresOpts::default();
+        if let Some(pool_size) = c.pool_size {
+            opts.pool_size = pool_size;
+        }
+        rc = rc.add_named_postgres(&c.name, opts);
     }
 
     for c in config.redis.iter() {
-        rc = rc.add_named_redis(&c.name, c.pool_size.unwrap_or(10))
+        if !c.enable {
+            continue;
+        }
+        let mut opts = RedisOpts::default();
+        if let Some(pool_size) = c.pool_size {
+            opts.pool_size = pool_size;
+        }
+        rc = rc.add_named_redis(&c.name, opts)
+    }
+
+    for c in config.pubsub.iter() {
+        if !c.enable {
+            continue;
+        }
+        let mut opts = PubSubOpts::default();
+        if let Some(pool_size) = c.pool_size {
+            opts.pool_size = pool_size;
+        }
+        rc = rc.add_named_pubsub(&c.name, opts)
     }
 
     for c in config.task_queue.iter() {
-        rc = rc.add_named_task_queue(
-            &c.name,
-            c.pool_size.unwrap_or(10),
-            c.max_working_tasks.unwrap_or((num_cpus::get() * 4) as u32),
-        )
+        if !c.enable {
+            continue;
+        }
+        let mut opts = TaskQueueOpts::default();
+        if let Some(pool_size) = c.pool_size {
+            opts.pool_size = pool_size;
+        }
+        if let Some(working_tasks) = c.max_concurrent_tasks {
+            opts.max_concurrent_tasks = working_tasks;
+        }
+        rc = rc.add_named_task_queue(&c.name, opts)
+    }
+
+    for c in config.http_client.iter() {
+        if !c.enable {
+            continue;
+        }
+        let mut opts = HttpClientOpts::default();
+        opts.max_idle_connections = c.max_idle_connections;
+        opts.http2_prior_knowledge = c.http2_prior_knowledge;
+        opts.user_agent = c.user_agent.as_ref().map(|f| f.0.clone());
+        rc = rc.add_named_http_client(&c.name, opts)
     }
 
     if config.add_cwd_to_path.unwrap_or(true) {

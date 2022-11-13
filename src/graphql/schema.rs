@@ -537,6 +537,7 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                     all_objects,
                     context.auth(),
                     parents.clone(),
+                    context.config().clone(),
                 );
 
                 let py_dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());

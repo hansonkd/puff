@@ -55,6 +55,10 @@ impl PostgresGlobal {
         let pool = with_puff_context(|c| c.postgres().pool());
         Connection::new(pool)
     }
+
+    fn by_name(&self, name: &str) -> Connection {
+        with_puff_context(|ctx| Connection::new(ctx.postgres_named(name).pool()))
+    }
 }
 
 #[derive(Clone)]

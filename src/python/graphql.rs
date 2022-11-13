@@ -2,9 +2,7 @@
 use crate::context::with_puff_context;
 use crate::errors::{to_py_error, PuffResult};
 use crate::graphql::scalar::AggroScalarValue;
-use crate::graphql::{
-    convert_pyany_to_input, juniper_value_to_python, AggroContext, PuffGraphqlRoot,
-};
+use crate::graphql::{convert_pyany_to_input, juniper_value_to_python, PuffGraphqlConfig};
 use crate::prelude::ToText;
 use crate::python::async_python::run_python_async;
 use crate::python::postgres::Connection;
@@ -36,11 +34,11 @@ impl ToPyObject for GlobalGraphQL {
 #[pymethods]
 impl GlobalGraphQL {
     fn __call__(&self, py: Python) -> PyObject {
-        with_puff_context(|ctx| PythonGraphql(ctx.gql().root())).to_object(py)
+        with_puff_context(|ctx| PythonGraphql(ctx.gql())).to_object(py)
     }
 
     fn by_name(&self, py: Python, name: &str) -> PyObject {
-        with_puff_context(|ctx| PythonGraphql(ctx.gql_named(name).root())).to_object(py)
+        with_puff_context(|ctx| PythonGraphql(ctx.gql_named(name))).to_object(py)
     }
 }
 
@@ -71,7 +69,7 @@ impl StreamReceiver {
 /// Query a graphql schema from Python
 #[pyclass]
 #[derive(Clone)]
-pub struct PythonGraphql(PuffGraphqlRoot);
+pub struct PythonGraphql(PuffGraphqlConfig);
 
 impl ToPyObject for PythonGraphql {
     fn to_object(&self, py: Python<'_>) -> PyObject {
@@ -95,20 +93,14 @@ impl PythonGraphql {
             let variables = to_py_error("GQL Inputs", convert_pyany_to_input(v))?;
             hm.insert(k.to_string(), variables);
         }
-        let this_root = self.0.clone();
-        let this_conn = conn.map(|f| f.clone()).or_else(|| {
-            let pool = with_puff_context(|ctx| ctx.postgres_safe());
-            pool.map(|p| Connection::new(p.pool()))
-        });
+        let this_root = self.0.root();
+        let context = if let Some(c) = conn {
+            self.0.new_context_with_connection(auth, Some(c.clone()))
+        } else {
+            self.0.new_context(auth)
+        };
         run_python_async(return_fun, async move {
-            let (value, errors) = execute(
-                query.as_str(),
-                None,
-                &this_root,
-                &hm,
-                &AggroContext::new_with_connection(auth, this_conn),
-            )
-            .await?;
+            let (value, errors) = execute(query.as_str(), None, &this_root, &hm, &context).await?;
 
             convert_execution_response(&value, errors)
         });
@@ -129,11 +121,13 @@ impl PythonGraphql {
             let variables = to_py_error("GQL Inputs", convert_pyany_to_input(v))?;
             hm.insert(k.to_string(), variables);
         }
-        let this_root = self.0.clone();
-        let this_conn = conn.map(|f| f.clone()).or_else(|| {
-            let pool = with_puff_context(|ctx| ctx.postgres_safe());
-            pool.map(|p| Connection::new(p.pool()))
-        });
+        let this_root = self.0.root();
+
+        let context = if let Some(c) = conn {
+            self.0.new_context_with_connection(auth, Some(c.clone()))
+        } else {
+            self.0.new_context(auth)
+        };
         run_python_async(return_fun, async move {
             let (sender, rec) = channel(1);
             let this_sender = sender.clone();
@@ -160,9 +154,8 @@ impl PythonGraphql {
                     }
                 }
 
-                let ctx = AggroContext::new_with_connection(auth, this_conn);
                 let (value, errors) =
-                    resolve_validated_subscription(&document, operation, &this_root, &hm, &ctx)
+                    resolve_validated_subscription(&document, operation, &this_root, &hm, &context)
                         .await?;
 
                 if !errors.is_empty() {

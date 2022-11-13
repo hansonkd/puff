@@ -28,13 +28,23 @@ impl ToPyObject for GlobalPubSub {
 impl GlobalPubSub {
     fn __call__(&self) -> PythonPubSubClient {
         let client = with_puff_context(|ctx| ctx.pubsub());
-        PythonPubSubClient { client }
+        PythonPubSubClient::new(client)
+    }
+
+    fn by_name(&self, name: &str) -> PythonPubSubClient {
+        with_puff_context(|ctx| PythonPubSubClient::new(ctx.pubsub_named(name)))
     }
 }
 
 #[pyclass]
 struct PythonPubSubClient {
     client: PubSubClient,
+}
+
+impl PythonPubSubClient {
+    fn new(client: PubSubClient) -> Self {
+        PythonPubSubClient { client }
+    }
 }
 
 #[pymethods]

@@ -1,4 +1,4 @@
-from puff.redis import global_redis
+from puff.redis import global_redis, named_client
 
 
 def test_redis_incr():
@@ -25,3 +25,12 @@ def test_redis_lpop():
     assert global_redis.rpush("my-list", "hi2")
     assert global_redis.rpush("my-list", "hi3")
     assert global_redis.lpop("my-list", 3) == [b"hi2", b"hi3"]
+
+
+alt_redis = named_client("altredis")
+
+
+def test_redis_alt():
+    alt_redis.set("my-key", b"0")
+    result = alt_redis.incr("my-key", 1)
+    assert result == 1

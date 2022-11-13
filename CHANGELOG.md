@@ -4,7 +4,6 @@
 * Add multiple simultaneous Postgres, Redis, PubSub, Graphql Configurations
 * Improve Graphql Resolution - Error if returning null in a non-null field.
 
-
 # 0.1.7
 
 * Improve GraphQL return type compatibility and subscription URLs.

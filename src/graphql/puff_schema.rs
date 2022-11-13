@@ -27,6 +27,7 @@ use crate::graphql;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Mutex;
 
+use crate::graphql::PuffGraphqlConfig;
 use uuid::Uuid;
 
 static NUMBERS: &'static [&'static str] = &["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
@@ -34,28 +35,35 @@ static NUMBERS: &'static [&'static str] = &["0", "1", "2", "3", "4", "5", "6", "
 pub struct AggroContext {
     auth: Option<PyObject>,
     conn: Option<Mutex<Connection>>,
+    config: PuffGraphqlConfig,
 }
 
 impl juniper::Context for AggroContext {}
 
 impl AggroContext {
-    pub fn new(auth: Option<PyObject>) -> Self {
-        let conn = if let Some(pg) = with_puff_context(|ctx| ctx.postgres_safe()) {
-            let pool = pg.pool();
-            Some(Mutex::new(Connection::new(pool)))
-        } else {
-            None
-        };
-        Self { auth, conn }
+    pub fn new(auth: Option<PyObject>, config: PuffGraphqlConfig) -> Self {
+        Self {
+            auth,
+            config,
+            conn: None,
+        }
     }
 
-    pub fn new_with_connection(auth: Option<PyObject>, conn: Option<Connection>) -> Self {
+    pub fn new_with_connection(
+        auth: Option<PyObject>,
+        conn: Option<Connection>,
+        config: PuffGraphqlConfig,
+    ) -> Self {
         let conn = conn.map(|c| Mutex::new(c));
-        Self { auth, conn }
+        Self { auth, config, conn }
     }
 
     pub fn connection(&self) -> &Mutex<Connection> {
         self.conn.as_ref().expect("Postgres not configured.")
+    }
+
+    pub fn config(&self) -> &PuffGraphqlConfig {
+        &self.config
     }
 
     pub fn maybe_connection(&self) -> &Option<Mutex<Connection>> {
@@ -993,6 +1001,7 @@ fn collect_arguments_for_python(
 
 #[pyclass]
 pub struct SubscriptionSender {
+    gql_config: PuffGraphqlConfig,
     sender: UnboundedSender<Result<Value<AggroScalarValue>, ExecutionError<AggroScalarValue>>>,
     look_ahead: LookAheadFields,
     field: AggroField,
@@ -1009,6 +1018,7 @@ impl SubscriptionSender {
         all_objs: Arc<BTreeMap<Text, AggroObject>>,
         auth: Option<PyObject>,
         rows: Arc<dyn ExtractValues + Send + Sync>,
+        gql_config: PuffGraphqlConfig,
     ) -> Self {
         Self {
             sender,
@@ -1017,6 +1027,7 @@ impl SubscriptionSender {
             all_objs,
             auth,
             rows,
+            gql_config,
         }
     }
 }
@@ -1030,6 +1041,7 @@ impl SubscriptionSender {
         let auth = self.auth.clone();
         let this_sender = self.sender.clone();
         let rows = self.rows.clone();
+        let context = self.gql_config.new_context(auth);
         run_python_async(ret_func, async move {
             let mut my_field = this_field;
             my_field.producer_method = Some(new_function);
@@ -1041,7 +1053,7 @@ impl SubscriptionSender {
                 &this_lookahead,
                 &my_field,
                 all_objects,
-                &AggroContext::new(auth),
+                &context,
             )
             .await?;
             for r in res {
