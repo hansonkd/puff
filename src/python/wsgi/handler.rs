@@ -166,7 +166,7 @@ impl HttpBody for HttpResponseBody {
 impl<S> Handler<WsgiHandler, S> for WsgiHandler {
     type Future = Pin<Box<dyn Future<Output = Response<BoxBody>> + Send>>;
 
-    fn call(self, req: Request<Body>, _state: Arc<S>) -> Self::Future {
+    fn call(self, req: Request<Body>, _state: S) -> Self::Future {
         let app = self.app.clone();
         let (http_sender, http_sender_rx) = Sender::new();
         let disconnected = Arc::new(AtomicBool::new(false));

@@ -49,7 +49,7 @@ PUFF_REUSE_PORT=true poetry run puff-watch --num 2 serve
 Create a new file called `my_puff_project/graphql.py`
 
 ```python
-from typing import Optional, Iterable, Tuple, List, Any
+from typing import Optional, Iterable, Any
 from dataclasses import dataclass
 from puff.pubsub import global_pubsub as pubsub
 
@@ -63,7 +63,7 @@ class DbObject:
 @dataclass
 class Query:
     @classmethod
-    def hello_world(cls, parents, context, /, my_input: int) -> Tuple[List[DbObject], str, List[Any]]:
+    def hello_world(cls, parents, context, /, my_input: int) -> tuple[list[DbObject], str, list[Any]]:
         # Return a Raw query for Puff to execute in Postgres.
         # The ellipsis is a placeholder allowing the Python type system to know which field type it should transform into.
         return ..., "SELECT $1::int as was_input, \'hi from pg\'::TEXT as title", [my_input]
@@ -121,12 +121,14 @@ class Schema:
 Update `puff.toml` with the following lines
 
 ```toml
-pubsub = true
-postgres = true
-graphql_schema = "my_puff_project.graphql.Schema"
-graphql_url = "/graphql/"
-graphql_subscription_url = "/subscriptions/"
-graphql_playground_url = "/playground/"
+[[pubsub]]
+enable = true
+
+[[graphql]]
+url = "/graphql/"
+subscription_url = "/subscriptions/"
+playground_url = "/playground/"
+database = "default"
 ```
 
 Run the server and go to `http://localhost:7777/playground/`
@@ -136,12 +138,16 @@ Run the server and go to `http://localhost:7777/playground/`
 Update `puff.toml` with the following lines
 
 ```toml
-task_queue = true
+[[task_queue]]
+enable = true
 ```
 
 Create a new file called `my_puff_project/tasks.py`
 
 ```python
+from puff.task_queue import task
+
+@task
 def my_task(payload):
     print(f"Inside `my_task` with payload: {payload}")
     return {"from_task": payload}

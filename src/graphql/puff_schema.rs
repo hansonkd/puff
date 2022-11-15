@@ -128,6 +128,7 @@ pub struct AggroField {
     pub return_type: DecodedType,
     pub is_async: bool,
     pub depends_on: Vec<Text>,
+    pub value_from_column: Option<Text>,
     pub producer_method: Option<Py<PyAny>>,
     pub acceptor_method: Option<Py<PyAny>>,
     pub arguments: BTreeMap<Text, AggroArgument>,
@@ -239,6 +240,7 @@ pub fn convert_obj(name: &str, desc: BTreeMap<String, &PyAny>) -> PyResult<Aggro
             is_async: field_description.getattr("is_async")?.extract()?,
             producer_method: field_description.getattr("producer")?.extract()?,
             acceptor_method: field_description.getattr("acceptor")?.extract()?,
+            value_from_column: field_description.getattr("value_from_column")?.extract()?,
             safe_without_context: field_description
                 .getattr("safe_without_context")?
                 .extract()?,
@@ -258,8 +260,10 @@ pub fn convert_obj(name: &str, desc: BTreeMap<String, &PyAny>) -> PyResult<Aggro
 #[pyclass]
 pub struct PyContext {
     conn: Option<Connection>,
+    required_columns: Vec<Text>,
     extractor: Arc<dyn ExtractValues + Send + Sync>,
     auth: Option<PyObject>,
+    cache: Py<PyDict>
 }
 
 impl PyContext {
@@ -267,11 +271,15 @@ impl PyContext {
         extractor: Arc<dyn ExtractValues + Send + Sync>,
         auth: Option<PyObject>,
         conn: Option<Connection>,
+        cache: Py<PyDict>,
+        required_columns: Vec<Text>,
     ) -> Self {
         Self {
             extractor,
             auth,
             conn,
+            cache,
+            required_columns
         }
     }
 }
@@ -287,8 +295,16 @@ impl PyContext {
         self.auth.clone()
     }
 
+    fn layer_cache<'a>(&'a self, py: Python<'a>) -> &'a PyDict {
+        self.cache.as_ref(py)
+    }
+
     fn connection(&self, py: Python) -> Option<PyObject> {
         self.conn.clone().map(|f| f.into_py(py))
+    }
+
+    fn required_columns(&self, py: Python) -> PyObject {
+        self.required_columns.to_object(py)
     }
 }
 
@@ -445,8 +461,9 @@ pub fn returned_values_into_stream<'a>(
     aggro_field: &'a AggroField,
     all_objects: Arc<BTreeMap<Text, AggroObject>>,
     aggro_context: &'a AggroContext,
+    layer_cache: Py<PyDict>
 ) -> BoxFuture<'a, PuffResult<Vec<AggroValue>>> {
-    do_returned_values_into_stream(rows, look_ahead, aggro_field, all_objects, aggro_context)
+    do_returned_values_into_stream(rows, look_ahead, aggro_field, all_objects, aggro_context, layer_cache)
         .boxed()
 }
 
@@ -456,6 +473,7 @@ pub async fn do_returned_values_into_stream(
     aggro_field: &'_ AggroField,
     all_objects: Arc<BTreeMap<Text, AggroObject>>,
     aggro_context: &AggroContext,
+    layer_cache: Py<PyDict>
 ) -> PuffResult<Vec<AggroValue>> {
     let type_info = aggro_field.return_type.type_info.clone();
     let class_method = aggro_field.producer_method.clone();
@@ -507,16 +525,20 @@ pub async fn do_returned_values_into_stream(
     };
 
     // Collect children database fields
-    let mut child_depends_on_vec = Vec::new();
+    let mut child_depends_on_vec = HashSet::new();
     for (f, _) in &child_fields {
-        child_depends_on_vec.extend_from_slice(&f.depends_on);
+        for x in &f.depends_on {
+            child_depends_on_vec.insert(x.clone());
+        }
     }
+    let children_require = child_depends_on_vec.into_iter().collect::<Vec<_>>();
+
 
     match class_method {
         Some(cm) => {
             let result = {
                 if !aggro_field.is_async && aggro_field.safe_without_context {
-                    let py_extractor = PyContext::new(rows.clone(), aggro_context.auth(), None);
+                    let py_extractor = PyContext::new(rows.clone(), aggro_context.auth(), None, layer_cache, children_require);
                     Python::with_gil(|py| {
                         let arg_dict = args.into_py_dict(py);
                         cm.call(py, (py_extractor.clone(),), Some(arg_dict))
@@ -528,7 +550,7 @@ pub async fn do_returned_values_into_stream(
                         let conn = s.lock().await;
 
                         let py_extractor =
-                            PyContext::new(rows.clone(), aggro_context.auth(), Some(conn.clone()));
+                            PyContext::new(rows.clone(), aggro_context.auth(), Some(conn.clone()), layer_cache, children_require);
 
                         // Method must be run with lock held to prevent concurrent access to db conn.
                         Python::with_gil(|py| {
@@ -544,7 +566,7 @@ pub async fn do_returned_values_into_stream(
                             }
                         })?
                     } else {
-                        let py_extractor = PyContext::new(rows.clone(), aggro_context.auth(), None);
+                        let py_extractor = PyContext::new(rows.clone(), aggro_context.auth(), None, layer_cache, children_require);
                         Python::with_gil(|py| {
                             let arg_dict = args.into_py_dict(py);
                             if aggro_field.is_async {
@@ -625,10 +647,8 @@ pub async fn do_returned_values_into_stream(
                 None => {
                     let parent_row_len = rows.len();
                     let children_vec = if child_fields.is_empty() {
-                        if aggro_field.depends_on.len() == 0 {
-                            rr.extract_first()?
-                        } else {
-                            let vals = rr.extract_values(&aggro_field.depends_on)?;
+                        if let Some(col) = aggro_field.value_from_column.as_ref() {
+                            let vals = rr.extract_values(&[col.clone()])?;
                             let mut ret_val = Vec::with_capacity(vals.len());
                             for val in vals {
                                 ret_val.push(
@@ -638,6 +658,8 @@ pub async fn do_returned_values_into_stream(
                                 );
                             }
                             ret_val
+                        } else {
+                            rr.extract_first()?
                         }
                     } else {
                         let mut objs = Vec::with_capacity(rr.len());
@@ -654,7 +676,9 @@ pub async fn do_returned_values_into_stream(
                             objs.iter().map(|_| AggroValue::Null).collect::<Vec<_>>()
                         } else {
                             let mut to_compute = Vec::with_capacity(child_fields.len());
+                            let new_layer_cache: Py<PyDict> = Python::with_gil(|py| PyDict::new(py).into_py(py));
                             for (child, new_lookahead) in child_fields {
+                                let this_layer_cache = new_layer_cache.clone();
                                 let fut = async {
                                     let children = returned_values_into_stream(
                                         rr.clone(),
@@ -662,6 +686,7 @@ pub async fn do_returned_values_into_stream(
                                         &child,
                                         all_objects.clone(),
                                         aggro_context,
+                                        this_layer_cache
                                     )
                                     .await;
                                     (child, children)
@@ -722,7 +747,9 @@ pub async fn do_returned_values_into_stream(
                     } else {
                         let mapped_children = if child_fields.is_empty() {
                             let mut rows_to_get = cor.clone();
-                            rows_to_get.extend_from_slice(aggro_field.depends_on.as_slice());
+                            if let Some(col) = aggro_field.value_from_column.as_ref() {
+                                rows_to_get.push(col.clone())
+                            }
                             let vals = rr
                                 .extract_values(rows_to_get.as_slice())?
                                 .into_iter()
@@ -759,7 +786,9 @@ pub async fn do_returned_values_into_stream(
                                 }
                             }
                             let mut to_compute = Vec::with_capacity(child_fields.len());
+                            let new_layer_cache: Py<PyDict> = Python::with_gil(|py| PyDict::new(py).into_py(py));
                             for (child, new_lookahead) in child_fields {
+                                let this_layer_cache = new_layer_cache.clone();
                                 let fut = async {
                                     let children = returned_values_into_stream(
                                         rr.clone(),
@@ -767,6 +796,7 @@ pub async fn do_returned_values_into_stream(
                                         &child,
                                         all_objects.clone(),
                                         aggro_context,
+                                        this_layer_cache
                                     )
                                     .await;
                                     (child, children)
@@ -850,10 +880,8 @@ pub async fn do_returned_values_into_stream(
         }
         None => {
             if child_fields.is_empty() {
-                let vals = if aggro_field.depends_on.len() == 0 {
-                    rows.extract_first()?
-                } else {
-                    let vals = rows.extract_values(&aggro_field.depends_on)?;
+                let vals = if let Some(col) = aggro_field.value_from_column.as_ref() {
+                    let vals = rows.extract_values(&[col.clone()])?;
                     let mut ret_val = Vec::with_capacity(vals.len());
                     let mut pos = 0;
                     for val in vals {
@@ -863,7 +891,7 @@ pub async fn do_returned_values_into_stream(
                             } else if aggro_value_optional {
                                 ret_val.push(AggroValue::Null);
                             } else {
-                                bail!("Missing value in return for field {} which is not optional. Value missing from row {} depends_on {:?}", aggro_field.name, pos, &aggro_field.depends_on);
+                                bail!("Missing value in return for field {} which is not optional. Value missing from row {} column value {:?}", aggro_field.name, pos, &aggro_field.value_from_column);
                             }
                         } else {
                             ret_val.push(AggroValue::Null)
@@ -871,6 +899,8 @@ pub async fn do_returned_values_into_stream(
                         pos += 1;
                     }
                     ret_val
+                } else {
+                    rows.extract_first()?
                 };
 
                 Ok(vals)
@@ -883,7 +913,9 @@ pub async fn do_returned_values_into_stream(
                 }
 
                 let mut to_compute = Vec::with_capacity(child_fields.len());
+                let new_layer_cache: Py<PyDict> = Python::with_gil(|py| PyDict::new(py).into_py(py));
                 for (child, new_lookahead) in child_fields {
+                    let this_layer_cache = new_layer_cache.clone();
                     let fut = async {
                         let children = returned_values_into_stream(
                             rows.clone(),
@@ -891,6 +923,7 @@ pub async fn do_returned_values_into_stream(
                             &child,
                             all_objects.clone(),
                             aggro_context,
+                            this_layer_cache
                         )
                         .await;
                         (child, children)
@@ -1034,7 +1067,7 @@ impl SubscriptionSender {
 
 #[pymethods]
 impl SubscriptionSender {
-    fn __call__(&self, _py: Python, ret_func: PyObject, new_function: PyObject) {
+    fn __call__(&self, py: Python, ret_func: PyObject, new_function: PyObject) {
         let this_lookahead = self.look_ahead.clone();
         let this_field = self.field.clone();
         let all_objects = self.all_objs.clone();
@@ -1042,6 +1075,7 @@ impl SubscriptionSender {
         let this_sender = self.sender.clone();
         let rows = self.rows.clone();
         let context = self.gql_config.new_context(auth);
+        let layer_cache = PyDict::new(py).into_py(py);
         run_python_async(ret_func, async move {
             let mut my_field = this_field;
             my_field.producer_method = Some(new_function);
@@ -1054,6 +1088,7 @@ impl SubscriptionSender {
                 &my_field,
                 all_objects,
                 &context,
+                layer_cache
             )
             .await?;
             for r in res {

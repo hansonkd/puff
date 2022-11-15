@@ -18,24 +18,55 @@ To get started with Puff, you need a `puff.toml`. Show an example of this file b
 
 ```toml
 django = false
-postgres = false
-redis = false
-pubsub = false
-task_queue = false
 greenlets = true
 asyncio = false
 dotenv = false
+add_cwd_to_path = true
+compression_middleware = true
 dotenv_path = '.env'
 pytest_path = './'
 wsgi = 'my_wsgi.app'
 asgi = 'my_asgi.app'
-graphql = 'my_graphql.Schema'
-graphql_url = '/graphql/'
-graphql_subscription_url = '/subscriptions/'
+
+[cors]
+base_config = 'Default'
+max_age_secs = 86400
+allow_credentials = true
+allowed_origins = ['http://localhost:7777']
+allowed_headers = '*'
+allowed_methods = ['GET']
 
 [[commands]]
 function = 'my_python_mod.some_func'
 command_name = 'execute_func'
+
+[[postgres]]
+name = 'default'
+
+[[redis]]
+name = 'default'
+
+[[pubsub]]
+name = 'default'
+
+[[task_queue]]
+name = 'default'
+pool_size = 10
+max_concurrent_tasks = 100
+
+[[http_client]]
+name = 'default'
+http2_prior_knowledge = true
+max_idle_connections = 100
+user_agent = 'puff/0.1.0'
+
+[[graphql]]
+name = 'default'
+schema = 'my_python_mod.Schema'
+url = '/graphql/'
+database = 'default'
+subscription_url = '/subscriptions/'
+playground_url = '/playground/'
 ```
 
 # Step 1: Configure Python Project

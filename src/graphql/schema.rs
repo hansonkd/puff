@@ -8,7 +8,7 @@ use juniper::{
     Value, ValuesStream,
 };
 use pyo3::types::PyDict;
-use pyo3::{Python, ToPyObject};
+use pyo3::{IntoPy, Python, ToPyObject};
 
 use crate::errors::{log_puff_error, PuffResult};
 use chrono::{DateTime, Utc};
@@ -457,8 +457,10 @@ impl GraphQLValueAsync<AggroScalarValue> for PuffGqlObject {
                 // let ctx = executor.context();
                 let all_objects = info.all_objs.clone();
                 let input_objs = &info.input_objs;
-                let look_ahead = Python::with_gil(|py| {
-                    selection_to_fields(py, aggro_field, look_ahead_slice, input_objs, &all_objects)
+                let (look_ahead, layer_cache) = Python::with_gil(|py| {
+                    let look_ahead = selection_to_fields(py, aggro_field, look_ahead_slice, input_objs, &all_objects)?;
+                    let d = PyDict::new(py).into_py(py);
+                    PuffResult::Ok((look_ahead, d))
                 })?;
                 // let field_obj = info.all_objs.get(field.return_type.primary_type.as_str()).unwrap();
                 let rows = Arc::new(ExtractorRootNode);
@@ -468,6 +470,7 @@ impl GraphQLValueAsync<AggroScalarValue> for PuffGqlObject {
                     aggro_field,
                     all_objects,
                     context,
+                    layer_cache
                 )
                 .await?;
 
@@ -523,11 +526,11 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                 let (sender, ret) = unbounded_channel();
                 let all_objects = info.all_objs.clone();
                 let input_objs = &info.input_objs;
-                let (look_ahead_fields, args) = Python::with_gil(|py| {
+                let (look_ahead_fields, args, layer_cache) = Python::with_gil(|py| {
                     let laf =
                         selection_to_fields(py, field, look_ahead_slice, input_objs, &all_objects)?;
                     let args = laf.arguments().to_object(py);
-                    PuffResult::Ok((laf, args))
+                    PuffResult::Ok((laf, args, PyDict::new(py).into_py(py)))
                 })?;
                 let parents = Arc::new(ExtractorRootNode);
                 let ss = SubscriptionSender::new(
@@ -546,7 +549,7 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                     .clone()
                     .expect("Subscription field needs an acceptor");
 
-                let python_context = PyContext::new(parents.clone(), auth, None);
+                let python_context = PyContext::new(parents.clone(), auth, None, layer_cache, field.depends_on.clone());
                 if field.is_async {
                     py_dispatcher.dispatch_asyncio(
                         acceptor_method,

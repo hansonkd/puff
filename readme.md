@@ -1,6 +1,8 @@
 # ☁ Puff ☁
 
-Python with an async runtime built-in Rust for GraphQL, ASGI, WSGI, Postgres, PubSub, Redis, Distributed Tasks, and HTTP2 Client.
+Python with an all-in-one async runtime for GraphQL, ASGI, WSGI, Postgres, PubSub, Redis, Distributed Tasks, and HTTP2 Client.
+
+Works with Greenlets or Asyncio.
 
 [![Crates.io][crates-badge]][crates-url]
 [![MIT licensed][mit-badge]][mit-url]
@@ -103,9 +105,9 @@ cd my_puff_proj_py
 poetry add puff-py
 ```
 
-Now from `my_puff_proj_py` you can run your project with `poetry run puff` to access cargo from poetry and expose the virtual environment to Puff.
+Now from `my_puff_proj_py` you can run your project with `poetry run puff` to access puff from poetry.
 
-The Python project doesn't need to be inside off your Rust package. It only needs to be on the PYTHONPATH or inside an virtualenv. If you don't want to use poetry, you will have to set up a virtual environment when running Puff.
+The Python project doesn't need to be inside off your Rust package. It only needs to be on the PYTHONPATH or inside an virtualenv. If you don't want to use poetry, you will have to set up something like a virtual environment when running Puff.
 
 
 ## Puff ♥ Python
@@ -292,10 +294,6 @@ schema = "my_python_gql_app.Schema"
 url = "/graphql/"
 subscriptions_url = "/subscriptions/"
 playground_url = "/playground/"
-
-[[commands]]
-function = "my_puff_proj_py.hello_world"
-command_name = "hello_world"
 ```
 
 Produces a Graphql Schema like so:
@@ -373,6 +371,7 @@ asgi = "my_python_app.app"
 Puff GraphQL integrates seamlessly with Django. Convert Django querysets to SQL to offload all computation to Rust. Or decorate with `borrow_db_context` and let Django have access to the GraphQL connection, allowing you fallback to the robustness of django for complicated lookups.
 
 ```python
+from typing import Any
 from dataclasses import dataclass
 from puff import graphql
 from polls.models import Question, Choice
@@ -395,7 +394,7 @@ class QuestionObject:
     question_text: str
 
     @classmethod
-    def choices(cls, context, /) -> Tuple[List[ChoiceObject], str, List[Any], List[str], List[str]]:
+    def choices(cls, context, /) -> tuple[list[ChoiceObject], str, list[Any], list[str], list[str]]:
         # Extract column values from the previous layer to use in this one.
         parent_values = [r[0] for r in context.parent_values(["id"])]
         # Convert a Django queryset to sql and params to pass off to Puff. This function does 0 IO in Python.
@@ -408,7 +407,7 @@ class QuestionObject:
 class Query:
 
     @classmethod
-    def questions(cls, context, /) -> Tuple[List[QuestionObject], str, List[Any]]:
+    def questions(cls, context, /) -> tuple[list[QuestionObject], str, list[Any]]:
         # Convert a Django queryset to sql and params to pass off to Puff. This function does 0 IO in Python.
         qs = Question.objects.all()
         sql_q, params = query_and_params(qs)
@@ -416,7 +415,7 @@ class Query:
 
     @classmethod
     @graphql.borrow_db_context  # Decorate with borrow_db_context to use same DB connection in Django as the rest of GQL
-    def question_objs(cls, context, /) -> Tuple[List[QuestionObject], List[Any]]:
+    def question_objs(cls, context, /) -> tuple[list[QuestionObject], list[Any]]:
         # You can also compute the python values with Django and hand them off to Puff.
         # This version of the same `questions` field, is slower since Django is constructing the objects.
         objs = list(Question.objects.all())

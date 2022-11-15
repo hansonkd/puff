@@ -128,6 +128,7 @@ query TestGQL {
             field2
             hello_world2 {
                 hello_world2 {
+                    example_self
                     field2
                     hello_world_query {
                         parent_id
@@ -161,6 +162,8 @@ def test_gql_query_list_nested():
         assert "field2" not in obj["hello_world2"]["hello_world2"]
         assert "hello_world2" in obj["hello_world2"]["hello_world2"]
         assert "field2" in obj["hello_world2"]["hello_world2"]["hello_world2"]
+        assert "example_self" in obj["hello_world2"]["hello_world2"]["hello_world2"]
+        assert obj["hello_world2"]["hello_world2"]["hello_world2"]["example_self"] == "None: hello: None"
         assert "hello_world_query" in obj["hello_world2"]["hello_world2"]["hello_world2"]
         for sub_obj in obj["hello_world2"]["hello_world2"]["hello_world2"]["hello_world_query"]:
             assert "parent_id" in sub_obj
@@ -181,3 +184,22 @@ query TestGQL {
 def test_gql_query_list_nested_error():
     resp = graphql.query(TEST_QUERY_LIST_NESTED_ERROR, {})
     assert "errors" in resp
+
+
+TEST_QUERY_LIST_SELF = """
+query TestGQL {
+    hello_world_objects {
+        field1
+        field2
+        example_self
+    }
+}
+"""
+
+
+def test_gql_query_list_self():
+    resp = graphql.query(TEST_QUERY_LIST_SELF, {})
+    assert "errors" not in resp
+    assert "data" in resp
+    for obj in resp["data"]["hello_world_objects"]:
+        assert obj["example_self"] == f"{obj['field1']}: {obj['field2']}"

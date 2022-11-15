@@ -94,7 +94,7 @@ pub struct AxumHandlerArgs<T>(T);
 impl<F, S, T1>
     PuffHandler<AxumHandlerArgs<T1>, S, <<F as Handler<T1, S>>::Future as Future>::Output> for F
 where
-    S: Send + Sync + 'static,
+    S: Send + Sync + Clone + 'static,
     T1: Send + Sync + 'static,
     F: Handler<T1, S>,
 {
@@ -105,7 +105,7 @@ where
 
 impl<S> Router<S>
 where
-    S: Send + Sync + Default + 'static,
+    S: Send + Sync + Default + Clone + 'static
 {
     pub fn new() -> Self {
         Self(axum::Router::default())
@@ -216,7 +216,7 @@ where
 
     pub fn layer<L>(self, layer: L) -> Self
     where
-        L: tower_layer::Layer<Route>,
+        L: tower_layer::Layer<Route> + Send + Clone + 'static,
         L::Service: Service<Request> + Clone + Send + 'static,
         <L::Service as Service<Request>>::Response: IntoResponse + 'static,
         <L::Service as Service<Request>>::Error: Into<Infallible> + 'static,
@@ -233,7 +233,7 @@ where
         self,
         addr: &SocketAddr,
         puff_context: PuffContext,
-    ) -> axum::Server<AddrIncoming, IntoMakeService<axum::Router<S>>> {
+    ) -> axum::Server<AddrIncoming, IntoMakeService<axum::RouterService>> {
         let new_router = self.into_axum_router(puff_context);
         axum::Server::bind(addr).serve(new_router.into_make_service())
     }
@@ -280,8 +280,7 @@ mod tests {
         let rt = Runtime::new().unwrap();
         let puff_context = RealPuffContext::empty(rt.handle().clone());
 
-        let fut = router.into_axum_router(puff_context.clone()).call(
-            AxumRequest::get("http://localhost/")
+        let fut = router.into_axum_router(puff_context.clone()).into_service().call(AxumRequest::get("http://localhost/")
                 .body(Body::empty())
                 .unwrap(),
         );

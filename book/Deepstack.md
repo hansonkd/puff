@@ -1,81 +1,17 @@
 # ☁ Puff ☁
-The deep stack framework.
 
-[![Crates.io][crates-badge]][crates-url]
-[![MIT licensed][mit-badge]][mit-url]
-[![Documentation](https://docs.rs/puff-rs/badge.svg)](https://docs.rs/puff_rs)
+This document describes how to build Puff with Rust and Cargo instead of the CLI and TOML.
 
-[crates-badge]: https://img.shields.io/crates/v/puff_rs.svg
-[crates-url]: https://crates.io/crates/puff_rs
-[mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
-[mit-url]: https://github.com/hansonkd/puff/blob/master/LICENSE
-
-- [What is Puff?](#what-is-puff)
-  * [Quick Start](#quick-start)
-  * [Puff ♥ Python](#puff--python)
-  * [Puff ♥ Rust](#puff--rust)
-  * [Puff ♥ Django](#puff--django)
-  * [Puff ♥ Graphql](#puff--graphql)
-  * [Puff ♥ Pytest](#puff--pytest)
-  * [Puff ♥ AsyncIO](#puff--asyncio)
-  * [Puff ♥ Django + GraphQL](#puff--django--graphql)
-  * [Puff ♥ Distributed Tasks](#puff--distributed-tasks)
-  * [Puff ♥ HTTP](#puff--http)
-  * [FAQ](#faq)
-      - [Puff Dependencies](#why-a-monolithic-project)
-      - [Architecture](#architecture)
-      - [Why is Greenlet environment single threaded?](#why-is-greenlet-environment-single-threaded)
-      - [What is a Deep Stack Framework?](#what-is-a-deep-stack-framework)
-      - [Deep Stack Teams](#deep-stack-teams)
-      - [Benefits of Deep Stack](#benefits-of-deep-stack)
-  * Links
-      - [CHANGELOG](https://github.com/hansonkd/puff/blob/master/CHANGELOG.md)
-      - [Using the CLI](https://github.com/hansonkd/puff/blob/master/book/CLI.md)
-      - [Flask](https://github.com/hansonkd/puff/blob/master/book/Flask.md)
-      - [FastAPI](https://github.com/hansonkd/puff/blob/master/book/FastAPI.md)
-      - [Django](https://github.com/hansonkd/puff/blob/master/book/Django.md)
-      - [Building an RPC with Puff](https://github.com/hansonkd/puff/blob/master/book/RPC.md)
-
-# What is Puff?
-
-Puff is a batteries included "deep stack" for Python. It's an experiment to minimize the barrier between Python and Rust to unlock the full potential of high level languages. Build your own Runtime using standard CPython and extend it with Rust. Imagine if GraphQL, Postgres, Redis and PubSub were part of the standard library. That's Puff.
-
-The old approach for integrating Rust in Python would be to make a Python package that uses rust and import it from Python. This approach has some flaws as the rust packages can't cooperate. Puff gives Rust its own layer, so you can build a cohesive set of tools in Rust that all work flawlessly together without having to re-enter Python.
-
-High level overview is that Puff gives Python
-
-* Greenlets on Rust's Tokio.
-* High performance HTTP Server - combine Axum with Python WSGI apps (Flask, Django, etc.)
-* Rust / Python natively in the same process, no sockets or serialization.
-* AsyncIO / uvloop / ASGI integration with Rust
-* An easy-to-use GraphQL service
-* Multi-node pub-sub
-* Rust level Redis Pool
-* Rust level Postgres Pool
-* Websockets
-* HTTP Client
-* Distributed, at-least-once, priority and scheduled task queue
-* semi-compatible with Psycopg2 (hopefully good enough for most of Django)
-* A safe convenient way to drop into rust for maximum performance
-
-The idea is Rust and Python are near perfect complements to each other and building a framework to let them talk
-leads to greater efficiency in terms of productivity, scalability and performance.
-
-| Python                                             | Rust                                            |
-|----------------------------------------------------|-------------------------------------------------|
-| ✅ High-Level                                       | ✅ Low-Level                                     |
-| ✅ Lots of tools and packages                       | ✅ Lots of tools and packages                    |
-| ✅ Easy to get started                              | ✅ Easy to get started                           |
-| 🟡 Interpreted (productivity at the cost of speed) | 🟡 Compiled (speed at the cost of productivity) |
-| ✅ Easy to get master                               | ❌ The learning curve gets steep quickly.        |
-| ✅ Fast iteration to prototype                      | ❌ Requires planning for correctness             |
-| ✅ Google a problem, copy paste, it works.          | ❌ Less examples floating in the wild            |
-| ❌ Weak type system                                 | ✅ Great Type System                             |
-| ❌ GIL prevents threading                           | ✅ High Performance                              |
-| ❌ Not-so safe                                      | ✅ Safe                                          |
-
-
-The Zen of deepstack is recognizing that no language is the ultimate answer. Seek progress instead of perfection by using Python for rapid development and Rust to optimize the most critical paths once you find them later. Find the balance. 
+* [Quick Start](#quick-start)
+* [Puff ♥ Python](#puff--python)
+* [Puff ♥ Rust](#puff--rust)
+* [Puff ♥ Django](#puff--django)
+* [Puff ♥ Graphql](#puff--graphql)
+* [Puff ♥ Pytest](#puff--pytest)
+* [Puff ♥ AsyncIO](#puff--asyncio)
+* [Puff ♥ Django + GraphQL](#puff--django--graphql)
+* [Puff ♥ Distributed Tasks](#puff--distributed-tasks)
+* [Puff ♥ HTTP](#puff--http)
 
 ## Quick Start
 Puff requires Python >= 3.10, Rust / Cargo. Python's [Poetry](https://python-poetry.org) is optional.
@@ -268,7 +204,7 @@ class DbObject:
     title: str
     
     @classmethod
-    def child_sub_query(cls, context, /) -> Tuple[DbObject, str, List[Any], List[str], List[str]]:
+    def child_sub_query(cls, context, /) -> tuple[DbObject, str, list[Any], list[str], list[str]]:
         # Extract column values from the previous layer to use in this one.
         parent_values = [r[0] for r in context.parent_values(["field1"])]
         sql_q = "SELECT a::int as was_input, $2 as title FROM unnest($1::int[]) a"
@@ -280,13 +216,13 @@ class DbObject:
 class Query:
 
     @classmethod
-    def hello_world(cls, parents, context, /, my_input: int) -> Tuple[List[DbObject], str, List[Any]]:
+    def hello_world(cls, parents, context, /, my_input: int) -> tuple[list[DbObject], str, list[Any]]:
         # Return a Raw query for Puff to execute in Postgres.
         # The ellipsis is a placeholder allowing the Python type system to know which Field type it should transform into.
         return ..., "SELECT $1::int as was_input, \'hi from pg\'::TEXT as title", [my_input]
 
     @classmethod
-    def hello_world_object(cls, parents, context, /, my_input: List[SomeInputObject]) -> Tuple[List[SomeObject], List[SomeObject]]:
+    def hello_world_object(cls, parents, context, /, my_input: list[SomeInputObject]) -> tuple[list[SomeObject], list[SomeObject]]:
         objs = [SomeObject(field1=0, field2="Python object")]
         if my_input:
             for inp in my_input:
@@ -478,8 +414,10 @@ async fn root() -> Text {
 Puff GraphQL integrates seamlessly with Django. Convert Django querysets to SQL to offload all computation to Rust. Or decorate with `borrow_db_context` and let Django have access to the GraphQL connection, allowing you fallback to the robustness of django for complicated lookups.
 
 ```python
+from typing import Any
 from dataclasses import dataclass
 from puff import graphql
+from puff.contrib.django import query_and_params
 from polls.models import Question, Choice
 from django.utils import timezone
 
@@ -499,12 +437,12 @@ class QuestionObject:
     question_text: str
 
     @classmethod
-    def choices(cls, context, /) -> Tuple[List[ChoiceObject], str, List[Any], List[str], List[str]]:
+    def choices(cls, context, /) -> tuple[list[ChoiceObject], str, list[Any], list[str], list[str]]:
         # Extract column values from the previous layer to use in this one.
         parent_values = [r[0] for r in context.parent_values(["id"])]
         # Convert a Django queryset to sql and params to pass off to Puff. This function does 0 IO in Python.
         qs = Choice.objects.filter(question_id__in=parent_values)
-        sql_q, params = puff.contrib.django.query_and_params(qs)
+        sql_q, params = query_and_params(qs)
         return ..., sql_q, params, ["id"], ["question_id"]
 
 
@@ -512,7 +450,7 @@ class QuestionObject:
 class Query:
 
     @classmethod
-    def questions(cls, context, /) -> Tuple[List[QuestionObject], str, List[Any]]:
+    def questions(cls, context, /) -> tuple[list[QuestionObject], str, list[Any]]:
         # Convert a Django queryset to sql and params to pass off to Puff. This function does 0 IO in Python.
         qs = Question.objects.all()
         sql_q, params = query_and_params(qs)
@@ -520,7 +458,7 @@ class Query:
 
     @classmethod
     @graphql.borrow_db_context  # Decorate with borrow_db_context to use same DB connection in Django as the rest of GQL
-    def question_objs(cls, context, /) -> Tuple[List[QuestionObject], List[Any]]:
+    def question_objs(cls, context, /) -> tuple[list[QuestionObject], list[Any]]:
         # You can also compute the python values with Django and hand them off to Puff.
         # This version of the same `questions` field, is slower since Django is constructing the objects.
         objs = list(Question.objects.all())

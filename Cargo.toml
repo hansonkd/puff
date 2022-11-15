@@ -23,7 +23,7 @@ rand = "0.8.1"
 num_cpus = "1.13.1"
 lazy_static = "1.4.0"
 tower-service = "0.3.2"
-axum = {version="0.6.0-rc.2", features=["headers", "ws", "http2"]}
+axum = {version="0.6.0-rc.4", features=["headers", "ws", "http2"]}
 futures-util = "0.3.24"
 compact_str = {version = "0.6.1", features=["serde"]}
 hyper = "0.14.9"
@@ -93,7 +93,6 @@ path = "examples/gql.rs"
 [[example]]
 name = "websockets"
 path = "examples/websockets.rs"
-
 
 [[example]]
 name = "asgi"

@@ -15,9 +15,13 @@ Update `puff.toml` with the following lines
 
 ```toml
 wsgi = "hello_world_django_app.wsgi.application"
-redis = true
-postgres = true
 django = true
+
+[[postgres]]
+enable = true
+
+[[redis]]
+enable = true
 ```
 
 Create a `.env` file to help manage your environment:
@@ -106,7 +110,7 @@ class Query:
         return User.objects.filter(id=user_id).first()
 
     @classmethod
-    def list_users(cls, context, /) -> Tuple[List[UserType], str, List[Any]]:
+    def list_users(cls, context, /) -> tuple[list[UserType], str, list[Any]]:
         # List all Users. Offload the query into the puff runtime.
         # The ellipsis is a placeholder allowing the Python type system to know which field type it should transform into.
         query, params = query_and_params(User.objects.order_by('id').all())
@@ -165,11 +169,14 @@ class Schema:
 Update `puff.toml` with the following lines
 
 ```toml
-pubsub = true
-graphql_schema = "my_puff_project.graphql.Schema"
-graphql_url = "/graphql/"
-graphql_subscription_url = "/subscriptions/"
-graphql_playground_url = "/playground/"
+[[pubsub]]
+enable = true
+
+[[graphql]]
+url = "/graphql/"
+subscription_url = "/subscriptions/"
+playground_url = "/playground/"
+database = "default"
 ```
 
 Run the server and go to `http://localhost:7777/playground/`
@@ -179,12 +186,16 @@ Run the server and go to `http://localhost:7777/playground/`
 Update `puff.toml` with the following lines
 
 ```toml
-task_queue = true
+[[task_queue]]
+enable = true
 ```
 
 Create a new file called `my_puff_project/tasks.py`
 
 ```python
+from puff.task_queue import task
+
+@task
 def my_task(payload):
     print(f"Inside `my_task` with payload: {payload}")
     return {"from_task": payload}

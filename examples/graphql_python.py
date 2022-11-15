@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional, Tuple, List, Any, Iterable
+from typing import Optional, Any, Iterable
 from puff.graphql import EmptyObject
 
 
@@ -21,14 +21,17 @@ class SomeObject:
     field1: int
     field2: str
 
+    def example_self(self, ctx, /) -> str:
+        return f"{self.field1}: {self.field2}"
+
     @classmethod
     def hello_world2(cls, ctx, /, my_input: Optional[int] = None) -> "SomeObject":
         return SomeObject(field1=my_input, field2=f"hello: {my_input}")
 
-    @classmethod
+    @staticmethod
     def hello_world_query(
-        cls, ctx, /, my_input: Optional[int] = None
-    ) -> Tuple[List[DbObject], str, List[Any], List[str], List[str]]:
+        ctx, /, my_input: Optional[int] = None
+    ) -> tuple[list[DbObject], str, list[Any], list[str], list[str]]:
         q = "SELECT ($2 || ' HELLO WORLD '::TEXT || $1) AS title, unnest($3::int[]) AS count, unnest($3::int[]) % 2 as parent_id"
         return ..., q, ["cowabunga", "uwu", [5, 6, 7, 8, 42]], ["field1"], ["parent_id"]
 
@@ -46,13 +49,14 @@ class Query:
     @classmethod
     def hello_world_objects(
         cls, context, /
-    ) -> Tuple[List[SomeObject], List[Any]]:
+    ) -> tuple[list[SomeObject], list[Any]]:
         objs = [
             SomeObject(field1=8, field2="fa three"),
             SomeObject(field1=42, field2="fa so la de do"),
             SomeObject(field1=0, field2="fa so la de do"),
             SomeObject(field1=5, field2="None"),
             SomeObject(field1=1, field2="reda"),
+            {"field1": 89, "field2": "from dict"}
         ]
         return ..., objs
 

@@ -158,7 +158,7 @@ impl HttpReceiver {
 impl<S> Handler<AsgiHandler, S> for AsgiHandler {
     type Future = Pin<Box<dyn Future<Output = Response<BoxBody>> + Send>>;
 
-    fn call(self, req: Request<Body>, _state: Arc<S>) -> Self::Future {
+    fn call(self, req: Request<Body>, _state: S) -> Self::Future {
         let app = self.app.clone();
         let (http_sender, mut http_sender_rx) = Sender::new();
         let disconnected = Arc::new(AtomicBool::new(false));
