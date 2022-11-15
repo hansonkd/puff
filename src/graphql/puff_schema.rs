@@ -263,7 +263,7 @@ pub struct PyContext {
     required_columns: Vec<Text>,
     extractor: Arc<dyn ExtractValues + Send + Sync>,
     auth: Option<PyObject>,
-    cache: Py<PyDict>
+    cache: Py<PyDict>,
 }
 
 impl PyContext {
@@ -279,7 +279,7 @@ impl PyContext {
             auth,
             conn,
             cache,
-            required_columns
+            required_columns,
         }
     }
 }
@@ -461,10 +461,17 @@ pub fn returned_values_into_stream<'a>(
     aggro_field: &'a AggroField,
     all_objects: Arc<BTreeMap<Text, AggroObject>>,
     aggro_context: &'a AggroContext,
-    layer_cache: Py<PyDict>
+    layer_cache: Py<PyDict>,
 ) -> BoxFuture<'a, PuffResult<Vec<AggroValue>>> {
-    do_returned_values_into_stream(rows, look_ahead, aggro_field, all_objects, aggro_context, layer_cache)
-        .boxed()
+    do_returned_values_into_stream(
+        rows,
+        look_ahead,
+        aggro_field,
+        all_objects,
+        aggro_context,
+        layer_cache,
+    )
+    .boxed()
 }
 
 pub async fn do_returned_values_into_stream(
@@ -473,7 +480,7 @@ pub async fn do_returned_values_into_stream(
     aggro_field: &'_ AggroField,
     all_objects: Arc<BTreeMap<Text, AggroObject>>,
     aggro_context: &AggroContext,
-    layer_cache: Py<PyDict>
+    layer_cache: Py<PyDict>,
 ) -> PuffResult<Vec<AggroValue>> {
     let type_info = aggro_field.return_type.type_info.clone();
     let class_method = aggro_field.producer_method.clone();
@@ -533,12 +540,17 @@ pub async fn do_returned_values_into_stream(
     }
     let children_require = child_depends_on_vec.into_iter().collect::<Vec<_>>();
 
-
     match class_method {
         Some(cm) => {
             let result = {
                 if !aggro_field.is_async && aggro_field.safe_without_context {
-                    let py_extractor = PyContext::new(rows.clone(), aggro_context.auth(), None, layer_cache, children_require);
+                    let py_extractor = PyContext::new(
+                        rows.clone(),
+                        aggro_context.auth(),
+                        None,
+                        layer_cache,
+                        children_require,
+                    );
                     Python::with_gil(|py| {
                         let arg_dict = args.into_py_dict(py);
                         cm.call(py, (py_extractor.clone(),), Some(arg_dict))
@@ -549,8 +561,13 @@ pub async fn do_returned_values_into_stream(
                     let rec = if let Some(s) = aggro_context.maybe_connection() {
                         let conn = s.lock().await;
 
-                        let py_extractor =
-                            PyContext::new(rows.clone(), aggro_context.auth(), Some(conn.clone()), layer_cache, children_require);
+                        let py_extractor = PyContext::new(
+                            rows.clone(),
+                            aggro_context.auth(),
+                            Some(conn.clone()),
+                            layer_cache,
+                            children_require,
+                        );
 
                         // Method must be run with lock held to prevent concurrent access to db conn.
                         Python::with_gil(|py| {
@@ -566,7 +583,13 @@ pub async fn do_returned_values_into_stream(
                             }
                         })?
                     } else {
-                        let py_extractor = PyContext::new(rows.clone(), aggro_context.auth(), None, layer_cache, children_require);
+                        let py_extractor = PyContext::new(
+                            rows.clone(),
+                            aggro_context.auth(),
+                            None,
+                            layer_cache,
+                            children_require,
+                        );
                         Python::with_gil(|py| {
                             let arg_dict = args.into_py_dict(py);
                             if aggro_field.is_async {
@@ -676,7 +699,8 @@ pub async fn do_returned_values_into_stream(
                             objs.iter().map(|_| AggroValue::Null).collect::<Vec<_>>()
                         } else {
                             let mut to_compute = Vec::with_capacity(child_fields.len());
-                            let new_layer_cache: Py<PyDict> = Python::with_gil(|py| PyDict::new(py).into_py(py));
+                            let new_layer_cache: Py<PyDict> =
+                                Python::with_gil(|py| PyDict::new(py).into_py(py));
                             for (child, new_lookahead) in child_fields {
                                 let this_layer_cache = new_layer_cache.clone();
                                 let fut = async {
@@ -686,7 +710,7 @@ pub async fn do_returned_values_into_stream(
                                         &child,
                                         all_objects.clone(),
                                         aggro_context,
-                                        this_layer_cache
+                                        this_layer_cache,
                                     )
                                     .await;
                                     (child, children)
@@ -786,7 +810,8 @@ pub async fn do_returned_values_into_stream(
                                 }
                             }
                             let mut to_compute = Vec::with_capacity(child_fields.len());
-                            let new_layer_cache: Py<PyDict> = Python::with_gil(|py| PyDict::new(py).into_py(py));
+                            let new_layer_cache: Py<PyDict> =
+                                Python::with_gil(|py| PyDict::new(py).into_py(py));
                             for (child, new_lookahead) in child_fields {
                                 let this_layer_cache = new_layer_cache.clone();
                                 let fut = async {
@@ -796,7 +821,7 @@ pub async fn do_returned_values_into_stream(
                                         &child,
                                         all_objects.clone(),
                                         aggro_context,
-                                        this_layer_cache
+                                        this_layer_cache,
                                     )
                                     .await;
                                     (child, children)
@@ -913,7 +938,8 @@ pub async fn do_returned_values_into_stream(
                 }
 
                 let mut to_compute = Vec::with_capacity(child_fields.len());
-                let new_layer_cache: Py<PyDict> = Python::with_gil(|py| PyDict::new(py).into_py(py));
+                let new_layer_cache: Py<PyDict> =
+                    Python::with_gil(|py| PyDict::new(py).into_py(py));
                 for (child, new_lookahead) in child_fields {
                     let this_layer_cache = new_layer_cache.clone();
                     let fut = async {
@@ -923,7 +949,7 @@ pub async fn do_returned_values_into_stream(
                             &child,
                             all_objects.clone(),
                             aggro_context,
-                            this_layer_cache
+                            this_layer_cache,
                         )
                         .await;
                         (child, children)
@@ -1088,7 +1114,7 @@ impl SubscriptionSender {
                 &my_field,
                 all_objects,
                 &context,
-                layer_cache
+                layer_cache,
             )
             .await?;
             for r in res {

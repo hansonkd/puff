@@ -458,7 +458,13 @@ impl GraphQLValueAsync<AggroScalarValue> for PuffGqlObject {
                 let all_objects = info.all_objs.clone();
                 let input_objs = &info.input_objs;
                 let (look_ahead, layer_cache) = Python::with_gil(|py| {
-                    let look_ahead = selection_to_fields(py, aggro_field, look_ahead_slice, input_objs, &all_objects)?;
+                    let look_ahead = selection_to_fields(
+                        py,
+                        aggro_field,
+                        look_ahead_slice,
+                        input_objs,
+                        &all_objects,
+                    )?;
                     let d = PyDict::new(py).into_py(py);
                     PuffResult::Ok((look_ahead, d))
                 })?;
@@ -470,7 +476,7 @@ impl GraphQLValueAsync<AggroScalarValue> for PuffGqlObject {
                     aggro_field,
                     all_objects,
                     context,
-                    layer_cache
+                    layer_cache,
                 )
                 .await?;
 
@@ -549,7 +555,13 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                     .clone()
                     .expect("Subscription field needs an acceptor");
 
-                let python_context = PyContext::new(parents.clone(), auth, None, layer_cache, field.depends_on.clone());
+                let python_context = PyContext::new(
+                    parents.clone(),
+                    auth,
+                    None,
+                    layer_cache,
+                    field.depends_on.clone(),
+                );
                 if field.is_async {
                     py_dispatcher.dispatch_asyncio(
                         acceptor_method,

@@ -105,7 +105,7 @@ where
 
 impl<S> Router<S>
 where
-    S: Send + Sync + Default + Clone + 'static
+    S: Send + Sync + Default + Clone + 'static,
 {
     pub fn new() -> Self {
         Self(axum::Router::default())
@@ -280,10 +280,14 @@ mod tests {
         let rt = Runtime::new().unwrap();
         let puff_context = RealPuffContext::empty(rt.handle().clone());
 
-        let fut = router.into_axum_router(puff_context.clone()).into_service().call(AxumRequest::get("http://localhost/")
-                .body(Body::empty())
-                .unwrap(),
-        );
+        let fut = router
+            .into_axum_router(puff_context.clone())
+            .into_service()
+            .call(
+                AxumRequest::get("http://localhost/")
+                    .body(Body::empty())
+                    .unwrap(),
+            );
 
         let result = rt.block_on(fut);
         assert!(result.is_ok());
