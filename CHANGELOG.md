@@ -1,4 +1,10 @@
-# 0.1.7
+# 0.1.9
+
+* Add layer cache for Graphql
+* Expose required columns for children, Graphql
+* Bump Axum version
+
+# 0.1.8
 
 * Improve Postgres DBAPI2.0 Compliance.
 * Add multiple simultaneous Postgres, Redis, PubSub, Graphql Configurations
