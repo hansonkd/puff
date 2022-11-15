@@ -49,7 +49,7 @@ use bb8_redis::redis::{
     ErrorKind, FromRedisValue, RedisError, RedisResult, RedisWrite, ToRedisArgs, Value,
 };
 pub use bytes_builder::BytesBuilder;
-use chrono::{Date, DateTime, Utc};
+use chrono::{NaiveDate, DateTime, Utc};
 use pyo3::types::PyBytes;
 use pyo3::{IntoPy, Py, PyAny, PyObject, Python, ToPyObject};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -217,16 +217,16 @@ impl IntoPy<Py<PyAny>> for UtcDateTime {
 
 /// A Puff Date for UTC.
 #[derive(Clone)]
-pub struct UtcDate(Date<Utc>);
+pub struct UtcDate(NaiveDate);
 
 impl IntoPy<Py<PyAny>> for UtcDate {
     fn into_py(self, py: Python<'_>) -> Py<PyAny> {
-        pyo3_chrono::NaiveDate::from(self.0.naive_local()).into_py(py)
+        pyo3_chrono::NaiveDate::from(self.0).into_py(py)
     }
 }
 
 impl Deref for UtcDate {
-    type Target = Date<Utc>;
+    type Target = NaiveDate;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -234,7 +234,7 @@ impl Deref for UtcDate {
 }
 
 impl UtcDate {
-    pub fn new(dt: Date<Utc>) -> Self {
+    pub fn new(dt: NaiveDate) -> Self {
         Self(dt)
     }
 }
