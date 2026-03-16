@@ -43,17 +43,17 @@ impl PyHttpClient {
         ret_func: PyObject,
         method: &str,
         url: &str,
-        headers: Option<&PyDict>,
+        headers: Option<Bound<'_, PyDict>>,
         body: Option<Vec<u8>>,
         data: Option<HashMap<String, String>>,
-        files: Option<&PyDict>,
+        files: Option<Bound<'_, PyDict>>,
         timeout_ms: u64,
     ) -> PyResult<()> {
         let method = Method::from_bytes(method.as_bytes())
             .map_err(|_| PyTypeError::new_err("Invalid method"))?;
         let mut rb = self.client.request(method, url);
 
-        rb = build_headers(headers, rb)?;
+        rb = build_headers(headers.as_ref(), rb)?;
 
         if let Some(b) = body {
             rb = rb.body(b)
@@ -143,15 +143,15 @@ impl PyHttpClient {
         ret_func: PyObject,
         method: &str,
         url: &str,
-        headers: Option<&PyDict>,
-        body: &PyAny,
+        headers: Option<Bound<'_, PyDict>>,
+        body: Bound<'_, PyAny>,
         timeout_ms: u64,
     ) -> PyResult<()> {
         let method = Method::from_bytes(method.as_bytes())
             .map_err(|_| PyTypeError::new_err("Invalid method"))?;
         let mut rb = self.client.request(method, url);
 
-        rb = build_headers(headers, rb)?;
+        rb = build_headers(headers.as_ref(), rb)?;
 
         rb = rb.header(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
@@ -181,20 +181,17 @@ impl PyHttpClient {
     }
 }
 
-fn build_headers(headers: Option<&PyDict>, rb: RequestBuilder) -> PyResult<RequestBuilder> {
+fn build_headers(headers: Option<&Bound<'_, PyDict>>, rb: RequestBuilder) -> PyResult<RequestBuilder> {
     let mut rb = rb;
     if let Some(h) = headers {
         for (k, v) in h.iter() {
             if let Ok(key) = k.downcast::<PyString>() {
-                if let Ok(value) = py_obj_to_bytes(v) {
-                    rb = rb.header(
-                        key.to_str()?,
-                        HeaderValue::from_bytes(value)
-                            .map_err(|_| PyTypeError::new_err("Invalid HeaderValue"))?,
-                    );
-                } else {
-                    Err(PyTypeError::new_err("Header value should be bytes"))?
-                }
+                let value = py_obj_to_bytes(&v)?;
+                rb = rb.header(
+                    key.to_str()?,
+                    HeaderValue::from_bytes(&value)
+                        .map_err(|_| PyTypeError::new_err("Invalid HeaderValue"))?,
+                );
             } else {
                 Err(PyTypeError::new_err("Header name should be string"))?
             }
@@ -223,7 +220,7 @@ impl PyHttpResponse {
                 d.set_item(c.name(), c.value())?
             }
         }
-        Ok(d.into_py(py))
+        Ok(d.unbind().into())
     }
 
     pub fn headers(&mut self, py: Python) -> PyResult<PyObject> {
@@ -233,10 +230,10 @@ impl PyHttpResponse {
                 d.set_item(hn.as_str(), PyBytes::new(py, hv.as_bytes()))?
             }
         }
-        Ok(d.into_py(py))
+        Ok(d.unbind().into())
     }
 
-    pub fn header(&mut self, py: Python, hn: &PyString) -> PyResult<Option<PyObject>> {
+    pub fn header(&mut self, py: Python, hn: Bound<'_, PyString>) -> PyResult<Option<PyObject>> {
         if let Some(r) = &self.response {
             if let Some(v) = r.headers().get(hn.to_str()?) {
                 return Ok(Some(PyBytes::new(py, v.as_bytes()).into_py(py)));

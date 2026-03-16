@@ -32,8 +32,8 @@ impl RunnableCommand for ServerCommand {
         let router_fn = self.0.take().expect("Already ran.");
         let fut = async move {
             let app = router_fn().into_axum_router(context);
-            let server = config.server_builder().serve(app.into_make_service());
-            server.await?;
+            let listener = config.tcp_listener().await?;
+            axum::serve(listener, app).await?;
             Ok(ExitCode::SUCCESS)
         };
         Ok(Runnable::new(fut))

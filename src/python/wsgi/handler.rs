@@ -1,30 +1,26 @@
 use crate::python::{get_cached_string, log_traceback_with_label, wsgi, PythonDispatcher};
 use anyhow::{anyhow, Error};
-use axum::body::{Body, BoxBody, Bytes, Full, HttpBody};
+use axum::body::Body;
 use axum::handler::Handler;
-use axum::headers::{HeaderMap, HeaderName};
+use http::header::HeaderName;
 
 use axum::http::{HeaderValue, Request, StatusCode, Version};
 use axum::response::{IntoResponse, Response};
-use hyper::body::SizeHint;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyBytes, PyDict, PyString};
-use pyo3::PyDowncastError;
+use pyo3::DowncastError;
 use std::future::Future;
 
 use std::pin::Pin;
 use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 use crate::errors::handle_puff_error;
 use crate::types::Text;
 use tracing::error;
 use wsgi::Sender;
-
-const MAX_LIST_BODY_INLINE_CONCAT: u64 = 1024 * 32;
 
 #[derive(Clone)]
 pub struct WsgiHandler {
@@ -73,8 +69,8 @@ impl From<PyErr> for WsgiError {
     }
 }
 
-impl From<PyDowncastError<'_>> for WsgiError {
-    fn from(e: PyDowncastError<'_>) -> Self {
+impl<'a, 'py> From<DowncastError<'a, 'py>> for WsgiError {
+    fn from(e: DowncastError<'a, 'py>) -> Self {
         WsgiError::PyErr(e.into())
     }
 }
@@ -114,57 +110,8 @@ impl Drop for SetTrueOnDrop {
     }
 }
 
-pub struct HttpResponseBody(PyObject, Option<u64>);
-
-impl HttpBody for HttpResponseBody {
-    // type Data = PyBytesBuf;
-    type Data = Bytes;
-    type Error = Error;
-
-    fn poll_data(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Bytes, Self::Error>>> {
-        let b = Python::with_gil(|py| {
-            let obj = &self.0;
-            let r = obj.as_ref(py);
-            if let Ok(next_bytes) = r.call_method0("__next__") {
-                let extracted = {
-                    if let Ok(bytes) = next_bytes.downcast::<PyBytes>() {
-                        Ok(Bytes::copy_from_slice(bytes.as_bytes()))
-                        // Ok(Bytes::copy_from_slice(bytes.as_bytes()))
-                    } else if let Ok(str) = next_bytes.downcast::<PyString>() {
-                        Ok(Bytes::copy_from_slice(str.to_str().unwrap().as_bytes()))
-                    } else {
-                        Err(anyhow!("Invalid type returned in wsgi stream"))
-                    }
-                };
-                Some(extracted)
-            } else {
-                None
-            }
-        });
-        Poll::Ready(b)
-    }
-
-    fn poll_trailers(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<Result<Option<HeaderMap>, Self::Error>> {
-        Poll::Ready(Ok(None))
-    }
-
-    fn size_hint(&self) -> SizeHint {
-        if let Some(hint) = self.1 {
-            SizeHint::with_exact(hint)
-        } else {
-            SizeHint::default()
-        }
-    }
-}
-
 impl<S> Handler<WsgiHandler, S> for WsgiHandler {
-    type Future = Pin<Box<dyn Future<Output = Response<BoxBody>> + Send>>;
+    type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
     fn call(self, req: Request<Body>, _state: S) -> Self::Future {
         let app = self.app.clone();
@@ -173,7 +120,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
         let (req, body): (_, Body) = req.into_parts();
 
         let body_fut = async move {
-            let body_bytes = if let Ok(body_bytes) = hyper::body::to_bytes(body).await {
+            let body_bytes = if let Ok(body_bytes) = axum::body::to_bytes(body, usize::MAX).await {
                 body_bytes
             } else {
                 error!("Could not extract request body.");
@@ -259,8 +206,8 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                             "CONTENT-TYPE" => "CONTENT_TYPE".to_owned(),
                             s => format!("HTTP_{}", s.replace("-", "_")),
                         };
-                        if let Some(val) = environ.get_item(corrected_name.as_str()) {
-                            let s = val.downcast::<PyString>().unwrap();
+                        if let Some(val) = environ.get_item(corrected_name.as_str())? {
+                            let s: Bound<'_, PyString> = val.downcast().map_err(|e| pyo3::PyErr::new::<pyo3::exceptions::PyTypeError, _>(e.to_string()))?.clone();
                             let new_value = [s.to_str()?, value.to_str()?].join(",");
                             environ.set_item(corrected_name.as_str(), new_value)?;
                         } else {
@@ -270,7 +217,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
 
                     // TODO: client/server args
                     let sender = Py::new(py, http_sender)?;
-                    let args = (PyObject::from(environ), sender.into_py(py));
+                    let args = (environ.into_any().unbind(), sender.into_py(py));
 
                     Ok::<_, Error>(Ok(args))
                 });
@@ -327,30 +274,24 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                     }
                     response = response.status(status_code);
                     let res = Python::with_gil(|py| {
-                        let iter_py = iterator.as_ref(py);
+                        let iter_py = iterator.bind(py);
 
-                        if resp_content_len.unwrap_or(u64::MAX) < MAX_LIST_BODY_INLINE_CONCAT {
-                            let mut combined =
-                                Vec::with_capacity(resp_content_len.unwrap_or(0) as usize);
-                            for x in iter_py.iter()? {
-                                let bytes = x?.downcast::<PyBytes>()?;
+                        // Collect all body parts
+                        let mut combined =
+                            Vec::with_capacity(resp_content_len.unwrap_or(0) as usize);
+                        for x in iter_py.iter()? {
+                            let item = x?;
+                            if let Ok(bytes) = item.downcast::<PyBytes>() {
                                 combined.extend_from_slice(bytes.as_bytes());
+                            } else if let Ok(s) = item.downcast::<PyString>() {
+                                combined.extend_from_slice(s.to_str().unwrap().as_bytes());
                             }
-                            let body = Full::from(combined);
-                            Ok(response
-                                .body(body)
-                                .map(|f| f.into_response())
-                                .unwrap_or(WsgiError::FailedToCreateResponse.into_response()))
-                        } else {
-                            let body = HttpResponseBody(
-                                PyObject::from(iter_py.iter().unwrap()),
-                                resp_content_len,
-                            );
-                            Ok(response
-                                .body(body)
-                                .map(|f| f.into_response())
-                                .unwrap_or(WsgiError::FailedToCreateResponse.into_response()))
                         }
+                        let body = Body::from(combined);
+                        Ok(response
+                            .body(body)
+                            .map(|f| f.into_response())
+                            .unwrap_or(WsgiError::FailedToCreateResponse.into_response()))
                     });
 
                     match res {

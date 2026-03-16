@@ -4,16 +4,16 @@ use crate::prelude::run_python_async;
 use crate::python::{asgi, get_cached_string, PythonDispatcher};
 use anyhow::anyhow;
 use asgi::Sender;
-use axum::body::{boxed, Body, BoxBody, Bytes as AxumBytes, HttpBody};
+use axum::body::{Body, Bytes as AxumBytes};
 use axum::handler::Handler;
-use axum::headers::HeaderName;
+use http::header::HeaderName;
 use axum::http::{HeaderValue, Request, StatusCode, Version};
 use axum::response::{IntoResponse, Response};
-use futures::pin_mut;
+use http_body_util::BodyExt;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList, PyLong, PyMapping, PyString, PyTuple};
-use pyo3::PyDowncastError;
+use pyo3::types::{PyBytes, PyDict, PyInt, PyList, PyMapping, PyString, PyTuple};
+use pyo3::DowncastError;
 use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
@@ -46,7 +46,7 @@ impl AsgiHandler {
                 get_cached_string(py, "2.0"),
             )
             .unwrap();
-            asgi.into_py(py)
+            asgi.unbind()
         });
         let handle = with_puff_context(|ctx| ctx.handle());
         AsgiHandler {
@@ -59,6 +59,7 @@ impl AsgiHandler {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 enum AsgiError {
     PyErr(PyErr),
     InvalidHttpVersion,
@@ -76,8 +77,8 @@ impl From<PyErr> for AsgiError {
     }
 }
 
-impl From<PyDowncastError<'_>> for AsgiError {
-    fn from(e: PyDowncastError<'_>) -> Self {
+impl<'a, 'py> From<DowncastError<'a, 'py>> for AsgiError {
+    fn from(e: DowncastError<'a, 'py>) -> Self {
         AsgiError::PyErr(e.into())
     }
 }
@@ -130,7 +131,7 @@ impl HttpReceiver {
                         get_cached_string(py, "type"),
                         get_cached_string(py, "http.disconnect"),
                     )?;
-                    Ok(scope.into())
+                    Ok(scope.unbind().into_any())
                 })
             } else if let Some(bytes) = next {
                 Python::with_gil(|py| {
@@ -141,14 +142,14 @@ impl HttpReceiver {
                         get_cached_string(py, "http.request"),
                     )?;
                     scope.set_item(get_cached_string(py, "body"), bytes)?;
-                    let scope: Py<PyDict> = scope.into();
-                    Ok(scope)
+                    let scope: Py<PyDict> = scope.unbind();
+                    Ok(scope.into_any())
                 })
             } else {
                 Python::with_gil(|py| {
                     let scope = PyDict::new(py);
                     scope.set_item("type", "http.request")?;
-                    Ok(scope.into())
+                    Ok(scope.unbind().into_any())
                 })
             }
         })
@@ -156,7 +157,7 @@ impl HttpReceiver {
 }
 
 impl<S> Handler<AsgiHandler, S> for AsgiHandler {
-    type Future = Pin<Box<dyn Future<Output = Response<BoxBody>> + Send>>;
+    type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
     fn call(self, req: Request<Body>, _state: S) -> Self::Future {
         let app = self.app.clone();
@@ -170,10 +171,14 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
         let (req, body): (_, Body) = req.into_parts();
         let handle = self.handle.clone();
         handle.spawn(async move {
-            pin_mut!(body);
+            let mut body = body;
 
-            while let Some(s) = body.data().await {
-                receiver_tx.send(s.unwrap()).unwrap();
+            while let Some(frame_result) = body.frame().await {
+                if let Ok(frame) = frame_result {
+                    if let Some(data) = frame.into_data().ok() {
+                        receiver_tx.send(data).unwrap();
+                    }
+                }
             }
         });
         let dispatcher = self.dispatcher.clone();
@@ -230,16 +235,17 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
                     get_cached_string(py, ""),
                 )?;
 
-                let headers = req
+                let headers_vec: Vec<Bound<'_, PyList>> = req
                     .headers
                     .iter()
                     .map(|(name, value)| {
                         let name_bytes = PyBytes::new(py, name.as_str().as_bytes());
                         let value_bytes = PyBytes::new(py, value.as_bytes());
-                        PyList::new(py, [name_bytes, value_bytes])
+                        let pair: [Bound<'_, PyAny>; 2] = [name_bytes.into_any(), value_bytes.into_any()];
+                        PyList::new(py, pair).unwrap()
                     })
                     .collect::<Vec<_>>();
-                let headers = PyList::new(py, headers);
+                let headers = PyList::new(py, headers_vec)?;
                 scope.set_item(get_cached_string(py, "headers"), headers)?;
                 // TODO: client/server args
                 let sender = Py::new(py, http_sender)?;
@@ -259,47 +265,53 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
 
                     let response = if let Some(resp) = http_sender_rx.recv().await {
                         let res = Python::with_gil(|py| {
-                            let dict: &PyDict = resp.into_ref(py);
-                            if let Some(value) = dict.get_item("type") {
-                                let value: &PyString = value
+                            let dict = resp.into_bound(py);
+                            if let Some(value) = dict.get_item("type")? {
+                                let value: Bound<'_, PyString> = value
                                     .downcast()
-                                    .map_err(|_e| anyhow!("Invalid asgi type value"))?;
+                                    .map_err(|_e| anyhow!("Invalid asgi type value"))?
+                                    .clone();
                                 let value = value.to_str()?;
                                 if value == "http.response.start" {
-                                    let value: &PyLong = dict
-                                        .get_item(get_cached_string(py, "status"))
+                                    let status_item = dict
+                                        .get_item(get_cached_string(py, "status"))?
                                         .ok_or_else(|| {
                                             PyErr::new::<PyRuntimeError, _>(
                                                 "Missing status in http.response.start",
                                             )
-                                        })?
+                                        })?;
+                                    let status_val: Bound<'_, PyInt> = status_item
                                         .downcast()
-                                        .map_err(|_e| anyhow!("Invalid asgi status value"))?;
-                                    let status: u16 = value.extract()?;
+                                        .map_err(|_e| anyhow!("Invalid asgi status value"))?
+                                        .clone();
+                                    let status: u16 = status_val.extract()?;
                                     let mut this_response = Response::builder();
                                     this_response = this_response.status(status);
                                     let headers = this_response.headers_mut().unwrap();
 
                                     if let Some(raw) =
-                                        dict.get_item(get_cached_string(py, "headers"))
+                                        dict.get_item(get_cached_string(py, "headers"))?
                                     {
-                                        let value: &PyMapping = raw
+                                        let value: Bound<'_, PyMapping> = raw
                                             .downcast()
-                                            .map_err(|_e| anyhow!("Invalid asgi headers value"))?;
+                                            .map_err(|_e| anyhow!("Invalid asgi headers value"))?
+                                            .clone();
                                         for item in value.iter()? {
                                             if let Ok(t) = item?.downcast::<PyTuple>() {
-                                                let k = t
+                                                let k: Bound<'_, PyBytes> = t
                                                     .get_item(0)?
                                                     .downcast::<PyBytes>()
                                                     .map_err(|_e| {
                                                         anyhow!("Invalid asgi header key value")
-                                                    })?;
-                                                let v = t
+                                                    })?
+                                                    .clone();
+                                                let v: Bound<'_, PyBytes> = t
                                                     .get_item(1)?
                                                     .downcast::<PyBytes>()
                                                     .map_err(|_e| {
                                                         anyhow!("Invalid asgi header value value")
-                                                    })?;
+                                                    })?
+                                                    .clone();
                                                 headers.insert(
                                                     HeaderName::from_bytes(k.as_bytes())?,
                                                     HeaderValue::from_bytes(v.as_bytes())?,
@@ -334,20 +346,20 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
                     handle.spawn(async move {
                         while let Some(resp) = http_sender_rx.recv().await {
                             let more_body = match Python::with_gil(|py| {
-                                let dict: &PyDict = resp.into_ref(py);
-                                if let Some(value) = dict.get_item(get_cached_string(py, "type")) {
-                                    let value: &PyString = value.downcast()?;
+                                let dict = resp.into_bound(py);
+                                if let Some(value) = dict.get_item(get_cached_string(py, "type"))? {
+                                    let value: Bound<'_, PyString> = value.downcast()?.clone();
                                     let value = value.to_str()?;
                                     if value == "http.response.body" {
                                         let more_body = if let Some(raw) =
-                                            dict.get_item(get_cached_string(py, "more_body"))
+                                            dict.get_item(get_cached_string(py, "more_body"))?
                                         {
                                             raw.extract::<bool>()?
                                         } else {
                                             false
                                         };
                                         if let Some(raw) =
-                                            dict.get_item(get_cached_string(py, "body"))
+                                            dict.get_item(get_cached_string(py, "body"))?
                                         {
                                             if let Ok(s) = raw.downcast::<PyBytes>() {
                                                 Ok((
@@ -385,7 +397,7 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
                         }
                     });
 
-                    let body = boxed(Body::wrap_stream(ReceiverStream::new(body_rec)));
+                    let body = Body::from_stream(ReceiverStream::new(body_rec));
                     match response.body(body) {
                         Ok(response) => response.into_response(),
                         Err(_e) => {

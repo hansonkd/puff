@@ -36,7 +36,7 @@ pub async fn new_redis_async<T: IntoConnectionInfo>(
         info!("Checking redis connectivity...");
         let check_fut = async {
             let mut conn = local_pool.get().await?;
-            PuffResult::Ok(Cmd::new().arg("PING").query_async(&mut *conn).await?)
+            PuffResult::Ok(Cmd::new().arg("PING").query_async::<()>(&mut *conn).await?)
         };
 
         tokio::time::timeout(Duration::from_secs(5), check_fut).await??;

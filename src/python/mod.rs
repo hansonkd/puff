@@ -8,7 +8,6 @@ use crate::tasks::GlobalTaskQueue;
 use crate::types::text::Text;
 use crate::web::client::GlobalHttpClient;
 use pyo3::types::{IntoPyDict, PyBytes, PyDict, PyString, PyTuple};
-use pyo3::wrap_pyfunction;
 use tokio::runtime::Handle;
 
 use std::os::raw::c_int;
@@ -51,10 +50,10 @@ pub fn get_cached_string<'a>(py: Python<'a>, k: &'static str) -> Py<PyString> {
     CACHED_STRINGS.with(|d| {
         let mut s = d.borrow_mut();
         if let Some(existing) = s.get(k) {
-            existing.clone()
+            existing.clone_ref(py)
         } else {
-            let new_str: Py<PyString> = PyString::new(py, k).into_py(py);
-            s.insert(k, new_str.clone());
+            let new_str: Py<PyString> = PyString::new(py, k).unbind();
+            s.insert(k, new_str.clone_ref(py));
             new_str
         }
     })
@@ -64,14 +63,14 @@ pub fn get_cached_path_importer<'a>(py: Python<'a>) -> PyObject {
     CACHED_PATH_IMPORTER.with(|d| {
         let mut s = d.borrow_mut();
         if let Some(existing) = s.as_ref() {
-            existing.clone()
+            existing.clone_ref(py)
         } else {
             let puff_mod = py.import("puff").expect("Could not import puff");
             let string_import_fn = puff_mod
                 .getattr("import_string")
                 .expect("Could not import puff.import_string")
-                .into_py(py);
-            *s = Some(string_import_fn.clone());
+                .unbind();
+            *s = Some(string_import_fn.clone_ref(py));
             string_import_fn
         }
     })
@@ -81,11 +80,11 @@ pub fn get_cached_object<'a>(py: Python<'a>, k: Text) -> PyResult<PyObject> {
     CACHED_IMPORTED_OBJS.with(|d| {
         let mut s = d.borrow_mut();
         if let Some(existing) = s.get(&k) {
-            Ok(existing.clone())
+            Ok(existing.clone_ref(py))
         } else {
             let cache_importer = get_cached_path_importer(py);
             let result = cache_importer.call1(py, (k.as_str(),))?;
-            s.insert(k, result.clone());
+            s.insert(k, result.clone_ref(py));
             Ok(result)
         }
     })
@@ -167,7 +166,7 @@ pub fn log_traceback(e: &PyErr) {
 
 pub fn log_traceback_with_label(label: &str, e: &PyErr) {
     Python::with_gil(|py| {
-        let t = e.traceback(py);
+        let t = e.traceback_bound(py);
         let tb = t
             .map(|f| {
                 let tb = f
@@ -180,7 +179,7 @@ pub fn log_traceback_with_label(label: &str, e: &PyErr) {
     });
 }
 
-const ACTIVATE_THIS: &'static str = r#"
+const ACTIVATE_THIS: &'static std::ffi::CStr = c"
 import sys
 import os
 
@@ -190,7 +189,7 @@ base = os.path.dirname(os.path.dirname(os.path.abspath(abs_file)))
 if sys.platform == 'win32':
     site_packages = os.path.join(base, 'Lib', 'site-packages')
 else:
-    site_packages = os.path.join(base, 'lib', 'python%s' % sys.version.split(" ", 1)[0].rsplit(".", 1)[0], 'site-packages')
+    site_packages = os.path.join(base, 'lib', 'python%s' % sys.version.split(' ', 1)[0].rsplit('.', 1)[0], 'site-packages')
 prev_sys_path = list(sys.path)
 import site
 site.addsitedir(site_packages)
@@ -203,14 +202,14 @@ for item in list(sys.path):
         new_sys_path.append(item)
         sys.path.remove(item)
 sys.path[:0] = new_sys_path
-"#;
+";
 
 pub(crate) fn bootstrap_puff_globals(config: RuntimeConfig) -> PuffResult<()> {
     let global_state = config.global_state()?;
     Python::with_gil(|py| {
         if let Ok(v) = std::env::var("VIRTUAL_ENV") {
-            let locals = [("abs_file", format!("{}/bin/activate", v))].into_py_dict(py);
-            py.run(ACTIVATE_THIS, None, Some(locals))?;
+            let locals = [("abs_file", format!("{}/bin/activate", v))].into_py_dict(py)?;
+            py.run(ACTIVATE_THIS, None, Some(&locals))?;
         }
 
         let sys_path = py.import("sys")?.getattr("path")?;
@@ -236,12 +235,12 @@ pub(crate) fn bootstrap_puff_globals(config: RuntimeConfig) -> PuffResult<()> {
         puff_rust_functions.setattr("dispatch_greenlet", PyDispatchGreenlet.into_py(py))?;
         puff_rust_functions.setattr("dispatch_asyncio", PyDispatchAsyncIO.into_py(py))?;
         puff_rust_functions.setattr("dispatch_asyncio_coro", PyDispatchAsyncCoro.into_py(py))?;
-        puff_json_mod.add_function(wrap_pyfunction!(load, puff_json_mod)?)?;
-        puff_json_mod.add_function(wrap_pyfunction!(loads, puff_json_mod)?)?;
-        puff_json_mod.add_function(wrap_pyfunction!(loadb, puff_json_mod)?)?;
-        puff_json_mod.add_function(wrap_pyfunction!(dump, puff_json_mod)?)?;
-        puff_json_mod.add_function(wrap_pyfunction!(dumps, puff_json_mod)?)?;
-        puff_json_mod.add_function(wrap_pyfunction!(dumpb, puff_json_mod)?)?;
+        puff_json_mod.add_function(wrap_pyfunction!(load, &puff_json_mod)?)?;
+        puff_json_mod.add_function(wrap_pyfunction!(loads, &puff_json_mod)?)?;
+        puff_json_mod.add_function(wrap_pyfunction!(loadb, &puff_json_mod)?)?;
+        puff_json_mod.add_function(wrap_pyfunction!(dump, &puff_json_mod)?)?;
+        puff_json_mod.add_function(wrap_pyfunction!(dumps, &puff_json_mod)?)?;
+        puff_json_mod.add_function(wrap_pyfunction!(dumpb, &puff_json_mod)?)?;
         add_pg_puff_exceptions(py)?;
         puff_mod.setattr("global_state", global_state)?;
         puff_rust_functions.setattr("read_file_bytes", ReadFileBytes.into_py(py))?;
@@ -258,7 +257,7 @@ pub fn error_on_minusone(py: Python<'_>, result: c_int) -> PyResult<()> {
     if result != -1 {
         Ok(())
     } else {
-        Err(PyErr::fetch(py))
+        Err(PyErr::take(py).unwrap_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Unknown error")))
     }
 }
 
@@ -282,12 +281,22 @@ impl PythonPuffContextSetter {
     }
 }
 
-#[derive(Clone)]
 pub struct PythonDispatcher {
     thread_obj: Option<PyObject>,
     asyncio_obj: Option<PyObject>,
     spawn_blocking_fn: PyObject,
     blocking: bool,
+}
+
+impl Clone for PythonDispatcher {
+    fn clone(&self) -> Self {
+        Python::with_gil(|py| Self {
+            thread_obj: self.thread_obj.as_ref().map(|o| o.clone_ref(py)),
+            asyncio_obj: self.asyncio_obj.as_ref().map(|o| o.clone_ref(py)),
+            spawn_blocking_fn: self.spawn_blocking_fn.clone_ref(py),
+            blocking: self.blocking,
+        })
+    }
 }
 
 fn spawn_blocking_fn(py: Python) -> PyResult<PyObject> {
@@ -344,12 +353,12 @@ impl PythonDispatcher {
     }
 
     /// Run the python function a new Tokio blocking working thread.
-    pub fn dispatch_blocking<A: IntoPy<Py<PyTuple>>, K: IntoPy<Py<PyDict>>>(
+    pub fn dispatch_blocking<A: IntoPy<Py<PyTuple>>>(
         &self,
         py: Python,
         function: PyObject,
         args: A,
-        kwargs: K,
+        kwargs: Py<PyDict>,
     ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
         let (sender, rec) = oneshot::channel();
         let ret = AsyncReturn::new(Some(sender));
@@ -360,7 +369,7 @@ impl PythonDispatcher {
                 on_thread_start,
                 function,
                 args.into_py(py),
-                kwargs.into_py(py),
+                kwargs.into_any(),
                 ret,
             ),
         )?;
@@ -374,49 +383,48 @@ impl PythonDispatcher {
         function: PyObject,
         args: A,
     ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
-        self.dispatch(function, args, None::<&PyDict>)
+        self.dispatch(function, args, None)
     }
 
     /// Acquires the GIL and Executes the python function on the greenlet thread or a new thread
     /// depending if greenlets were enabled.
-    pub fn dispatch<A: IntoPy<Py<PyTuple>>, K: IntoPy<Py<PyDict>>>(
+    pub fn dispatch<A: IntoPy<Py<PyTuple>>>(
         &self,
         function: PyObject,
         args: A,
-        kwargs: Option<K>,
+        kwargs: Option<Py<PyDict>>,
     ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
         Python::with_gil(|py| {
-            let kwargs = kwargs
-                .map(|f| f.into_py(py))
-                .unwrap_or(PyDict::new(py).into_py(py));
+            let kwargs: Py<PyDict> = kwargs
+                .unwrap_or_else(|| PyDict::new(py).unbind());
             if self.blocking {
-                self.dispatch_blocking(py, function, args, kwargs.as_ref(py))
+                self.dispatch_blocking(py, function, args, kwargs)
             } else {
-                self.dispatch_greenlet(py, function, args, kwargs.as_ref(py))
+                self.dispatch_greenlet(py, function, args, kwargs)
             }
         })
     }
 
     /// Executes the python function on the greenlet thread.
-    pub fn dispatch_greenlet<A: IntoPy<Py<PyTuple>>, K: IntoPy<Py<PyDict>>>(
+    pub fn dispatch_greenlet<A: IntoPy<Py<PyTuple>>>(
         &self,
         py: Python,
         function: PyObject,
         args: A,
-        kwargs: K,
+        kwargs: Py<PyDict>,
     ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
         let (sender, rec) = oneshot::channel();
         let returner = AsyncReturn::new(Some(sender));
         self.thread_obj
-            .clone()
+            .as_ref()
             .expect("Greenlets not enabled")
             .call_method1(
                 py,
                 "spawn",
                 (
                     function,
-                    args.into_py(py).to_object(py),
-                    kwargs.into_py(py).to_object(py),
+                    args.into_py(py).into_any(),
+                    kwargs.into_any(),
                     returner,
                 ),
             )?;
@@ -434,15 +442,15 @@ impl PythonDispatcher {
             let (sender, rec) = oneshot::channel();
             let returner = AsyncReturn::new(Some(sender));
             self.asyncio_obj
-                .clone()
+                .as_ref()
                 .expect("AsyncIO not enabled")
                 .call_method1(
                     py,
                     "spawn",
                     (
                         function,
-                        args.into_py(py).to_object(py),
-                        kwargs.unwrap_or(PyDict::new(py).into_py(py)).to_object(py),
+                        args.into_py(py).into_any(),
+                        kwargs.unwrap_or_else(|| PyDict::new(py).unbind()).into_any(),
                         returner,
                     ),
                 )?;
@@ -459,7 +467,7 @@ impl PythonDispatcher {
         let (sender, rec) = oneshot::channel();
         let returner = AsyncReturn::new(Some(sender));
         self.asyncio_obj
-            .clone()
+            .as_ref()
             .expect("AsyncIO not enabled")
             .call_method1(py, "spawn_coro", (function, returner))?;
         Ok(rec)
@@ -474,11 +482,11 @@ pub fn setup_python_executors(
     PythonDispatcher::new(config, context_waiting, handle)
 }
 
-pub fn py_obj_to_bytes(val: &PyAny) -> PyResult<&[u8]> {
+pub fn py_obj_to_bytes<'py>(val: &Bound<'py, PyAny>) -> PyResult<Vec<u8>> {
     if let Ok(r) = val.downcast::<PyString>() {
-        Ok(r.to_str()?.as_bytes())
+        Ok(r.to_str()?.as_bytes().to_vec())
     } else if let Ok(r) = val.downcast::<PyBytes>() {
-        Ok(r.as_bytes())
+        Ok(r.as_bytes().to_vec())
     } else {
         Err(PyTypeError::new_err(format!(
             "Expected str or bytes, got {}",

@@ -110,11 +110,14 @@ async fn start(
     wsgi: WsgiHandler,
 ) {
     let app = router.into_axum_router(puff_context).fallback(wsgi);
-    if let Err(err) = http_configuration
-        .server_builder()
-        .serve(app.into_make_service())
-        .await
-    {
-        eprintln!("error running server: {err}");
+    match http_configuration.tcp_listener().await {
+        Ok(listener) => {
+            if let Err(err) = axum::serve(listener, app).await {
+                eprintln!("error running server: {err}");
+            }
+        }
+        Err(err) => {
+            eprintln!("error binding listener: {err}");
+        }
     };
 }

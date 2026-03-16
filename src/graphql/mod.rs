@@ -1,7 +1,8 @@
 //! Use Python Dataclasses to Define a GQL Schema
 use anyhow::bail;
 use juniper::{InputValue, RootNode, Spanning};
-use pyo3::{IntoPy, Py, PyAny, PyObject, PyResult, Python, ToPyObject};
+use pyo3::prelude::*;
+use pyo3::{Bound, IntoPy, Py, PyAny, PyObject, PyResult, Python, ToPyObject};
 use std::sync::Arc;
 
 pub use handlers::{handle_graphql, handle_subscriptions};
@@ -76,7 +77,7 @@ pub(crate) async fn load_schema(
         let puff_gql = py.import("puff.graphql")?;
         let t2d = puff_gql.getattr("type_to_description")?;
 
-        let ret = puff_schema::convert(py, schema.as_ref(py), t2d)?;
+        let ret = puff_schema::convert(py, schema.bind(py), &t2d)?;
         Ok(ret)
     })?;
 
@@ -124,7 +125,7 @@ pub(crate) fn juniper_value_to_python(py: Python, v: &AggroValue) -> PuffResult<
             for iv in inner {
                 val_vec.push(juniper_value_to_python(py, iv)?);
             }
-            Ok(PyList::new(py, val_vec).into())
+            Ok(PyList::new(py, val_vec)?.into())
         }
         AggroValue::Object(inner) => {
             let mut val_vec: Vec<(PyObject, PyObject)> = Vec::with_capacity(inner.field_count());
@@ -134,7 +135,8 @@ pub(crate) fn juniper_value_to_python(py: Python, v: &AggroValue) -> PuffResult<
                     juniper_value_to_python(py, iv)?,
                 ));
             }
-            Ok(PyDict::from_sequence(py, PyList::new(py, val_vec).into())?.into())
+            let seq = PyList::new(py, val_vec)?;
+            Ok(PyDict::from_sequence(&seq.into_any())?.into())
         }
         AggroValue::Scalar(s) => scalar_to_python(py, s),
         AggroValue::Null => Ok(Python::None(py)),
@@ -156,7 +158,7 @@ fn scalar_to_python(py: Python, v: &AggroScalarValue) -> PuffResult<Py<PyAny>> {
 }
 
 pub(crate) fn convert_pyany_to_input(
-    attribute_val: &PyAny,
+    attribute_val: &Bound<'_, PyAny>,
 ) -> PuffResult<InputValue<AggroScalarValue>> {
     if let Ok(s) = attribute_val.extract() {
         return Ok(InputValue::Scalar(AggroScalarValue::String(s)));
@@ -173,19 +175,19 @@ pub(crate) fn convert_pyany_to_input(
     if let Ok(s) = attribute_val.extract() {
         return Ok(InputValue::Scalar(AggroScalarValue::Float(s)));
     }
-    if let Ok(l) = attribute_val.extract::<&PyList>() {
+    if let Ok(l) = attribute_val.downcast::<PyList>() {
         let mut vec = Vec::with_capacity(l.len());
-        for item in l.into_iter() {
-            vec.push(Spanning::unlocated(convert_pyany_to_input(item)?));
+        for item in l.iter() {
+            vec.push(Spanning::unlocated(convert_pyany_to_input(&item)?));
         }
         return Ok(InputValue::List(vec));
     }
-    if let Ok(l) = attribute_val.extract::<&PyDict>() {
+    if let Ok(l) = attribute_val.downcast::<PyDict>() {
         let mut vec = Vec::with_capacity(l.len());
-        for (k, s) in l.into_iter() {
+        for (k, s) in l.iter() {
             vec.push((
                 Spanning::unlocated(k.to_string()),
-                Spanning::unlocated(convert_pyany_to_input(s)?),
+                Spanning::unlocated(convert_pyany_to_input(&s)?),
             ));
         }
 

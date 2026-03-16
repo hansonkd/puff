@@ -9,7 +9,6 @@ use crate::types::{Bytes, Text};
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
-use pyo3::{IntoPy, PyObject, Python, ToPyObject};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -56,9 +55,9 @@ impl PythonPubSubClient {
     fn publish_as(
         &self,
         ret_fun: PyObject,
-        connection_id: &PyString,
+        connection_id: Bound<'_, PyString>,
         channel: Text,
-        message: &PyString,
+        message: Bound<'_, PyString>,
     ) -> PyResult<()> {
         let connection_id_bytes = ConnectionId::from_str(connection_id.to_str()?)
             .map_err(|_e| PyTypeError::new_err("Invalid Connection ID"))?;
@@ -76,9 +75,9 @@ impl PythonPubSubClient {
     fn publish_bytes_as(
         &self,
         ret_fun: PyObject,
-        connection_id: &PyString,
+        connection_id: Bound<'_, PyString>,
         channel: Text,
-        message: &PyBytes,
+        message: Bound<'_, PyBytes>,
     ) -> PyResult<()> {
         let connection_id_bytes = ConnectionId::from_str(connection_id.to_str()?)
             .map_err(|_e| PyTypeError::new_err("Invalid Connection ID"))?;
@@ -97,7 +96,7 @@ impl PythonPubSubClient {
         &self,
         py: Python,
         ret_fun: PyObject,
-        connection_id: &PyString,
+        connection_id: Bound<'_, PyString>,
         channel: Text,
         message: PyObject,
     ) -> PyResult<()> {
@@ -116,7 +115,7 @@ impl PythonPubSubClient {
         Ok(())
     }
 
-    fn connection_with_id(&self, py: Python, connection_id: &PyString) -> PyResult<PyObject> {
+    fn connection_with_id(&self, py: Python, connection_id: Bound<'_, PyString>) -> PyResult<PyObject> {
         let connection_id_bytes = ConnectionId::from_str(connection_id.to_str()?)
             .map_err(|_e| PyTypeError::new_err("Invalid Connection ID"))?;
         let (connection, rec) = to_py_error(
@@ -221,7 +220,7 @@ impl PythonPubSubConnection {
         })
     }
 
-    fn publish_bytes(&self, ret_fun: PyObject, channel: Text, message: &PyBytes) {
+    fn publish_bytes(&self, ret_fun: PyObject, channel: Text, message: Bound<'_, PyBytes>) {
         let bytes = Bytes::copy_from_slice(message.as_bytes());
         let conn = self.connection.clone();
         run_python_async(ret_fun, async move {

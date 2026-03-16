@@ -45,7 +45,7 @@ impl Receiver {
                 .recv()
                 .await
                 .ok_or_else(|| PyErr::new::<PyRuntimeError, _>("connection closed"))?;
-            Ok(next)
+            Ok(next.into_any())
         })
     }
 }
@@ -118,7 +118,7 @@ impl<T: AsyncFn> ServerContext<T> {
         }
     }
 
-    pub fn start(&mut self) -> Result<LocalBoxFuture<Result<()>>> {
+    pub fn start(&mut self) -> Result<LocalBoxFuture<'_, Result<()>>> {
         match (
             self.trigger_shutdown_rx.take(),
             self.app.take(),
@@ -153,7 +153,7 @@ impl<T: AsyncFn> ServerContext<T> {
                     let lifespan_startup = Python::with_gil(|py| {
                         let scope = PyDict::new(py);
                         scope.set_item("type", "lifespan.startup")?;
-                        let scope: Py<PyDict> = scope.into();
+                        let scope: Py<PyDict> = scope.unbind();
                         Ok::<Py<PyDict>, PyErr>(scope)
                     })?;
 
@@ -170,9 +170,9 @@ impl<T: AsyncFn> ServerContext<T> {
 
                     if let Some(resp) = lifespan_sender_rx.recv().await {
                         Python::with_gil(|py| {
-                            let dict: &PyDict = resp.into_ref(py);
-                            if let Some(value) = dict.get_item("type") {
-                                let value: &PyString = value.downcast().unwrap();
+                            let dict = resp.into_bound(py);
+                            if let Some(value) = dict.get_item("type")? {
+                                let value: &Bound<'_, PyString> = value.downcast().unwrap();
                                 let value = value.to_str()?;
                                 if value == "lifespan.startup.complete" {
                                     return Ok(());
@@ -191,7 +191,7 @@ impl<T: AsyncFn> ServerContext<T> {
                     let lifespan_shutdown = Python::with_gil(|py| {
                         let scope = PyDict::new(py);
                         scope.set_item("type", "lifespan.shutdown")?;
-                        let scope: Py<PyDict> = scope.into();
+                        let scope: Py<PyDict> = scope.unbind();
                         Ok::<Py<PyDict>, PyErr>(scope)
                     })?;
                     if lifespan_receiver_tx.send(lifespan_shutdown).is_err() {

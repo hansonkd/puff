@@ -24,28 +24,22 @@
 //    IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 //    DEALINGS IN THE SOFTWARE.
 
-use failure::Fail;
 use pyo3::exceptions::PyTypeError;
 use pyo3::{import_exception, PyErr, PyObject};
 
-#[derive(Debug, Fail)]
+#[derive(Debug, thiserror::Error)]
 pub enum HyperJsonError {
-    #[fail(display = "Conversion error: {}", error)]
+    #[error("Conversion error: {error}")]
     InvalidConversion { error: serde_json::Error },
-    #[fail(display = "Python Runtime exception: {}", error)]
+    #[error("Python Runtime exception: {error}")]
     PyErr { error: String },
-    #[fail(display = "Dictionary key is not a string: {:?}", obj)]
+    #[error("Dictionary key is not a string: {obj:?}")]
     DictKeyNotString { obj: PyObject },
-    #[fail(display = "Invalid float: {}", x)]
+    #[error("Invalid float: {x}")]
     InvalidFloat { x: String },
-    #[fail(display = "Invalid type: {}, Error: {}", t, e)]
+    #[error("Invalid type: {t}, Error: {e}")]
     InvalidCast { t: String, e: String },
-    // NoneError doesn't have an impl for `Display`
-    // See https://github.com/rust-lang-nursery/failure/issues/61
-    // See https://github.com/rust-lang/rust/issues/42327#issuecomment-378324282
-    // #[fail(display = "Error: {}", s)]
-    // NoneError { s: String },
-    #[fail(display = "Utf8 error: {}", error)]
+    #[error("Utf8 error: {error}")]
     Utf8Error { error: std::string::FromUtf8Error },
 }
 

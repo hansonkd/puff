@@ -1,4 +1,5 @@
 use anyhow::anyhow;
+use base64::Engine;
 use juniper::{graphql_scalar, FromInputValue, InputValue, ScalarValue, Value as JuniperValue};
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
@@ -75,7 +76,7 @@ impl Binary {
     pub fn from_input(v: &InputValue<AggroScalarValue>) -> Result<Binary, String> {
         match v {
             InputValue::Scalar(AggroScalarValue::Binary(b)) => Ok(Binary(b.clone())),
-            InputValue::Scalar(AggroScalarValue::String(b)) => match base64::decode(b.as_str()) {
+            InputValue::Scalar(AggroScalarValue::String(b)) => match base64::engine::general_purpose::STANDARD.decode(b.as_str()) {
                 Ok(s) => Ok(Binary(Bytes::copy_from_slice(&s))),
                 _ => Err("Invalid base64 string for Binary".to_owned()),
             },
@@ -203,6 +204,7 @@ impl<'de> Deserialize<'de> for AggroScalarValue {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, PartialEq, Clone)]
 pub struct AggroSqlValue(JuniperValue<AggroScalarValue>);
 
@@ -323,7 +325,7 @@ impl Display for AggroScalarValue {
             AggroScalarValue::Long(i) => i.fmt(f),
             AggroScalarValue::Datetime(i) => i.fmt(f),
             AggroScalarValue::Uuid(i) => i.fmt(f),
-            AggroScalarValue::Binary(i) => base64::encode(i.as_slice()).fmt(f),
+            AggroScalarValue::Binary(i) => base64::engine::general_purpose::STANDARD.encode(i.as_slice()).fmt(f),
             AggroScalarValue::Float(i) => i.fmt(f),
             AggroScalarValue::String(i) => i.fmt(f),
             AggroScalarValue::Boolean(i) => i.fmt(f),
@@ -447,7 +449,7 @@ impl ScalarValue for AggroScalarValue {
             Self::Long(i) => S::from(i.to_string()),
             Self::Datetime(i) => S::from(i.to_string()),
             Self::Uuid(i) => S::from(i.to_string()),
-            Self::Binary(i) => S::from(base64::encode(i.as_slice())),
+            Self::Binary(i) => S::from(base64::engine::general_purpose::STANDARD.encode(i.as_slice())),
             Self::Float(f) => S::from(f),
             Self::String(s) => S::from(s.to_string()),
             Self::Boolean(b) => S::from(b),
@@ -468,6 +470,7 @@ impl<'a> From<&'a AggroValue> for AggroScalarValue {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Default, Clone, Copy, Debug)]
 pub struct AggroScalarValueVisitor;
 

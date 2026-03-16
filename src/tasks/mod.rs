@@ -25,8 +25,8 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct GlobalTaskQueue;
 
-impl ToPyObject for GlobalTaskQueue {
-    fn to_object(&self, py: Python<'_>) -> PyObject {
+impl GlobalTaskQueue {
+    pub fn to_object(&self, py: Python<'_>) -> PyObject {
         self.clone().into_py(py)
     }
 }
@@ -62,7 +62,7 @@ impl TaskQueue {
         async_fn: bool,
         trigger: bool,
     ) -> PyResult<()> {
-        let params = pythonize::depythonize(py_params.as_ref(py))
+        let params = pythonize::depythonize(py_params.bind(py))
             .map_err(|_| PyException::new_err("Could not convert python value to json"))?;
         let this_self = self.clone();
         run_python_async(
@@ -128,11 +128,12 @@ pub struct Task {
 #[pymethods]
 impl Task {
     fn task_id(&self, py: Python) -> Py<PyBytes> {
-        PyBytes::new(py, self.id.as_bytes()).into_py(py)
+        PyBytes::new(py, self.id.as_bytes()).unbind()
     }
 
     fn params(&self, py: Python) -> PyResult<PyObject> {
         pythonize::pythonize(py, &self.params)
+            .map(|v| v.unbind())
             .map_err(|_| PyException::new_err("Could not convert json value to to python"))
     }
 }
@@ -183,9 +184,9 @@ pub async fn add_task<T: Into<Text>>(
         pipe.add_command(cmd3).ignore();
     }
 
-    pipe.query_async(&mut *r).await?;
+    pipe.query_async::<()>(&mut *r).await?;
 
-    Python::with_gil(|py| Ok(PyBytes::new(py, &item_key).into_py(py)))
+    Python::with_gil(|py| Ok(PyBytes::new(py, &item_key).unbind()))
 }
 
 fn item_key_lock(task_queue: &TaskQueue, key: &[u8]) -> Vec<u8> {
@@ -278,7 +279,7 @@ pub async fn task_result(task_queue: TaskQueue, item: Vec<u8>) -> PuffResult<Opt
                 ))?
             } else {
                 Some(Python::with_gil(|py| {
-                    pythonize::pythonize(py, &task.result)
+                    pythonize::pythonize(py, &task.result).map(|v| v.unbind())
                 })?)
             }
         }
@@ -311,7 +312,7 @@ pub async fn wait_for_result(
                     ))?
                 } else {
                     return Ok(Some(Python::with_gil(|py| {
-                        pythonize::pythonize(py, &task.result)
+                        pythonize::pythonize(py, &task.result).map(|v| v.unbind())
                     })?));
                 }
             }
@@ -422,7 +423,7 @@ pub async fn next_task(
             .arg("BZPOPMIN")
             .arg(queue_wait_key.as_slice())
             .arg(wait_duration_secs);
-        let _fut = blocking_cmd.query_async::<_, i64>(&mut *r).await;
+        let _fut = blocking_cmd.query_async::<i64>(&mut *r).await;
     }
 }
 
@@ -433,13 +434,13 @@ pub async fn do_loop_iteration(
 ) -> PuffResult<()> {
     let func_and_payload_result: PyResult<_> = Python::with_gil(|py| {
         let cached_obj = get_cached_object(py, task.func_import_path.clone())?;
-        let py_params = pythonize::pythonize(py, &task.params)?;
+        let py_params = pythonize::pythonize(py, &task.params)?.unbind();
         Ok((cached_obj, py_params))
     });
 
     let json_text_res = async {
         let (func, payload) = func_and_payload_result?;
-        if !Python::with_gil(|py| func.as_ref(py).hasattr("__is_puff_task"))? {
+        if !Python::with_gil(|py| func.bind(py).hasattr("__is_puff_task"))? {
             bail!("Task does not have __is_puff_task set.");
         }
         let task_result = if task.async_fn {
@@ -450,14 +451,14 @@ pub async fn do_loop_iteration(
             dispatcher.dispatch1(func, (payload,))?.await??
         };
         let json_value_result =
-            Python::with_gil(|py| pythonize::depythonize(task_result.into_ref(py)))?;
+            Python::with_gil(|py| pythonize::depythonize(&task_result.into_bound(py)))?;
         Ok(json_value_result)
     };
     let job_result = log_puff_error("task-queue-job", json_text_res.await);
     let json_plain_text_result = match to_py_error("task-loop", job_result) {
         Ok(r) => Ok(r),
         Err(e) => Err(Python::with_gil(|py| {
-            let tb = e.traceback(py).map(|tb| tb.format().ok());
+            let tb = e.traceback_bound(py).map(|tb| tb.format().ok());
             format!("{}\n{:?}", e, tb.flatten()).to_text()
         })),
     };
@@ -528,15 +529,14 @@ pub async fn new_task_queue_async<T: IntoConnectionInfo>(
     check: bool,
     pool_size: u32,
 ) -> PuffResult<TaskQueue> {
-    let conn_info = conn.into_connection_info()?;
-    let manager = RedisConnectionManager::new(conn_info.clone())?;
+    let manager = RedisConnectionManager::new(conn)?;
     let pool = Pool::builder().max_size(pool_size).build(manager).await?;
     let local_pool = pool.clone();
     if check {
         info!("Checking TaskQueue connectivity...");
         let check_fut = async {
             let mut conn = local_pool.get().await?;
-            PuffResult::Ok(Cmd::new().arg("PING").query_async(&mut *conn).await?)
+            PuffResult::Ok(Cmd::new().arg("PING").query_async::<()>(&mut *conn).await?)
         };
 
         tokio::time::timeout(Duration::from_secs(5), check_fut).await??;

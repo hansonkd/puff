@@ -19,7 +19,8 @@ use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyBytes, PyDict, PyList, PyString};
 use std::collections::{BTreeMap, HashSet};
 
-use chrono::DateTime;
+use base64::Engine;
+use chrono::{DateTime, NaiveDateTime};
 use futures_util::future::join_all;
 use std::sync::Arc;
 
@@ -31,6 +32,14 @@ use crate::graphql::PuffGraphqlConfig;
 use uuid::Uuid;
 
 static NUMBERS: &'static [&'static str] = &["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+
+fn args_to_py_dict<'py>(py: Python<'py>, args: &BTreeMap<Text, PyObject>) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    for (k, v) in args.iter() {
+        dict.set_item(k.as_str(), v)?;
+    }
+    Ok(dict)
+}
 
 pub struct AggroContext {
     auth: Option<PyObject>,
@@ -151,13 +160,13 @@ pub struct AggroObject {
     pub fields: Arc<BTreeMap<Text, AggroField>>,
 }
 
-fn decode_type(t: &PyAny) -> PyResult<DecodedType> {
+fn decode_type(t: &Bound<'_, PyAny>) -> PyResult<DecodedType> {
     let optional: bool = t.getattr("optional")?.extract()?;
     let type_info_str: Text = t.getattr("type_info")?.extract()?;
     let type_info = match type_info_str.as_str() {
         "List" => {
-            let inner_type_python: &PyAny = t.getattr("inner_type")?.extract()?;
-            AggroTypeInfo::List(Box::new(decode_type(inner_type_python)?))
+            let inner_type_python: Bound<'_, PyAny> = t.getattr("inner_type")?;
+            AggroTypeInfo::List(Box::new(decode_type(&inner_type_python)?))
         }
         "String" => AggroTypeInfo::String,
         "Binary" => AggroTypeInfo::Binary,
@@ -178,8 +187,8 @@ fn decode_type(t: &PyAny) -> PyResult<DecodedType> {
 
 pub fn convert(
     py: Python,
-    schema: &PyAny,
-    type_to_description: &PyAny,
+    schema: &Bound<'_, PyAny>,
+    type_to_description: &Bound<'_, PyAny>,
 ) -> PyResult<(
     Option<PyObject>,
     bool,
@@ -187,8 +196,8 @@ pub fn convert(
     BTreeMap<Text, AggroObject>,
 )> {
     let description = type_to_description.call1((schema,))?;
-    let all_types: &PyDict = description.getattr("all_types")?.extract()?;
-    let input_types: &PyDict = description.getattr("input_types")?.extract()?;
+    let all_types = description.getattr("all_types")?.downcast_into::<PyDict>()?;
+    let input_types = description.getattr("input_types")?.downcast_into::<PyDict>()?;
     let py_auth_function = description.getattr("auth_function")?;
     let py_auth_async: bool = description.getattr("auth_async")?.extract()?;
     let auth_function = if !py_auth_function.is_none() {
@@ -213,16 +222,16 @@ pub fn convert(
     Ok((auth_function, py_auth_async, return_objs, return_inputs))
 }
 
-pub fn convert_obj(name: &str, desc: BTreeMap<String, &PyAny>) -> PyResult<AggroObject> {
+pub fn convert_obj(name: &str, desc: BTreeMap<String, Bound<'_, PyAny>>) -> PyResult<AggroObject> {
     let mut object_fields: BTreeMap<Text, AggroField> = BTreeMap::new();
 
     for (k, field_description) in desc.iter() {
-        let args: &PyDict = field_description.getattr("arguments")?.extract()?;
+        let args = field_description.getattr("arguments")?.downcast_into::<PyDict>()?;
         let mut final_arguments = BTreeMap::new();
 
         for (param_name, param) in args.iter() {
             let arg = AggroArgument {
-                param_type: decode_type(param.getattr("param_type")?)?,
+                param_type: decode_type(&param.getattr("param_type")?)?,
                 default: param.getattr("default")?.extract()?,
             };
             final_arguments.insert(param_name.str()?.to_text(), arg);
@@ -236,7 +245,7 @@ pub fn convert_obj(name: &str, desc: BTreeMap<String, &PyAny>) -> PyResult<Aggro
         let field = AggroField {
             depends_on,
             name: k.into(),
-            return_type: decode_type(field_description.getattr("return_type")?)?,
+            return_type: decode_type(&field_description.getattr("return_type")?)?,
             is_async: field_description.getattr("is_async")?.extract()?,
             producer_method: field_description.getattr("producer")?.extract()?,
             acceptor_method: field_description.getattr("acceptor")?.extract()?,
@@ -286,7 +295,7 @@ impl PyContext {
 
 #[pymethods]
 impl PyContext {
-    fn parent_values(&self, py: Python, names: Vec<&PyString>) -> PyResult<PyObject> {
+    fn parent_values(&self, py: Python, names: Vec<Bound<'_, PyString>>) -> PyResult<PyObject> {
         let rows = to_py_error("Gql Extract", self.extractor.extract_py_values(py, &names))?;
         Ok(rows)
     }
@@ -295,16 +304,17 @@ impl PyContext {
         self.auth.clone()
     }
 
-    fn layer_cache<'a>(&'a self, py: Python<'a>) -> &'a PyDict {
-        self.cache.as_ref(py)
+    fn layer_cache<'a>(&'a self, py: Python<'a>) -> Bound<'a, PyDict> {
+        self.cache.bind(py).clone()
     }
 
     fn connection(&self, py: Python) -> Option<PyObject> {
         self.conn.clone().map(|f| f.into_py(py))
     }
 
-    fn required_columns(&self, py: Python) -> PyObject {
-        self.required_columns.to_object(py)
+    fn required_columns(&self, py: Python) -> PyResult<PyObject> {
+        let list = PyList::new(py, self.required_columns.iter().map(|t| t.as_str()))?;
+        Ok(list.into_py(py))
     }
 }
 
@@ -332,7 +342,7 @@ fn input_to_python(
                 for iv in inner {
                     val_vec.push(input_to_python(py, inner_t, all_inputs, iv)?);
                 }
-                PuffResult::Ok(PyList::new(py, val_vec).into_py(py))
+                PuffResult::Ok(PyList::new(py, val_vec)?.into_py(py))
             }
             _ => bail!("Input non-list to a list input"),
         },
@@ -359,7 +369,7 @@ fn input_to_python(
                     if required.len() > 0 {
                         bail!("Missing required fields {:?}", required)
                     } else {
-                        Ok(val_vec.into_py_dict(py).into_py(py))
+                        Ok(val_vec.into_py_dict(py)?.into_py(py))
                     }
                 } else {
                     bail!("Could not find type {}", inner_t_name)
@@ -382,20 +392,19 @@ fn input_to_python(
         },
         AggroTypeInfo::Binary => match v {
             LookAheadValue::Scalar(AggroScalarValue::String(i)) => {
-                Ok(PyBytes::new(py, &base64::decode(i.as_str())?).into_py(py))
+                Ok(PyBytes::new(py, &base64::engine::general_purpose::STANDARD.decode(i.as_str())?).into_py(py))
             }
             LookAheadValue::Scalar(AggroScalarValue::Binary(i)) => Ok(i.clone().into_py(py)),
             _ => bail!("Binary input expected base64 string or binary"),
         },
         AggroTypeInfo::Datetime => match v {
             LookAheadValue::Scalar(AggroScalarValue::String(i)) => {
-                let py_obj = pyo3_chrono::NaiveDateTime::from(
-                    DateTime::parse_from_rfc3339(i.as_str())?.naive_utc(),
-                );
+                let py_obj: NaiveDateTime =
+                    DateTime::parse_from_rfc3339(i.as_str())?.naive_utc();
                 Ok(py_obj.into_py(py))
             }
             LookAheadValue::Scalar(AggroScalarValue::Datetime(i)) => {
-                let py_obj = pyo3_chrono::NaiveDateTime::from(i.to_chrono().naive_utc());
+                let py_obj: NaiveDateTime = i.to_chrono().naive_utc();
                 Ok(py_obj.into_py(py))
             }
             _ => bail!("Datetime input expected string or datetime"),
@@ -419,14 +428,14 @@ fn input_to_python(
                 for val in vals {
                     v.push(input_to_python(py, t, all_inputs, val)?);
                 }
-                Ok(PyList::new(py, v).into_py(py))
+                Ok(PyList::new(py, v)?.into_py(py))
             }
             LookAheadValue::Object(vals) => {
                 let mut v = BTreeMap::new();
                 for (k, val) in vals {
                     v.insert(k, input_to_python(py, t, all_inputs, val)?);
                 }
-                Ok(v.into_py_dict(py).into_py(py))
+                Ok(v.into_py_dict(py)?.into_py(py))
             }
             _ => bail!("Input non-bool to a bool input"),
         },
@@ -552,8 +561,8 @@ pub async fn do_returned_values_into_stream(
                         children_require,
                     );
                     Python::with_gil(|py| {
-                        let arg_dict = args.into_py_dict(py);
-                        cm.call(py, (py_extractor.clone(),), Some(arg_dict))
+                        let arg_dict = args_to_py_dict(py, args)?;
+                        cm.call_bound(py, (py_extractor.clone(),), Some(&arg_dict))
                     })?
                 } else {
                     let py_dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
@@ -571,15 +580,15 @@ pub async fn do_returned_values_into_stream(
 
                         // Method must be run with lock held to prevent concurrent access to db conn.
                         Python::with_gil(|py| {
-                            let arg_dict = args.into_py_dict(py);
+                            let arg_dict = args_to_py_dict(py, args)?;
                             if aggro_field.is_async {
                                 py_dispatcher.dispatch_asyncio(
                                     cm,
                                     (py_extractor,),
-                                    Some(arg_dict.into_py(py)),
+                                    Some(arg_dict.unbind()),
                                 )
                             } else {
-                                py_dispatcher.dispatch(cm, (py_extractor,), Some(arg_dict))
+                                py_dispatcher.dispatch(cm, (py_extractor,), Some(arg_dict.unbind()))
                             }
                         })?
                     } else {
@@ -591,15 +600,15 @@ pub async fn do_returned_values_into_stream(
                             children_require,
                         );
                         Python::with_gil(|py| {
-                            let arg_dict = args.into_py_dict(py);
+                            let arg_dict = args_to_py_dict(py, args)?;
                             if aggro_field.is_async {
                                 py_dispatcher.dispatch_asyncio(
                                     cm,
                                     (py_extractor,),
-                                    Some(arg_dict.into_py(py)),
+                                    Some(arg_dict.unbind()),
                                 )
                             } else {
-                                py_dispatcher.dispatch(cm, (py_extractor,), Some(arg_dict))
+                                py_dispatcher.dispatch(cm, (py_extractor,), Some(arg_dict.unbind()))
                             }
                         })?
                     };
@@ -609,37 +618,37 @@ pub async fn do_returned_values_into_stream(
             };
 
             let (method_result, method_corr) = Python::with_gil(|py| {
-                let py_res = result.as_ref(py);
-                if let Ok((_elp, q, l)) = py_res.extract::<(&PyAny, &PyString, &PyList)>() {
+                let py_res = result.bind(py);
+                if let Ok((_elp, q, l)) = py_res.extract::<(Bound<'_, PyAny>, Bound<'_, PyString>, Bound<'_, PyList>)>() {
                     let v = l
-                        .into_iter()
+                        .iter()
                         .map(|f| PythonSqlValue::new(f.to_object(py)))
                         .collect::<Vec<_>>();
                     PuffResult::Ok((PythonMethodResult::SqlQuery(q.to_string(), v), None))
                 } else if let Ok((_elp, q, l, parent_cor, child_cor)) =
-                    py_res.extract::<(&PyAny, &PyString, &PyList, Vec<Text>, Vec<Text>)>()
+                    py_res.extract::<(Bound<'_, PyAny>, Bound<'_, PyString>, Bound<'_, PyList>, Vec<Text>, Vec<Text>)>()
                 {
                     let v = l
-                        .into_iter()
+                        .iter()
                         .map(|f| PythonSqlValue::new(f.to_object(py)))
                         .collect::<Vec<_>>();
                     Ok((
                         PythonMethodResult::SqlQuery(q.to_string(), v),
                         Some((parent_cor, child_cor)),
                     ))
-                } else if let Ok((_elp, py_list)) = py_res.extract::<(&PyAny, &PyList)>() {
-                    Ok((PythonMethodResult::PythonList(py_list.into_py(py)), None))
+                } else if let Ok((_elp, py_list)) = py_res.extract::<(Bound<'_, PyAny>, Bound<'_, PyList>)>() {
+                    Ok((PythonMethodResult::PythonList(py_list.unbind()), None))
                 } else if let Ok((_elp, py_list, parent_cor, child_cor)) =
-                    py_res.extract::<(&PyAny, &PyList, Vec<Text>, Vec<Text>)>()
+                    py_res.extract::<(Bound<'_, PyAny>, Bound<'_, PyList>, Vec<Text>, Vec<Text>)>()
                 {
                     Ok((
-                        PythonMethodResult::PythonList(py_list.into_py(py)),
+                        PythonMethodResult::PythonList(py_list.unbind()),
                         Some((parent_cor, child_cor)),
                     ))
                 } else {
                     if aggro_value_is_list {
                         if let Ok(l) = py_res.downcast::<PyList>() {
-                            Ok((PythonMethodResult::PythonList(l.into_py(py)), None))
+                            Ok((PythonMethodResult::PythonList(l.clone().unbind()), None))
                         } else {
                             bail!("Expected to return a list.")
                         }
@@ -647,10 +656,10 @@ pub async fn do_returned_values_into_stream(
                         let parent_len = rows.len();
                         let mut new_v = Vec::with_capacity(parent_len);
                         for _x in 0..parent_len {
-                            new_v.push(py_res.into_py(py));
+                            new_v.push(py_res.to_object(py));
                         }
                         Ok((
-                            PythonMethodResult::PythonList(PyList::new(py, new_v).into_py(py)),
+                            PythonMethodResult::PythonList(PyList::new(py, new_v)?.unbind()),
                             None,
                         ))
                     }
@@ -700,7 +709,7 @@ pub async fn do_returned_values_into_stream(
                         } else {
                             let mut to_compute = Vec::with_capacity(child_fields.len());
                             let new_layer_cache: Py<PyDict> =
-                                Python::with_gil(|py| PyDict::new(py).into_py(py));
+                                Python::with_gil(|py| PyDict::new(py).unbind());
                             for (child, new_lookahead) in child_fields {
                                 let this_layer_cache = new_layer_cache.clone();
                                 let fut = async {
@@ -811,7 +820,7 @@ pub async fn do_returned_values_into_stream(
                             }
                             let mut to_compute = Vec::with_capacity(child_fields.len());
                             let new_layer_cache: Py<PyDict> =
-                                Python::with_gil(|py| PyDict::new(py).into_py(py));
+                                Python::with_gil(|py| PyDict::new(py).unbind());
                             for (child, new_lookahead) in child_fields {
                                 let this_layer_cache = new_layer_cache.clone();
                                 let fut = async {
@@ -939,7 +948,7 @@ pub async fn do_returned_values_into_stream(
 
                 let mut to_compute = Vec::with_capacity(child_fields.len());
                 let new_layer_cache: Py<PyDict> =
-                    Python::with_gil(|py| PyDict::new(py).into_py(py));
+                    Python::with_gil(|py| PyDict::new(py).unbind());
                 for (child, new_lookahead) in child_fields {
                     let this_layer_cache = new_layer_cache.clone();
                     let fut = async {
@@ -1101,7 +1110,7 @@ impl SubscriptionSender {
         let this_sender = self.sender.clone();
         let rows = self.rows.clone();
         let context = self.gql_config.new_context(auth);
-        let layer_cache = PyDict::new(py).into_py(py);
+        let layer_cache = PyDict::new(py).unbind();
         run_python_async(ret_func, async move {
             let mut my_field = this_field;
             my_field.producer_method = Some(new_function);

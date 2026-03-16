@@ -71,7 +71,7 @@ pub struct ServerContext<T: WsgiServerSpawner> {
 }
 
 impl<T: WsgiServerSpawner> ServerContext<T> {
-    pub fn start(&mut self) -> Result<LocalBoxFuture<Result<()>>> {
+    pub fn start(&mut self) -> Result<LocalBoxFuture<'_, Result<()>>> {
         match (self.app.take(), self.server.take()) {
             (Some(app), Some(server)) => {
                 let fut = async move {
@@ -79,7 +79,7 @@ impl<T: WsgiServerSpawner> ServerContext<T> {
                     let (std_err, bytesio) = Python::with_gil(|py| {
                         let std_err = py.import("sys")?.getattr("stderr")?;
                         let bytesio = py.import("io")?.getattr("BytesIO")?;
-                        return PyResult::Ok((std_err.into_py(py), bytesio.into_py(py)));
+                        return PyResult::Ok((std_err.unbind(), bytesio.unbind()));
                     })?;
                     let wsgi_handler = WsgiHandler::new(
                         app.clone(),

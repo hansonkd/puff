@@ -1,4 +1,7 @@
 #![doc = include_str!("../readme.md")]
+#![allow(unexpected_cfgs)]
+#![allow(rustdoc::invalid_codeblock_attributes)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 pub mod context;

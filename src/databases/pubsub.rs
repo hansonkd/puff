@@ -6,6 +6,7 @@ use crate::types::{Bytes, Puff, Text};
 
 use bb8_redis::bb8::Pool;
 use bb8_redis::redis::aio::PubSub;
+use bb8_redis::redis::Client as RedisClient;
 pub use bb8_redis::redis::Cmd;
 use bb8_redis::redis::{AsyncCommands, IntoConnectionInfo, Msg};
 use bb8_redis::RedisConnectionManager;
@@ -80,6 +81,7 @@ impl PubSubMessage {
 #[derive(Clone)]
 pub struct PubSubClient {
     client: Pool<RedisConnectionManager>,
+    redis_client: RedisClient,
     task_name: Text,
     /// Note event sender should be bounded so we don't lose messages.
     events_sender: Arc<Mutex<Option<Sender<PubSubEvent>>>>,
@@ -169,8 +171,7 @@ impl PubSubClient {
                 let inner_client = inner_client.clone();
                 let ready_s = ready_s.clone();
                 let fut = async move {
-                    let client = inner_client.client.dedicated_connection().await?;
-                    let mut pubsub = client.into_pubsub();
+                    let mut pubsub = inner_client.redis_client.get_async_pubsub().await?;
                     {
                         let vec: Vec<Text> = {
                             let mutex_guard = inner_client.channels.lock().unwrap();
@@ -265,7 +266,7 @@ impl PubSubClient {
         connection_id: ConnectionId,
         channel: T,
         body: M,
-    ) -> BoxFuture<PuffResult<()>> {
+    ) -> BoxFuture<'_, PuffResult<()>> {
         let channel_text = channel.into();
         let message = PubSubMessage::new(channel_text.clone(), connection_id, body.into());
 
@@ -316,7 +317,7 @@ impl PubSubConnection {
     }
 
     /// Subscribe to the channel. Queues the command even if you don't await the handle.
-    pub fn subscribe<T: Into<Text>>(&self, channel: T) -> BoxFuture<bool> {
+    pub fn subscribe<T: Into<Text>>(&self, channel: T) -> BoxFuture<'_, bool> {
         let new_sender = self.sender.clone();
         let event = PubSubEvent::Sub(channel.into(), self.instance_id.clone(), new_sender);
         let inner_sender = self.events_sender.clone();
@@ -332,7 +333,7 @@ impl PubSubConnection {
     }
 
     /// Unsubscribe from the channel. Queues the command even if you don't await the handle.
-    pub fn unsubscribe<T: Into<Text>>(&self, channel: T) -> BoxFuture<bool> {
+    pub fn unsubscribe<T: Into<Text>>(&self, channel: T) -> BoxFuture<'_, bool> {
         let event = PubSubEvent::UnSub(channel.into(), self.instance_id.clone());
         let inner_sender = self.events_sender.clone();
         let fut = async move {
@@ -352,7 +353,7 @@ impl PubSubConnection {
         &self,
         channel: T,
         body: M,
-    ) -> BoxFuture<PuffResult<()>> {
+    ) -> BoxFuture<'_, PuffResult<()>> {
         let channel_text = channel.into();
         let message = PubSubMessage::new(
             channel_text.clone(),
@@ -378,6 +379,7 @@ pub async fn new_pubsub_async<T: IntoConnectionInfo>(
     pool_size: u32,
 ) -> PuffResult<PubSubClient> {
     let conn_info = conn.into_connection_info()?;
+    let redis_client = RedisClient::open(conn_info.clone())?;
     let manager = RedisConnectionManager::new(conn_info.clone())?;
     let pool = Pool::builder().max_size(pool_size).build(manager).await?;
     let local_pool = pool.clone();
@@ -385,13 +387,13 @@ pub async fn new_pubsub_async<T: IntoConnectionInfo>(
         info!("Checking PubSub connectivity...");
         let check_fut = async {
             let mut conn = local_pool.get().await?;
-            PuffResult::Ok(Cmd::new().arg("PING").query_async(&mut *conn).await?)
+            PuffResult::Ok(Cmd::new().arg("PING").query_async::<()>(&mut *conn).await?)
         };
 
         tokio::time::timeout(Duration::from_secs(5), check_fut).await??;
         info!("PubSub looks good.");
     }
-    let task_name = format!("pubsub-listener-{}", conn_info.addr).into();
+    let task_name = format!("pubsub-listener-{:?}", conn_info.addr).into();
     let channels = Arc::new(Mutex::new(HashMap::new()));
     let events_sender = Arc::new(Mutex::new(None));
     let client = PubSubClient {
@@ -399,6 +401,7 @@ pub async fn new_pubsub_async<T: IntoConnectionInfo>(
         channels,
         events_sender,
         client: pool,
+        redis_client,
     };
     Ok(client)
 }

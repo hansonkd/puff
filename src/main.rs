@@ -1,7 +1,7 @@
 use axum::http;
 use axum::http::HeaderValue;
 use dotenvy::{dotenv, from_path};
-use hyper::Method;
+use http::Method;
 use puff_rs::graphql::handlers::{handle_graphql_named, handle_subscriptions_named, playground};
 use puff_rs::prelude::*;
 use puff_rs::program::commands::{
@@ -267,11 +267,9 @@ impl<'de> Deserialize<'de> for UserAgent {
                 E: serde::de::Error,
             {
                 use serde::de::Unexpected;
-                let user_agent = axum::headers::UserAgent::from_str(v)
-                    .map_err(|_| E::invalid_value(Unexpected::Str(v), &self))?;
 
                 Ok(UserAgent(
-                    HeaderValue::from_str(user_agent.as_str())
+                    HeaderValue::from_str(v)
                         .map_err(|_| E::invalid_value(Unexpected::Str(v), &self))?,
                 ))
             }

@@ -33,19 +33,17 @@ use error::*;
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBytes, PyDict, PyFloat, PyList, PyTuple};
-use pyo3::wrap_pyfunction;
+use pyo3::types::{PyBytes, PyDict, PyFloat, PyList, PyTuple};
 
 use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{self, Serialize, SerializeMap, SerializeSeq, Serializer};
 
-use crate::types::Bytes;
 
 #[pyfunction]
-pub fn load(py: Python, fp: PyObject, kwargs: Option<&PyDict>) -> PyResult<PyObject> {
+pub fn load(py: Python, fp: PyObject, kwargs: Option<Bound<'_, PyDict>>) -> PyResult<PyObject> {
     // Temporary workaround for
     // https://github.com/PyO3/pyo3/issues/145
-    let io: &PyAny = fp.extract(py)?;
+    let io = fp.bind(py);
 
     // Alternative workaround
     // fp.getattr(py, "seek")?;
@@ -82,7 +80,7 @@ pub fn loads(
     object_hook: Option<PyObject>,
     parse_float: Option<PyObject>,
     parse_int: Option<PyObject>,
-    kwargs: Option<&PyDict>,
+    kwargs: Option<Bound<'_, PyDict>>,
 ) -> PyResult<PyObject> {
     // if let Some(kwargs) = kwargs {
     //     for (key, val) in kwargs.iter() {
@@ -125,13 +123,13 @@ pub fn loads(
 #[pyfunction]
 pub fn loadb(
     py: Python,
-    s: &PyBytes,
+    s: Bound<'_, PyBytes>,
     _encoding: Option<PyObject>,
     _cls: Option<PyObject>,
     _object_hook: Option<PyObject>,
     parse_float: Option<PyObject>,
     parse_int: Option<PyObject>,
-    _kwargs: Option<&PyDict>,
+    _kwargs: Option<Bound<'_, PyDict>>,
 ) -> PyResult<PyObject> {
     run_load_bytes(py, s.as_bytes(), parse_float, parse_int)
 }
@@ -151,7 +149,7 @@ pub fn dumps(
     _separators: Option<PyObject>,
     _default: Option<PyObject>,
     sort_keys: Option<PyObject>,
-    _kwargs: Option<&PyDict>,
+    _kwargs: Option<Bound<'_, PyDict>>,
 ) -> PyResult<PyObject> {
     let s = dump_string(py, obj, indent, sort_keys)?;
 
@@ -173,7 +171,7 @@ pub fn dumpb(
     _separators: Option<PyObject>,
     _default: Option<PyObject>,
     sort_keys: Option<PyObject>,
-    _kwargs: Option<&PyDict>,
+    _kwargs: Option<Bound<'_, PyDict>>,
 ) -> PyResult<PyObject> {
     let s = dump_vec(py, obj, sort_keys)?;
 
@@ -183,9 +181,9 @@ pub fn dumpb(
 pub fn dump_vec(py: Python, obj: PyObject, sort_keys: Option<PyObject>) -> PyResult<Vec<u8>> {
     let v = SerializePyObject {
         py,
-        obj: obj.extract(py)?,
+        obj: obj.into_bound(py),
         sort_keys: match sort_keys {
-            Some(sort_keys) => sort_keys.is_true(py)?,
+            Some(sort_keys) => sort_keys.is_truthy(py)?,
             None => false,
         },
     };
@@ -211,9 +209,9 @@ pub fn dump_string(
 
     let v = SerializePyObject {
         py,
-        obj: obj.extract(py)?,
+        obj: obj.into_bound(py),
         sort_keys: match sort_keys {
-            Some(sort_keys) => sort_keys.is_true(py)?,
+            Some(sort_keys) => sort_keys.is_truthy(py)?,
             None => false,
         },
     };
@@ -246,7 +244,7 @@ pub fn dump(
     separators: Option<PyObject>,
     default: Option<PyObject>,
     sort_keys: Option<PyObject>,
-    kwargs: Option<&PyDict>,
+    kwargs: Option<Bound<'_, PyDict>>,
 ) -> PyResult<PyObject> {
     let s = dumps(
         py,
@@ -262,7 +260,7 @@ pub fn dump(
         sort_keys,
         kwargs,
     )?;
-    let fp_ref: &PyAny = fp.extract(py)?;
+    let fp_ref = fp.bind(py);
     fp_ref.call_method1("write", (s,))?;
     // TODO: Will this always return None?
     Ok(pyo3::Python::None(py))
@@ -270,7 +268,7 @@ pub fn dump(
 
 /// A hyper-fast JSON encoder/decoder written in Rust
 #[pymodule]
-fn hyperjson(_py: Python, m: &PyModule) -> PyResult<()> {
+fn hyperjson(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // See https://github.com/PyO3/pyo3/issues/171
     // Use JSONDecodeError from stdlib until issue is resolved.
     // py_exception!(_hyperjson, JSONDecodeError);
@@ -278,10 +276,10 @@ fn hyperjson(_py: Python, m: &PyModule) -> PyResult<()> {
 
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
 
-    m.add_wrapped(wrap_pyfunction!(load))?;
-    m.add_wrapped(wrap_pyfunction!(loads))?;
-    m.add_wrapped(wrap_pyfunction!(dump))?;
-    m.add_wrapped(wrap_pyfunction!(dumps))?;
+    m.add_function(wrap_pyfunction!(load, m)?)?;
+    m.add_function(wrap_pyfunction!(loads, m)?)?;
+    m.add_function(wrap_pyfunction!(dump, m)?)?;
+    m.add_function(wrap_pyfunction!(dumps, m)?)?;
 
     Ok(())
 }
@@ -331,7 +329,7 @@ pub fn run_load_bytes(
     match seed.deserialize(&mut deserializer) {
         Ok(py_object) => {
             deserializer.end().map_err(|e| {
-                JSONDecodeError::new_err((e.to_string(), Bytes::copy_from_slice(string), 0))
+                JSONDecodeError::new_err((e.to_string(), string.to_vec(), 0))
             })?;
             Ok(py_object)
         }
@@ -340,7 +338,7 @@ pub fn run_load_bytes(
                 if e.is_syntax() {
                     return Err(JSONDecodeError::new_err((
                         format!("Value: {:?}, Error: {:?}", string, err),
-                        Bytes::copy_from_slice(string),
+                        string.to_vec(),
                         0,
                     )));
                 } else {
@@ -362,7 +360,7 @@ pub fn loads_impl(
     _object_hook: Option<PyObject>,
     parse_float: Option<PyObject>,
     parse_int: Option<PyObject>,
-    _kwargs: Option<&PyDict>,
+    _kwargs: Option<Bound<'_, PyDict>>,
 ) -> PyResult<PyObject> {
     let string_result: Result<String, _> = s.extract(py);
     match string_result {
@@ -394,20 +392,20 @@ pub fn loads_impl(
     }
 }
 
-struct SerializePyObject<'p, 'a> {
+struct SerializePyObject<'p> {
     py: Python<'p>,
-    obj: &'a PyAny,
+    obj: Bound<'p, PyAny>,
     sort_keys: bool,
 }
 
-impl<'p, 'a> Serialize for SerializePyObject<'p, 'a> {
+impl<'p> Serialize for SerializePyObject<'p> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         macro_rules! cast {
-            ($f:expr) => {
-                if let Ok(val) = PyTryFrom::try_from(self.obj) {
+            ($pytype:ty, $f:expr) => {
+                if let Ok(val) = self.obj.downcast::<$pytype>() {
                     return $f(val);
                 }
             };
@@ -415,13 +413,13 @@ impl<'p, 'a> Serialize for SerializePyObject<'p, 'a> {
 
         macro_rules! extract {
             ($t:ty) => {
-                if let Ok(val) = <$t as FromPyObject>::extract(self.obj) {
+                if let Ok(val) = self.obj.extract::<$t>() {
                     return val.serialize(serializer);
                 }
             };
         }
 
-        cast!(|x: &PyDict| {
+        cast!(PyDict, |x: &Bound<'_, PyDict>| {
             if self.sort_keys {
                 // TODO: this could be implemented more efficiently by building
                 // a `Vec<Cow<str>, &PyAny>` of the map entries, sorting
@@ -429,14 +427,14 @@ impl<'p, 'a> Serialize for SerializePyObject<'p, 'a> {
                 // buffering every map value into a serde_json::Value.
                 let no_sort_keys = SerializePyObject {
                     py: self.py,
-                    obj: self.obj,
+                    obj: self.obj.clone(),
                     sort_keys: false,
                 };
                 let jv = serde_json::to_value(no_sort_keys).map_err(ser::Error::custom)?;
                 jv.serialize(serializer)
             } else {
                 let mut map = serializer.serialize_map(Some(x.len()))?;
-                for (key, value) in x {
+                for (key, value) in x.iter() {
                     if key.is_none() {
                         map.serialize_key("null")?;
                     } else if let Ok(key) = key.extract::<bool>() {
@@ -452,7 +450,7 @@ impl<'p, 'a> Serialize for SerializePyObject<'p, 'a> {
                     }
                     map.serialize_value(&SerializePyObject {
                         py: self.py,
-                        obj: value,
+                        obj: value.clone(),
                         sort_keys: self.sort_keys,
                     })?;
                 }
@@ -460,23 +458,23 @@ impl<'p, 'a> Serialize for SerializePyObject<'p, 'a> {
             }
         });
 
-        cast!(|x: &PyList| {
+        cast!(PyList, |x: &Bound<'_, PyList>| {
             let mut seq = serializer.serialize_seq(Some(x.len()))?;
-            for element in x {
+            for element in x.iter() {
                 seq.serialize_element(&SerializePyObject {
                     py: self.py,
-                    obj: element,
+                    obj: element.clone(),
                     sort_keys: self.sort_keys,
                 })?
             }
             seq.end()
         });
-        cast!(|x: &PyTuple| {
+        cast!(PyTuple, |x: &Bound<'_, PyTuple>| {
             let mut seq = serializer.serialize_seq(Some(x.len()))?;
-            for element in x {
+            for element in x.iter() {
                 seq.serialize_element(&SerializePyObject {
                     py: self.py,
-                    obj: element,
+                    obj: element.clone(),
                     sort_keys: self.sort_keys,
                 })?
             }
@@ -486,7 +484,7 @@ impl<'p, 'a> Serialize for SerializePyObject<'p, 'a> {
         extract!(String);
         extract!(bool);
 
-        cast!(|x: &PyFloat| x.value().serialize(serializer));
+        cast!(PyFloat, |x: &Bound<'_, PyFloat>| x.value().serialize(serializer));
         extract!(u64);
         extract!(i64);
 

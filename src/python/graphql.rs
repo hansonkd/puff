@@ -84,13 +84,13 @@ impl PythonGraphql {
         &self,
         return_fun: PyObject,
         query: String,
-        variables: &PyDict,
+        variables: Bound<'_, PyDict>,
         conn: Option<&Connection>,
         auth: Option<PyObject>,
     ) -> PyResult<()> {
         let mut hm = HashMap::with_capacity(variables.len());
-        for (k, v) in variables {
-            let variables = to_py_error("GQL Inputs", convert_pyany_to_input(v))?;
+        for (k, v) in variables.iter() {
+            let variables = to_py_error("GQL Inputs", convert_pyany_to_input(&v))?;
             hm.insert(k.to_string(), variables);
         }
         let this_root = self.0.root();
@@ -112,13 +112,13 @@ impl PythonGraphql {
         &self,
         return_fun: PyObject,
         query: String,
-        variables: &PyDict,
+        variables: Bound<'_, PyDict>,
         conn: Option<&Connection>,
         auth: Option<PyObject>,
     ) -> PyResult<()> {
         let mut hm = HashMap::with_capacity(variables.len());
-        for (k, v) in variables {
-            let variables = to_py_error("GQL Inputs", convert_pyany_to_input(v))?;
+        for (k, v) in variables.iter() {
+            let variables = to_py_error("GQL Inputs", convert_pyany_to_input(&v))?;
             hm.insert(k.to_string(), variables);
         }
         let this_root = self.0.root();
@@ -231,7 +231,7 @@ fn convert_execution_response(
         }
 
         pydict.set_item("data", data)?;
-        let r: PyObject = pydict.into_py(py);
+        let r: PyObject = pydict.unbind().into();
         Ok(r)
     })
 }

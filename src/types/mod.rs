@@ -51,8 +51,9 @@ use bb8_redis::redis::{
 pub use bytes_builder::BytesBuilder;
 use chrono::{NaiveDate, DateTime, Utc};
 use pyo3::types::PyBytes;
-use pyo3::{IntoPy, Py, PyAny, PyObject, Python, ToPyObject};
+use pyo3::{IntoPy, Py, PyAny, Python};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use base64::Engine;
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 
@@ -80,7 +81,7 @@ pub struct Bytes(AxumBytes);
 
 impl Debug for Bytes {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        base64::encode(self.as_slice()).fmt(f)
+        base64::engine::general_purpose::STANDARD.encode(self.as_slice()).fmt(f)
     }
 }
 
@@ -102,9 +103,9 @@ impl Serialize for Bytes {
 impl FromRedisValue for Bytes {
     fn from_redis_value(v: &Value) -> RedisResult<Self> {
         match v {
-            Value::Data(v) => Ok(Bytes::copy_from_slice(v.as_slice())),
+            Value::BulkString(v) => Ok(Bytes::copy_from_slice(v.as_slice())),
             Value::Okay => Ok("OK".into()),
-            Value::Status(ref val) => Ok(val.to_string().into()),
+            Value::SimpleString(ref val) => Ok(val.to_string().into()),
             val => Err(RedisError::from((
                 ErrorKind::TypeError,
                 "Response was of incompatible type",
@@ -164,19 +165,13 @@ impl<T: Into<AxumBytes>> From<T> for Bytes {
 
 impl IntoPy<Py<PyBytes>> for Bytes {
     fn into_py(self, py: Python<'_>) -> Py<PyBytes> {
-        PyBytes::new(py, &self).into_py(py)
+        PyBytes::new(py, &self).unbind()
     }
 }
 
 impl IntoPy<Py<PyAny>> for Bytes {
     fn into_py(self, py: Python<'_>) -> Py<PyAny> {
-        PyBytes::new(py, &self).to_object(py)
-    }
-}
-
-impl ToPyObject for Bytes {
-    fn to_object(&self, py: Python<'_>) -> PyObject {
-        self.clone().into_py(py)
+        PyBytes::new(py, &self).into_any().unbind()
     }
 }
 
@@ -211,7 +206,7 @@ impl UtcDateTime {
 
 impl IntoPy<Py<PyAny>> for UtcDateTime {
     fn into_py(self, py: Python<'_>) -> Py<PyAny> {
-        pyo3_chrono::NaiveDateTime::from(self.0.naive_local()).into_py(py)
+        self.0.naive_local().into_py(py)
     }
 }
 
@@ -221,7 +216,7 @@ pub struct UtcDate(NaiveDate);
 
 impl IntoPy<Py<PyAny>> for UtcDate {
     fn into_py(self, py: Python<'_>) -> Py<PyAny> {
-        pyo3_chrono::NaiveDate::from(self.0).into_py(py)
+        self.0.into_py(py)
     }
 }
 

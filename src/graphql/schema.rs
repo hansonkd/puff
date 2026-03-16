@@ -8,7 +8,7 @@ use juniper::{
     Value, ValuesStream,
 };
 use pyo3::types::PyDict;
-use pyo3::{IntoPy, Python, ToPyObject};
+use pyo3::prelude::*;
 
 use crate::errors::{log_puff_error, PuffResult};
 use chrono::{DateTime, Utc};
@@ -465,7 +465,7 @@ impl GraphQLValueAsync<AggroScalarValue> for PuffGqlObject {
                         input_objs,
                         &all_objects,
                     )?;
-                    let d = PyDict::new(py).into_py(py);
+                    let d = PyDict::new(py).unbind();
                     PuffResult::Ok((look_ahead, d))
                 })?;
                 // let field_obj = info.all_objs.get(field.return_type.primary_type.as_str()).unwrap();
@@ -535,8 +535,12 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                 let (look_ahead_fields, args, layer_cache) = Python::with_gil(|py| {
                     let laf =
                         selection_to_fields(py, field, look_ahead_slice, input_objs, &all_objects)?;
-                    let args = laf.arguments().to_object(py);
-                    PuffResult::Ok((laf, args, PyDict::new(py).into_py(py)))
+                    let args_dict = PyDict::new(py);
+                    for (k, v) in laf.arguments().iter() {
+                        args_dict.set_item(k.as_str(), v).expect("Failed to set dict item");
+                    }
+                    let args: PyObject = args_dict.into_py(py);
+                    PuffResult::Ok((laf, args, PyDict::new(py).unbind()))
                 })?;
                 let parents = Arc::new(ExtractorRootNode);
                 let ss = SubscriptionSender::new(
@@ -569,7 +573,7 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                         None,
                     )?;
                 } else {
-                    py_dispatcher.dispatch::<_, &PyDict>(
+                    py_dispatcher.dispatch(
                         acceptor_method,
                         (ss, python_context, args),
                         None,

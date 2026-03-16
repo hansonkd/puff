@@ -30,6 +30,6 @@ async fn my_command() -> PuffResult<ExitCode> {
 async fn background_task(redis: RedisClient) -> PuffResult<Text> {
     let pool = redis.pool();
     let mut conn = pool.get().await?;
-    conn.set("hello", "world").await?;
+    conn.set::<_, _, ()>("hello", "world").await?;
     Ok(conn.get("hello").await?)
 }

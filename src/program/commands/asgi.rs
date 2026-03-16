@@ -104,16 +104,21 @@ async fn start(
     rx: Receiver<()>,
 ) {
     let app = router.into_axum_router(puff_context).fallback(asgi);
-    if let Err(err) = http_configuration
-        .server_builder()
-        .serve(app.into_make_service())
-        .with_graceful_shutdown(async move {
-            if let Err(e) = rx.await {
-                eprintln!("{e}");
+    match http_configuration.tcp_listener().await {
+        Ok(listener) => {
+            if let Err(err) = axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    if let Err(e) = rx.await {
+                        eprintln!("{e}");
+                    }
+                })
+                .await
+            {
+                eprintln!("error running server: {err}");
             }
-        })
-        .await
-    {
-        eprintln!("error running server: {err}");
+        }
+        Err(err) => {
+            eprintln!("error binding listener: {err}");
+        }
     };
 }

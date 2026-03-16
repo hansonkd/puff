@@ -35,14 +35,19 @@ async fn on_upgrade(mut socket: WebSocket) {
             Some(v) = rec.recv() => {
                 let text = v.text().unwrap_or("invalid utf8".into());
                 let msg = format!("{} said {}", v.from(), text);
-                if socket.send(Message::Text(msg)).await.is_err() {
+                if socket.send(Message::Text(msg.into())).await.is_err() {
                     // client disconnected
                     return;
                 }
             },
             Some(msg) = socket.recv() => {
                 if let Ok(msg) = msg {
-                    if conn.publish(channel_name, msg.into_data()).await.is_err() {
+                    let data = match msg {
+                        Message::Text(t) => t.as_bytes().to_vec(),
+                        Message::Binary(b) => b.to_vec(),
+                        _ => continue,
+                    };
+                    if conn.publish(channel_name, data).await.is_err() {
                         break
                     }
                 } else {

@@ -1,4 +1,6 @@
-use axum::extract::{FromRequest, Query, WebSocketUpgrade};
+use axum::body::Body;
+use axum::extract::{FromRequest, Query};
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderMap, Method, Request, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
@@ -22,11 +24,10 @@ use crate::graphql::PuffGraphqlConfig;
 use crate::python::postgres::close_conn;
 use crate::python::{py_obj_to_bytes, PythonDispatcher};
 use async_trait::async_trait;
-use axum::extract::ws::{Message, WebSocket};
 use futures_util::FutureExt;
-use hyper::Body;
 use juniper::futures::{SinkExt, StreamExt, TryStreamExt};
 use juniper_graphql_ws::{ClientMessage, Connection, ConnectionConfig, Schema};
+use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 use pyo3::{IntoPy, PyObject, Python};
 use serde;
@@ -215,8 +216,7 @@ impl TryFromRequest for Request<Body> {
     }
 }
 
-#[async_trait]
-impl<S: Send + Sync> FromRequest<S, Body> for JuniperPuffRequest {
+impl<S: Send + Sync> FromRequest<S> for JuniperPuffRequest {
     type Rejection = (StatusCode, &'static str);
 
     async fn from_request(req: Request<Body>, _state: &S) -> Result<Self, Self::Rejection> {
@@ -256,6 +256,7 @@ impl IntoResponse for JuniperPuffResponse {
 struct AxumMessage(Message);
 
 #[derive(Debug)]
+#[allow(dead_code)]
 enum SubscriptionError {
     Juniper(Infallible),
     Axum(axum::Error),
@@ -289,7 +290,7 @@ pub async fn handle_graphql_socket<S: Schema>(socket: WebSocket, schema: S, cont
     let ws_tx = ws_tx.sink_map_err(SubscriptionError::Axum);
 
     let send_juniper_message_to_axum = juniper_rx
-        .map(|msg| serde_json::to_string(&msg).map(Message::Text))
+        .map(|msg| serde_json::to_string(&msg).map(|s| Message::Text(s.into())))
         .map_err(SubscriptionError::Serde)
         .forward(ws_tx);
 
@@ -313,7 +314,7 @@ where
             .protocols(["graphql-ws"])
             .max_frame_size(1024)
             .max_message_size(1024)
-            .max_send_queue(100)
+
             .on_upgrade(move |socket| handle_graphql_socket(socket, schema, context));
         future::ready(s)
     }
@@ -385,14 +386,16 @@ pub fn handle_graphql_named<T: Into<Text>>(
 
 fn auth_result_to_response(v: &PyObject) -> Result<Option<Response<String>>, Error> {
     Python::with_gil(|py| {
-        if v.as_ref(py).hasattr("is_rejection").unwrap_or_default() {
+        if v.bind(py).hasattr("is_rejection").unwrap_or_default() {
             let status = v.getattr(py, "status")?.extract::<u16>(py)?;
             let message = v.getattr(py, "message")?.extract::<String>(py)?;
             let header_v = v.getattr(py, "headers")?;
-            let headers = header_v.extract::<&PyDict>(py)?;
+            let headers = header_v.bind(py).downcast::<PyDict>()
+                .map_err(|e| anyhow::anyhow!("Expected headers to be a dict: {}", e.to_string()))?;
             let mut r = Response::builder().status(status);
-            for (hn, hv) in headers {
-                r = r.header(hn.extract::<&str>()?, py_obj_to_bytes(hv)?)
+            for (hn, hv) in headers.iter() {
+                let header_name: String = hn.extract()?;
+                r = r.header(header_name, py_obj_to_bytes(&hv)?)
             }
             Ok(Some(r.body(message)?))
         } else {
@@ -406,7 +409,7 @@ async fn auth_result(
     root_node: &PuffGraphqlConfig,
     dispatcher: PythonDispatcher,
 ) -> Result<PyObject, Error> {
-    if let Some(auth) = root_node.auth.clone() {
+    if let Some(auth) = root_node.auth.as_ref().map(|a| Python::with_gil(|py| a.clone_ref(py))) {
         let headers = Python::with_gil(|py| {
             let mut d: HashMap<String, PyObject> = HashMap::with_capacity(headers.len());
             for (hn, hv) in headers {
@@ -462,7 +465,7 @@ pub fn handle_subscriptions_named<N: Into<Text>>(
                         .protocols(["graphql-ws"])
                         .max_frame_size(1024)
                         .max_message_size(1024)
-                        .max_send_queue(100)
+            
                         .on_upgrade(move |socket| {
                             handle_graphql_socket(socket, root_node.root(), new_ctx)
                         });

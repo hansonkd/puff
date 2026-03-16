@@ -11,7 +11,7 @@ use pyo3::types::{PyDict, PyList, PyString};
 use std::collections::HashMap;
 use tokio_postgres::{Column, Row, Statement};
 
-pub fn convert_pyany_to_jupiter(attribute_val: &PyAny) -> AggroValue {
+pub fn convert_pyany_to_jupiter(attribute_val: &Bound<'_, PyAny>) -> AggroValue {
     if attribute_val.is_none() {
         return AggroValue::Null;
     }
@@ -31,20 +31,21 @@ pub fn convert_pyany_to_jupiter(attribute_val: &PyAny) -> AggroValue {
     if let Ok(s) = attribute_val.extract() {
         return AggroValue::Scalar(AggroScalarValue::Float(s));
     }
-    if let Ok(l) = attribute_val.extract::<&PyList>() {
-        return AggroValue::List(l.into_iter().map(|s| convert_pyany_to_jupiter(s)).collect());
+    if let Ok(l) = attribute_val.downcast::<PyList>() {
+        return AggroValue::List(l.iter().map(|s| convert_pyany_to_jupiter(&s)).collect());
     }
-    if let Ok(l) = attribute_val.extract::<&PyDict>() {
+    if let Ok(l) = attribute_val.downcast::<PyDict>() {
         return AggroValue::Object(
-            l.into_iter()
-                .map(|(k, s)| (k.to_string(), convert_pyany_to_jupiter(s)))
+            l.iter()
+                .map(|(k, s)| (k.to_string(), convert_pyany_to_jupiter(&s)))
                 .collect(),
         );
     }
-    let size = attribute_val.dir().len();
+    let dir = attribute_val.dir().expect("Failed to call dir()");
+    let size = dir.len();
     let mut obj = Object::with_capacity(size);
 
-    for v in attribute_val.dir().iter() {
+    for v in dir.iter() {
         if let Ok(s) = v.downcast::<PyString>() {
             let key = s.to_str().expect("Python dir could not unwrap key to str.");
             if !key.starts_with("__") {
@@ -52,7 +53,7 @@ pub fn convert_pyany_to_jupiter(attribute_val: &PyAny) -> AggroValue {
                     .getattr(key)
                     .expect(&format!("Could not get {}", key));
                 if !py_val.is_callable() {
-                    let juniper_val = convert_pyany_to_jupiter(py_val);
+                    let juniper_val = convert_pyany_to_jupiter(&py_val);
                     obj.add_field(key, juniper_val);
                 }
             }
@@ -140,7 +141,7 @@ pub fn convert_postgres_to_juniper(
 pub trait ExtractValues {
     fn len(&self) -> usize;
     fn extract_values(&self, names: &[Text]) -> Result<Vec<Option<Vec<AggroValue>>>>;
-    fn extract_py_values(&self, py: Python, names: &[&PyString]) -> PuffResult<PyObject>;
+    fn extract_py_values(&self, py: Python, names: &[Bound<'_, PyString>]) -> PuffResult<PyObject>;
     fn extract_first(&self) -> Result<Vec<AggroValue>>;
 }
 
@@ -190,7 +191,7 @@ impl ExtractValues for PostgresResultRows {
         Ok(ret_vec)
     }
 
-    fn extract_py_values(&self, py: Python, names: &[&PyString]) -> PuffResult<PyObject> {
+    fn extract_py_values(&self, py: Python, names: &[Bound<'_, PyString>]) -> PuffResult<PyObject> {
         let field_mapping: HashMap<&str, (usize, &Column)> = names
             .iter()
             .flat_map(|field_name| {
@@ -249,7 +250,7 @@ impl ExtractValues for ExtractorRootNode {
     fn extract_values(&self, _names: &[Text]) -> Result<Vec<Option<Vec<AggroValue>>>> {
         bail!("Cannot extract values from the Root")
     }
-    fn extract_py_values(&self, _py: Python, _names: &[&PyString]) -> Result<PyObject> {
+    fn extract_py_values(&self, _py: Python, _names: &[Bound<'_, PyString>]) -> Result<PyObject> {
         bail!("Cannot extract values from the Root")
     }
     fn extract_first(&self) -> Result<Vec<AggroValue>> {
@@ -263,14 +264,14 @@ pub struct PythonResultRows {
 
 impl ExtractValues for PythonResultRows {
     fn len(&self) -> usize {
-        Python::with_gil(|py| self.py_list.as_ref(py).len())
+        Python::with_gil(|py| self.py_list.bind(py).len())
     }
     fn extract_values(&self, names: &[Text]) -> Result<Vec<Option<Vec<AggroValue>>>> {
         Python::with_gil(|py| {
-            let l = self.py_list.as_ref(py);
+            let l = self.py_list.bind(py);
             let mut ret_vec = Vec::with_capacity(l.len());
 
-            for row in l {
+            for row in l.iter() {
                 if row.is_none() {
                     ret_vec.push(None);
                     continue;
@@ -278,7 +279,7 @@ impl ExtractValues for PythonResultRows {
                 let mut row_vec = Vec::with_capacity(names.len());
                 for name in names {
                     let val = if let Ok(d) = row.downcast::<PyDict>() {
-                        d.get_item(name.as_str())
+                        d.get_item(name.as_str())?
                             .ok_or(PyKeyError::new_err(format!(
                                 "Could not find {} in parent",
                                 name
@@ -286,7 +287,7 @@ impl ExtractValues for PythonResultRows {
                     } else {
                         row.getattr(name.as_str())?
                     };
-                    let jupiter_val = convert_pyany_to_jupiter(val);
+                    let jupiter_val = convert_pyany_to_jupiter(&val);
                     row_vec.push(jupiter_val)
                 }
                 ret_vec.push(Some(row_vec));
@@ -295,10 +296,10 @@ impl ExtractValues for PythonResultRows {
         })
     }
 
-    fn extract_py_values(&self, py: Python, names: &[&PyString]) -> PuffResult<PyObject> {
-        let l = self.py_list.as_ref(py);
+    fn extract_py_values(&self, py: Python, names: &[Bound<'_, PyString>]) -> PuffResult<PyObject> {
+        let l = self.py_list.bind(py);
         let final_list = PyList::empty(py);
-        for row in l {
+        for row in l.iter() {
             let row_vec = PyList::empty(py);
             let none = row.is_none();
             for name in names {
@@ -307,7 +308,7 @@ impl ExtractValues for PythonResultRows {
                     continue;
                 }
                 let val = if let Ok(d) = row.downcast::<PyDict>() {
-                    d.get_item(name.to_str()?)
+                    d.get_item(name.to_str()?)?
                         .ok_or(PyKeyError::new_err(format!(
                             "Could not find {} in parent",
                             name.to_string()
@@ -324,14 +325,14 @@ impl ExtractValues for PythonResultRows {
 
     fn extract_first(&self) -> Result<Vec<AggroValue>> {
         Python::with_gil(|py| {
-            let l = self.py_list.as_ref(py);
+            let l = self.py_list.bind(py);
             let mut ret_vec = Vec::with_capacity(l.len());
-            for row in l {
+            for row in l.iter() {
                 if row.is_none() {
                     ret_vec.push(AggroValue::null());
                     continue;
                 }
-                let val = convert_pyany_to_jupiter(row);
+                let val = convert_pyany_to_jupiter(&row);
                 ret_vec.push(val);
             }
             Ok(ret_vec)

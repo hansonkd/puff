@@ -5,8 +5,6 @@ use crate::program::{Runnable, RunnableCommand};
 use crate::types::Text;
 use anyhow::anyhow;
 use clap::{Arg, ArgMatches, Command};
-use hyper::server::conn::AddrIncoming;
-use hyper::server::Builder;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::process::ExitCode;
@@ -105,12 +103,12 @@ impl RunnableCommand for WaitForever {
 
 /// Configuration for how to run an Axum Server.
 pub struct HttpServerConfig {
-    socket_addr: SocketAddr,
+    pub(crate) socket_addr: SocketAddr,
     reuse_port: bool,
 }
 
 impl HttpServerConfig {
-    pub fn server_builder(&self) -> Builder<AddrIncoming> {
+    pub async fn tcp_listener(&self) -> std::io::Result<tokio::net::TcpListener> {
         info!("Serving on http://{}", &self.socket_addr);
         if self.reuse_port {
             let sock = socket2::Socket::new(
@@ -128,12 +126,12 @@ impl HttpServerConfig {
             sock.set_nonblocking(true).unwrap();
             sock.bind(&self.socket_addr.into()).unwrap();
             sock.listen(8192).unwrap();
-            sock.set_keepalive(true).unwrap();
             sock.set_nodelay(true).unwrap();
 
-            axum::Server::from_tcp(sock.into()).unwrap()
+            let std_listener: std::net::TcpListener = sock.into();
+            tokio::net::TcpListener::from_std(std_listener)
         } else {
-            axum::Server::bind(&self.socket_addr)
+            tokio::net::TcpListener::bind(&self.socket_addr).await
         }
     }
 

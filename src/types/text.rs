@@ -7,8 +7,8 @@ use bb8_redis::redis::{
     ErrorKind, FromRedisValue, RedisError, RedisResult, RedisWrite, ToRedisArgs, Value,
 };
 use compact_str::{CompactString, ToCompactString};
-use pyo3::types::PyString;
-use pyo3::{FromPyObject, IntoPy, Py, PyAny, PyObject, PyResult, Python, ToPyObject};
+use pyo3::types::{PyAnyMethods, PyString, PyStringMethods};
+use pyo3::{FromPyObject, IntoPy, Py, PyAny, PyResult, Python};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cmp::Ordering;
@@ -80,13 +80,7 @@ impl Text {
 
 impl IntoPy<Py<PyAny>> for Text {
     fn into_py(self, py: Python<'_>) -> Py<PyAny> {
-        PyString::new(py, self.0.as_str()).into_py(py)
-    }
-}
-
-impl ToPyObject for Text {
-    fn to_object(&self, py: Python<'_>) -> PyObject {
-        self.0.as_str().to_object(py)
+        PyString::new(py, self.0.as_str()).into_any().unbind()
     }
 }
 
@@ -186,7 +180,7 @@ impl FromStr for Text {
 }
 
 impl<'source> FromPyObject<'source> for Text {
-    fn extract(ob: &'source PyAny) -> PyResult<Self> {
+    fn extract_bound(ob: &pyo3::Bound<'source, PyAny>) -> PyResult<Self> {
         let s = ob.downcast::<PyString>()?;
         Ok(Text::from(s.to_str()?))
     }
@@ -249,9 +243,9 @@ impl ToRedisArgs for Text {
 impl FromRedisValue for Text {
     fn from_redis_value(v: &Value) -> RedisResult<Self> {
         match v {
-            Value::Data(ref bytes) => Ok(from_utf8(bytes)?.into()),
+            Value::BulkString(ref bytes) => Ok(from_utf8(bytes)?.into()),
             Value::Okay => Ok("OK".into()),
-            Value::Status(ref val) => Ok(val.to_string().into()),
+            Value::SimpleString(ref val) => Ok(val.to_string().into()),
             val => Err(RedisError::from((
                 ErrorKind::TypeError,
                 "Response was of incompatible type",

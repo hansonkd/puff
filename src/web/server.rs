@@ -46,8 +46,8 @@
 //!     "ok".to_text()
 //! }
 //!
-//! // basic handler that uses an Axum extractor. We must use a FromRequest Extractor as the final argument.
-//! async fn get_user(Path(user_id): Path<String>, _: Request) -> Json<Value> {
+//! // basic handler that uses an Axum extractor.
+//! async fn get_user(Path(user_id): Path<String>) -> Json<Value> {
 //!     Json(json!({ "data": 42 }))
 //! }
 //!
@@ -59,13 +59,11 @@ use std::future::Future;
 use axum::http::Request as AxumRequest;
 use axum::response::{IntoResponse, Response as AxumResponse};
 use axum::{self, Extension};
-use std::net::SocketAddr;
 
-use axum::body::{Body, BoxBody, Bytes};
+use axum::body::{Body, Bytes};
 use axum::handler::Handler;
-use axum::routing::{any_service, on, IntoMakeService, MethodFilter, MethodRouter, Route};
+use axum::routing::{any_service, on, MethodFilter, MethodRouter, Route};
 
-use hyper::server::conn::AddrIncoming;
 use tower_service::Service;
 
 pub use axum::http::StatusCode;
@@ -76,7 +74,7 @@ use crate::types::text::Text;
 
 pub use axum::response::Json;
 pub type Request = AxumRequest<Body>;
-pub type Response = AxumResponse<BoxBody>;
+pub type Response = AxumResponse;
 pub type ResponseBuilder = AxumResponse<()>;
 
 /// Router for building a web application. Uses Axum router underneath and supports using handlers
@@ -201,13 +199,25 @@ where
         Res: IntoResponse,
         H: PuffHandler<T1, S, Res>,
     {
-        self.on(MethodFilter::all(), path, handler)
+        self.on(
+            MethodFilter::CONNECT
+                .or(MethodFilter::DELETE)
+                .or(MethodFilter::GET)
+                .or(MethodFilter::HEAD)
+                .or(MethodFilter::OPTIONS)
+                .or(MethodFilter::PATCH)
+                .or(MethodFilter::POST)
+                .or(MethodFilter::PUT)
+                .or(MethodFilter::TRACE),
+            path,
+            handler,
+        )
     }
 
     pub fn service<TextLike, T>(self, path: TextLike, f: T) -> Self
     where
         TextLike: Into<Text>,
-        T: Service<AxumRequest<Body>, Error = Infallible> + Clone + Send + 'static,
+        T: Service<AxumRequest<Body>, Error = Infallible> + Clone + Send + Sync + 'static,
         T::Response: IntoResponse + 'static,
         T::Future: Send + 'static,
     {
@@ -216,8 +226,8 @@ where
 
     pub fn layer<L>(self, layer: L) -> Self
     where
-        L: tower_layer::Layer<Route> + Send + Clone + 'static,
-        L::Service: Service<Request> + Clone + Send + 'static,
+        L: tower_layer::Layer<Route> + Send + Sync + Clone + 'static,
+        L::Service: Service<Request> + Clone + Send + Sync + 'static,
         <L::Service as Service<Request>>::Response: IntoResponse + 'static,
         <L::Service as Service<Request>>::Error: Into<Infallible> + 'static,
         <L::Service as Service<Request>>::Future: Send + 'static,
@@ -229,13 +239,13 @@ where
         self.0.layer(Extension(puff_context)).clone()
     }
 
-    pub fn into_hyper_server(
+    pub async fn into_serve(
         self,
-        addr: &SocketAddr,
+        listener: tokio::net::TcpListener,
         puff_context: PuffContext,
-    ) -> axum::Server<AddrIncoming, IntoMakeService<axum::RouterService>> {
-        let new_router = self.into_axum_router(puff_context);
-        axum::Server::bind(addr).serve(new_router.into_make_service())
+    ) -> std::io::Result<()> {
+        let new_router = self.into_axum_router(puff_context).with_state(S::default());
+        axum::serve(listener, new_router).await
     }
 }
 
@@ -248,7 +258,7 @@ pub fn body_iter_bytes<
 where
     <I as IntoIterator>::IntoIter: Send + 'static,
 {
-    Body::wrap_stream(futures_util::stream::iter(chunks))
+    Body::from_stream(futures_util::stream::iter(chunks))
 }
 
 pub fn body_bytes<B>(chunks: B) -> Body
@@ -280,9 +290,10 @@ mod tests {
         let rt = Runtime::new().unwrap();
         let puff_context = RealPuffContext::empty(rt.handle().clone());
 
-        let fut = router
+        let mut svc = router
             .into_axum_router(puff_context.clone())
-            .into_service()
+            .with_state(());
+        let fut = svc
             .call(
                 AxumRequest::get("http://localhost/")
                     .body(Body::empty())

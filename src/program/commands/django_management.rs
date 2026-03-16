@@ -42,7 +42,7 @@ impl RunnableCommand for DjangoManagementCommand {
             }
             let management = py.import("puff.contrib.django.management")?;
             let execute_fn = management.getattr("get_management_utility_execute")?;
-            PyResult::Ok((django_args, execute_fn.into_py(py)))
+            PyResult::Ok((django_args, execute_fn.unbind()))
         })?;
 
         let fut = async move {
@@ -51,7 +51,7 @@ impl RunnableCommand for DjangoManagementCommand {
                     py,
                     python_function,
                     (django_args,),
-                    PyDict::new(py),
+                    PyDict::new(py).unbind(),
                 )
             })?;
             let r = res.await??;

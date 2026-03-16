@@ -42,9 +42,9 @@ impl RunnableCommand for PythonCommand {
             let inspect_mod = py.import("inspect")?;
             let f = puff_mod
                 .call_method1("import_string", (self.function_path.clone().into_py(py),))?
-                .into_py(py);
+                .unbind();
             let is_coroutine = inspect_mod
-                .call_method1("iscoroutinefunction", (f.as_ref(py),))?
+                .call_method1("iscoroutinefunction", (f.bind(py),))?
                 .extract::<bool>()?;
             PyResult::Ok((f, is_coroutine))
         })?;
@@ -98,9 +98,9 @@ impl<T: clap::Parser + clap::CommandFactory + Serialize + Sized + 'static> Runna
             let inspect_mod = py.import("inspect")?;
             let f = puff_mod
                 .call_method1("import_string", (self.function_path.clone().into_py(py),))?
-                .into_py(py);
+                .unbind();
             let is_coroutine = inspect_mod
-                .call_method1("iscoroutinefunction", (f.as_ref(py),))?
+                .call_method1("iscoroutinefunction", (f.bind(py),))?
                 .extract::<bool>()?;
             PyResult::Ok((f, is_coroutine))
         })?;
@@ -109,7 +109,7 @@ impl<T: clap::Parser + clap::CommandFactory + Serialize + Sized + 'static> Runna
             info!("Running {}", fp);
             let res = if is_coroutine {
                 Python::with_gil(|py| {
-                    let payload = pythonize::pythonize(py, &c)?;
+                    let payload = pythonize::pythonize(py, &c)?.unbind();
                     context
                         .python_dispatcher()
                         .dispatch_asyncio(python_function, (payload,), None)

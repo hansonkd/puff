@@ -24,7 +24,7 @@ impl MyState {
     }
 }
 
-async fn get_many(key: Text, num: usize) -> PuffResult<Bytes> {
+async fn get_many(key: Text, num: usize) -> PuffResult<PyObject> {
     let pool = with_redis(|r| r.pool());
     let mut builder = BytesBuilder::new();
     let mut queries = Vec::with_capacity(num);
@@ -34,7 +34,7 @@ async fn get_many(key: Text, num: usize) -> PuffResult<Bytes> {
         let pool = pool.clone();
         queries.push(async move {
             let mut conn = pool.get().await?;
-            PuffResult::Ok(Cmd::get(key).query_async::<_, Vec<u8>>(&mut *conn).await?)
+            PuffResult::Ok(Cmd::get(key).query_async::<Vec<u8>>(&mut *conn).await?)
         })
     }
 
@@ -45,11 +45,15 @@ async fn get_many(key: Text, num: usize) -> PuffResult<Bytes> {
         builder.put_slice(res.as_slice());
     }
 
-    Ok(builder.into_bytes())
+    let bytes = builder.into_bytes();
+    Ok(Python::with_gil(|py| pyo3::types::PyBytes::new(py, bytes.as_ref()).into_any().unbind()))
 }
 
 async fn handle_root() -> RequestResult<Bytes> {
-    Ok(get_many("mykey".to_text(), 10).await?)
+    let pool = with_redis(|r| r.pool());
+    let mut conn = pool.get().await.map_err(|e| anyhow::anyhow!("{}", e))?;
+    let result: Vec<u8> = Cmd::get("mykey").query_async(&mut *conn).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+    Ok(Bytes::copy_from_slice(&result))
 }
 
 fn main() -> ExitCode {

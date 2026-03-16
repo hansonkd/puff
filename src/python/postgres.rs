@@ -307,7 +307,7 @@ impl Cursor {
 
         let seqs = if let Some(seq) = seq_of_parameters {
             let mut seqs = Vec::new();
-            for pyparams in seq.as_ref(py).iter()? {
+            for pyparams in seq.bind(py).iter()? {
                 let mut params = Vec::new();
                 for pyparam in pyparams?.iter()? {
                     params.push(PythonSqlValue(pyparam?.into_py(py)));
@@ -336,7 +336,7 @@ impl Cursor {
         py: Python,
         return_func: PyObject,
         operation: String,
-        maybe_params: Option<&PyAny>,
+        maybe_params: Option<Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         if self.get_closed() {
             return Err(OperationalError::new_err("Cursor has closed."));
@@ -363,7 +363,7 @@ impl Cursor {
         Ok(())
     }
 
-    fn callproc(&self, _procname: &PyString, _parameters: Option<&PyList>) {}
+    fn callproc(&self, _procname: Bound<'_, PyString>, _parameters: Option<Bound<'_, PyList>>) {}
 
     fn description(&mut self, return_func: PyObject) {
         let this_self = self.clone();
@@ -411,21 +411,12 @@ pub(crate) fn column_to_python(
 ) -> PyResult<Py<PyAny>> {
     let val = match c.type_().clone() {
         Type::BOOL => row.get::<_, Option<bool>>(ix).into_py(py),
-        Type::TIME => row
-            .get::<_, Option<NaiveTime>>(ix)
-            .map(|f| pyo3_chrono::NaiveTime::from(f))
-            .into_py(py),
-        Type::DATE => row
-            .get::<_, Option<NaiveDate>>(ix)
-            .map(|f| pyo3_chrono::NaiveDate::from(f))
-            .into_py(py),
-        Type::TIMESTAMP => row
-            .get::<_, Option<NaiveDateTime>>(ix)
-            .map(|f| pyo3_chrono::NaiveDateTime::from(f))
-            .into_py(py),
+        Type::TIME => row.get::<_, Option<NaiveTime>>(ix).into_py(py),
+        Type::DATE => row.get::<_, Option<NaiveDate>>(ix).into_py(py),
+        Type::TIMESTAMP => row.get::<_, Option<NaiveDateTime>>(ix).into_py(py),
         Type::TIMESTAMPTZ => row
             .get::<_, Option<DateTime<Utc>>>(ix)
-            .map(|f| pyo3_chrono::NaiveDateTime::from(f.naive_local()))
+            .map(|f| f.naive_local())
             .into_py(py),
         Type::TEXT => row.get::<_, Option<&str>>(ix).into_py(py),
         Type::VARCHAR => row.get::<_, Option<&str>>(ix).into_py(py),
@@ -439,9 +430,9 @@ pub(crate) fn column_to_python(
         Type::FLOAT8 => row.get::<_, Option<f64>>(ix).into_py(py),
         Type::OID => row.get::<_, Option<u32>>(ix).into_py(py),
         Type::BYTEA => row.get::<_, Option<&[u8]>>(ix).into_py(py),
-        Type::UUID => pythonize::pythonize(py, &row.get::<_, Option<Uuid>>(ix))?,
-        Type::JSON => pythonize::pythonize(py, &row.get::<_, Option<serde_json::Value>>(ix))?,
-        Type::JSONB => pythonize::pythonize(py, &row.get::<_, Option<serde_json::Value>>(ix))?,
+        Type::UUID => pythonize::pythonize(py, &row.get::<_, Option<Uuid>>(ix))?.unbind(),
+        Type::JSON => pythonize::pythonize(py, &row.get::<_, Option<serde_json::Value>>(ix))?.unbind(),
+        Type::JSONB => pythonize::pythonize(py, &row.get::<_, Option<serde_json::Value>>(ix))?.unbind(),
         Type::BOOL_ARRAY => row.get::<_, Option<Vec<Option<bool>>>>(ix).into_py(py),
         Type::TEXT_ARRAY => row.get::<_, Option<Vec<Option<&str>>>>(ix).into_py(py),
         Type::VARCHAR_ARRAY => row.get::<_, Option<Vec<Option<&str>>>>(ix).into_py(py),
@@ -454,22 +445,12 @@ pub(crate) fn column_to_python(
         Type::FLOAT8_ARRAY => row.get::<_, Option<Vec<Option<f64>>>>(ix).into_py(py),
         Type::OID_ARRAY => row.get::<_, Option<Vec<Option<u32>>>>(ix).into_py(py),
         Type::BYTEA_ARRAY => row.get::<_, Option<Vec<Option<&[u8]>>>>(ix).into_py(py),
-        Type::UUID_ARRAY => pythonize::pythonize(py, &row.get::<_, Vec<Option<Uuid>>>(ix))?,
+        Type::UUID_ARRAY => pythonize::pythonize(py, &row.get::<_, Vec<Option<Uuid>>>(ix))?.unbind(),
         Type::TIME_ARRAY => row
             .get::<_, Option<Vec<Option<NaiveTime>>>>(ix)
-            .map(|f| {
-                f.into_iter()
-                    .map(|v| v.map(pyo3_chrono::NaiveTime))
-                    .collect::<Vec<_>>()
-            })
             .into_py(py),
         Type::DATE_ARRAY => row
             .get::<_, Option<Vec<Option<NaiveDate>>>>(ix)
-            .map(|f| {
-                f.into_iter()
-                    .map(|v| v.map(pyo3_chrono::NaiveDate::from))
-                    .collect::<Vec<_>>()
-            })
             .into_py(py),
         t => {
             return Err(NotSupportedError::new_err(format!(
@@ -488,7 +469,7 @@ fn row_to_pyton(py: Python, row: Row) -> PyResult<Py<PyTuple>> {
         let val = column_to_python(py, ix, c, &row)?;
         row_vec.push(val)
     }
-    Ok(PyTuple::new(py, row_vec).into_py(py))
+    Ok(PyTuple::new(py, row_vec)?.into_py(py))
 }
 
 enum TxnCommand {
@@ -543,41 +524,39 @@ impl ToSql for PythonSqlValue {
         Self: Sized,
     {
         Python::with_gil(|py| {
-            let obj_ref = self.0.as_ref(py);
+            let obj_ref = self.0.bind(py);
             match ty.clone() {
                 Type::JSON => depythonize::<Option<serde_json::Value>>(obj_ref)?.to_sql(ty, out),
                 Type::JSONB => depythonize::<Option<serde_json::Value>>(obj_ref)?.to_sql(ty, out),
                 Type::TIMESTAMP => obj_ref
-                    .extract::<Option<pyo3_chrono::NaiveDateTime>>()?
-                    .map(|f| f.0)
+                    .extract::<Option<NaiveDateTime>>()?
                     .to_sql(ty, out),
                 Type::TIMESTAMPTZ => obj_ref
-                    .extract::<Option<pyo3_chrono::NaiveDateTime>>()?
-                    .map(|f| f.0)
+                    .extract::<Option<NaiveDateTime>>()?
                     .to_sql(ty, out),
                 Type::BOOL => obj_ref.extract::<Option<bool>>()?.to_sql(ty, out),
                 Type::TEXT => {
-                    let s = obj_ref.extract::<Option<&str>>();
+                    let s = obj_ref.extract::<Option<String>>();
                     match s {
                         Ok(s) => s.to_sql(ty, out),
                         Err(_) => obj_ref.to_string().to_sql(ty, out),
                     }
                 }
-                Type::VARCHAR => obj_ref.extract::<Option<&str>>()?.to_sql(ty, out),
-                Type::NAME => obj_ref.extract::<Option<&str>>()?.to_sql(ty, out),
+                Type::VARCHAR => obj_ref.extract::<Option<String>>()?.to_sql(ty, out),
+                Type::NAME => obj_ref.extract::<Option<String>>()?.to_sql(ty, out),
                 Type::CHAR => obj_ref.extract::<Option<i8>>()?.to_sql(ty, out),
-                Type::UNKNOWN => obj_ref.extract::<Option<&str>>()?.to_sql(ty, out),
+                Type::UNKNOWN => obj_ref.extract::<Option<String>>()?.to_sql(ty, out),
                 Type::INT2 => obj_ref.extract::<Option<i16>>()?.to_sql(ty, out),
                 Type::INT4 => obj_ref.extract::<Option<i32>>()?.to_sql(ty, out),
                 Type::INT8 => obj_ref.extract::<Option<i64>>()?.to_sql(ty, out),
                 Type::FLOAT4 => obj_ref.extract::<Option<f32>>()?.to_sql(ty, out),
                 Type::FLOAT8 => obj_ref.extract::<Option<f64>>()?.to_sql(ty, out),
                 Type::OID => obj_ref.extract::<Option<u32>>()?.to_sql(ty, out),
-                Type::BYTEA => obj_ref.extract::<Option<&[u8]>>()?.to_sql(ty, out),
+                Type::BYTEA => obj_ref.extract::<Option<Vec<u8>>>()?.to_sql(ty, out),
                 Type::BOOL_ARRAY => obj_ref.extract::<Option<Vec<bool>>>()?.to_sql(ty, out),
-                Type::TEXT_ARRAY => obj_ref.extract::<Option<Vec<&str>>>()?.to_sql(ty, out),
-                Type::VARCHAR_ARRAY => obj_ref.extract::<Option<Vec<&str>>>()?.to_sql(ty, out),
-                Type::NAME_ARRAY => obj_ref.extract::<Option<Vec<&str>>>()?.to_sql(ty, out),
+                Type::TEXT_ARRAY => obj_ref.extract::<Option<Vec<String>>>()?.to_sql(ty, out),
+                Type::VARCHAR_ARRAY => obj_ref.extract::<Option<Vec<String>>>()?.to_sql(ty, out),
+                Type::NAME_ARRAY => obj_ref.extract::<Option<Vec<String>>>()?.to_sql(ty, out),
                 Type::CHAR_ARRAY => obj_ref.extract::<Option<Vec<i8>>>()?.to_sql(ty, out),
                 Type::INT2_ARRAY => obj_ref.extract::<Option<Vec<i16>>>()?.to_sql(ty, out),
                 Type::INT4_ARRAY => obj_ref.extract::<Option<Vec<i32>>>()?.to_sql(ty, out),
@@ -585,20 +564,8 @@ impl ToSql for PythonSqlValue {
                 Type::FLOAT4_ARRAY => obj_ref.extract::<Option<Vec<f32>>>()?.to_sql(ty, out),
                 Type::FLOAT8_ARRAY => obj_ref.extract::<Option<Vec<f64>>>()?.to_sql(ty, out),
                 Type::OID_ARRAY => obj_ref.extract::<Option<Vec<u32>>>()?.to_sql(ty, out),
-                Type::BYTEA_ARRAY => obj_ref.extract::<Option<Vec<&[u8]>>>()?.to_sql(ty, out),
+                Type::BYTEA_ARRAY => obj_ref.extract::<Option<Vec<Vec<u8>>>>()?.to_sql(ty, out),
                 t => {
-                    // if let Ok(s) = obj_ref.downcast::<PyString>() {
-                    //     return s.to_str()?.to_sql(ty, out);
-                    // }
-                    // if let Ok(s) = obj_ref.downcast::<PyBytes>() {
-                    //     return s.as_bytes().to_sql(ty, out);
-                    // }
-                    // if let Ok(s) = obj_ref.extract::<i64>() {
-                    //     return s.to_sql(ty, out);
-                    // }
-                    // if let Ok(s) = obj_ref.downcast::<PyFloat>() {
-                    //     return s.extract::<f64>()?.to_sql(ty, out);
-                    // }
                     Err(anyhow!(
                         "Could not convert postgres type {:?} from python {:?}",
                         t,
@@ -799,7 +766,7 @@ fn statement_to_description(statement: &Option<Statement>) -> PyResult<Option<Py
                                 py.None(),
                                 py.None(),
                             ],
-                        );
+                        )?;
                         desc.append(tup)?;
                     }
                     Ok(Some(desc.into_py(py)))
@@ -1228,5 +1195,6 @@ pub fn add_pg_puff_exceptions(py: Python) -> PyResult<()> {
     puff_pg.add("ProgrammingError", py.get_type::<ProgrammingError>())?;
     puff_pg.add("IntegrityError", py.get_type::<IntegrityError>())?;
     puff_pg.add("DataError", py.get_type::<DataError>())?;
-    puff_pg.add("NotSupportedError", py.get_type::<NotSupportedError>())
+    puff_pg.add("NotSupportedError", py.get_type::<NotSupportedError>())?;
+    Ok(())
 }
