@@ -36,7 +36,7 @@ owning_ref = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
-reqwest = { version = "0.12", features = ["json", "cookies", "multipart", "brotli", "gzip"] }
+reqwest = { version = "0.12", features = ["json", "cookies", "multipart", "brotli", "gzip", "stream"] }
 tracing-subscriber = "0.3"
 percent-encoding = "2"
 pyo3 = { version = "0.24", features = ["chrono", "py-clone", "macros"] }
