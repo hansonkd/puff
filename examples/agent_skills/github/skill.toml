@@ -1,0 +1,28 @@
+[skill]
+name = "github"
+description = "Interact with GitHub repositories via the gh CLI"
+version = "1.0.0"
+
+[[tools]]
+name = "list-prs"
+description = "List open pull requests"
+command = "gh pr list --json number,title,author,url"
+output = "json"
+
+[[tools]]
+name = "view-pr"
+description = "View a specific pull request"
+command = "gh pr view"
+args = { number = { type = "int", description = "PR number" } }
+output = "json"
+
+[[tools]]
+name = "create-pr"
+description = "Create a new pull request"
+command = "gh pr create"
+args = { title = { type = "str", description = "PR title" }, body = { type = "str", description = "PR body" } }
+requires_approval = true
+
+[permissions]
+allow = ["gh pr *", "gh issue *", "gh repo view *"]
+deny = ["gh repo delete *"]
