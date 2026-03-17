@@ -137,13 +137,13 @@ impl LlmRequest {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
     pub api_key_env: Option<String>,
     pub base_url: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
     pub default_model: Option<String>,
     #[serde(default)]
@@ -166,7 +166,7 @@ impl Default for LlmConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmCacheConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -175,7 +175,7 @@ pub struct LlmCacheConfig {
     pub strategy: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitConfig {
     pub rpm: Option<u32>,
     pub tpm: Option<u32>,

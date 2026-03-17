@@ -12,6 +12,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tracing::info;
 
+pub use agent::AgentServeCommand;
 pub use asgi::ASGIServerCommand;
 pub use django_management::DjangoManagementCommand;
 pub use http::ServerCommand;
@@ -19,6 +20,7 @@ pub use pytest::PytestCommand;
 pub use python::PythonCommand;
 pub use wsgi::WSGIServerCommand;
 
+pub mod agent;
 pub mod asgi;
 pub mod django_management;
 pub mod http;

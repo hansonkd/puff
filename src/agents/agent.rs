@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::agents::conversation::Conversation;
@@ -13,7 +13,7 @@ use crate::agents::tool::ToolRegistry;
 // AgentConfig
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     pub name: String,
     pub model: String,
@@ -29,7 +29,7 @@ pub struct AgentConfig {
     pub permissions: Option<AgentPermissions>,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentPermissions {
     pub sql: Option<String>,
     pub http: Option<Vec<String>>,

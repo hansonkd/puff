@@ -5,8 +5,8 @@ use http::Method;
 use puff_rs::graphql::handlers::{handle_graphql_named, handle_subscriptions_named, playground};
 use puff_rs::prelude::*;
 use puff_rs::program::commands::{
-    ASGIServerCommand, BasicCommand, DjangoManagementCommand, PytestCommand, PythonCommand,
-    ServerCommand, WSGIServerCommand, WaitForever,
+    ASGIServerCommand, AgentServeCommand, BasicCommand, DjangoManagementCommand, PytestCommand,
+    PythonCommand, ServerCommand, WSGIServerCommand, WaitForever,
 };
 use puff_rs::runtime::{
     GqlOpts, HttpClientOpts, PostgresOpts, PubSubOpts, RedisOpts, TaskQueueOpts,
@@ -44,6 +44,46 @@ struct Config {
     http_client: Vec<HttpClientConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     graphql: Vec<GraphQLConfig>,
+    #[serde(default)]
+    llm: Option<puff_rs::agents::llm::LlmConfig>,
+    #[serde(default)]
+    memory: Option<puff_rs::agents::memory::MemoryConfig>,
+    #[serde(default)]
+    agents: Option<Vec<puff_rs::agents::agent::AgentConfig>>,
+    #[serde(default)]
+    agent_server: Option<AgentServerConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AgentServerConfig {
+    #[serde(default = "default_agent_port")]
+    pub port: u16,
+    #[serde(default)]
+    pub websockets: bool,
+    #[serde(default)]
+    pub graphql: bool,
+    #[serde(default)]
+    pub cors_origins: Vec<String>,
+}
+
+// Serialize impl for AgentServerConfig so it satisfies Config's Serialize derive
+impl Serialize for AgentServerConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("AgentServerConfig", 4)?;
+        state.serialize_field("port", &self.port)?;
+        state.serialize_field("websockets", &self.websockets)?;
+        state.serialize_field("graphql", &self.graphql)?;
+        state.serialize_field("cors_origins", &self.cors_origins)?;
+        state.end()
+    }
+}
+
+fn default_agent_port() -> u16 {
+    8080
 }
 
 #[derive(Serialize, Deserialize)]
@@ -477,6 +517,10 @@ fn help_text() -> String {
             allow_credentials: Some(true),
             max_age_secs: Some(60 * 60 * 24),
         }),
+        llm: None,
+        memory: None,
+        agents: None,
+        agent_server: None,
     };
 
     toml::to_string_pretty(&example_config).unwrap()
@@ -655,6 +699,20 @@ fn main() -> ExitCode {
         for command in commands {
             program = program.command(PythonCommand::new(command.command_name, command.function))
         }
+    }
+
+    if let Some(ref agent_configs) = config.agents {
+        let llm_config = config.llm.clone().unwrap_or_default();
+        let port = config
+            .agent_server
+            .as_ref()
+            .map(|s| s.port)
+            .unwrap_or(8080);
+        program = program.command(AgentServeCommand {
+            agent_configs: agent_configs.clone(),
+            llm_config,
+            port,
+        });
     }
 
     program.run()

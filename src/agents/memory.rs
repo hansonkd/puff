@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::agents::error::AgentError;
 
@@ -22,7 +22,7 @@ fn default_summarize_after() -> u32 {
     50
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryConfig {
     #[serde(default = "default_conversation_backend")]
     pub conversation: String,
