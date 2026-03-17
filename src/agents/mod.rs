@@ -3,10 +3,12 @@ pub mod conversation;
 pub mod error;
 pub mod llm;
 pub mod memory;
+pub mod orchestration;
 pub mod provider;
 pub mod skill;
 pub mod streaming;
 pub mod tool;
+pub mod trace;
 
 pub use agent::{Agent, AgentConfig};
 pub use conversation::Conversation;
