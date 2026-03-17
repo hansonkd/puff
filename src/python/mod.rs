@@ -226,6 +226,7 @@ pub(crate) fn bootstrap_puff_globals(config: RuntimeConfig) -> PuffResult<()> {
         puff_mod.setattr("global_state", global_state)?;
         puff_rust_functions.setattr("read_file_bytes", ReadFileBytes.into_py(py))?;
         puff_rust_functions.setattr("sleep_ms", PySleepMs.into_py(py))?;
+        crate::agents::python_bindings::register_python_classes(&puff_mod)?;
         puff_mod.call_method0("patch_libs")?;
         info!("Finished adding puff to python.");
         PyResult::Ok(())
