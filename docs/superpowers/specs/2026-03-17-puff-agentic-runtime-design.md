@@ -18,7 +18,7 @@ Puff already has the infrastructure:
 
 | Agent Need | Puff Already Has |
 |---|---|
-| Tool execution at speed | Rust functions callable from Python, zero serialization |
+| Tool execution at speed | Rust functions callable from Python, minimal serialization overhead (PyO3 type conversion, no JSON round-trip) |
 | Agent memory (short-term) | Redis, built-in |
 | Agent memory (long-term) | Postgres, built-in (add pgvector) |
 | Multi-agent communication | Pub/Sub, built-in |
@@ -41,6 +41,14 @@ Benefits:
 - **Better memory model** (free-threaded Python uses biased reference counting and per-object locks)
 
 PyO3 0.24, which Puff already uses, has free-threaded support built in.
+
+### Migration: `with_gil` to Free-Threaded
+
+The existing codebase uses `Python::with_gil()` in ~86 call sites across 23 files. Under free-threaded CPython, these become `Python::with_token()` or equivalent — the semantics change from "acquire the GIL" to "prove you have a valid Python thread state." Every call site needs auditing.
+
+**Minimum requirement:** Python 3.13t (free-threaded build) or Python 3.14t+. During the transition period, Puff should support both GIL and free-threaded builds via a compile-time feature flag (`--features free-threaded`). The GIL path preserves backward compatibility; the free-threaded path enables full agent parallelism.
+
+**C extension risk:** Some Python C extensions (numpy, etc.) may not be free-threaded safe. Puff should document known-compatible extensions and provide a runtime check at startup that warns about loaded extensions without free-threaded support.
 
 ### Architecture
 
@@ -205,6 +213,10 @@ command = "gh pr create --title {title} --body {body}"
 args = { title = { type = "str" }, body = { type = "str" } }
 requires_approval = true    # human-in-the-loop for mutations
 
+# Security: all {arg} substitutions are passed as separate process arguments
+# via tokio::process::Command::arg(), NEVER interpolated into a shell string.
+# This prevents shell injection regardless of argument content.
+
 # Whitelist patterns — ONLY these command shapes are allowed
 [permissions]
 allow = [
@@ -252,14 +264,29 @@ agent = Agent(
 )
 ```
 
-Or in `puff.toml`:
+Or in `puff.toml` (full-featured — mirrors the Python API):
 
 ```toml
 [[agents]]
 name = "dev-agent"
 model = "claude-sonnet-4-6"
+system_prompt = "You are a senior developer..."
 skills = ["github", "database", "./skills/custom-tool"]
+tools_module = "my_tools"          # Python module containing @tool functions to load
+
+[agents.memory]
+conversation = "redis"
+long_term = "postgres"
+auto_extract = true
+recall_k = 10
+
+[agents.permissions]
+sql = "read_only"
+http = ["api.stripe.com"]
+filesystem = "none"
 ```
+
+The Python API and TOML config have full feature parity. Python is better for complex setups (dynamic tool lists, programmatic configuration). TOML is better for declarative, version-controlled agent definitions.
 
 ### CLI-First Interface
 
@@ -321,17 +348,17 @@ puff skill info github
 
 Puff's deep stack provides tools out of the box, available as both `@tool` functions and built-in skills:
 
-| Tool | What it does | Backed by |
+| Tool | Signature | Backed by |
 |---|---|---|
-| `puff.tools.sql` | Query databases | Postgres pool |
-| `puff.tools.search` | Semantic vector search | pgvector |
-| `puff.tools.http` | Make HTTP requests | reqwest |
-| `puff.tools.cache` | Read/write cache | Redis |
-| `puff.tools.publish` | Send messages to other agents | Pub/Sub |
-| `puff.tools.enqueue` | Schedule background work | Task Queue |
-| `puff.tools.embed` | Generate embeddings | LLM gateway |
+| `puff.tools.sql` | `sql(query: str, params: list = []) -> list[dict]` | Postgres pool |
+| `puff.tools.search` | `search(query: str, table: str, k: int = 10) -> list[dict]` | pgvector |
+| `puff.tools.http` | `http(method: str, url: str, body: dict = None, headers: dict = None) -> dict` | reqwest |
+| `puff.tools.cache` | `cache_get(key: str) -> str`, `cache_set(key: str, value: str, ttl: int = 0)` | Redis |
+| `puff.tools.publish` | `publish(topic: str, message: str)` | Pub/Sub |
+| `puff.tools.enqueue` | `enqueue(task: str, args: dict = {}, priority: int = 0) -> str` | Task Queue |
+| `puff.tools.embed` | `embed(text: str) -> list[float]`, `embed_batch(texts: list[str]) -> list[list[float]]` | LLM gateway |
 
-Direct Rust calls into infrastructure Puff owns. Zero network hop. Zero serialization.
+Direct Rust calls into infrastructure Puff owns. Zero network hop. Minimal serialization (PyO3 type conversion only).
 
 ### Permissions (per-agent)
 
@@ -380,7 +407,7 @@ CREATE TABLE puff_memories (
     scope       TEXT NOT NULL,       -- 'user', 'agent', 'global'
     scope_id    TEXT,                -- e.g. user_id
     content     TEXT NOT NULL,
-    embedding   VECTOR(1536),
+    embedding   VECTOR,          -- dimension set at table creation based on configured embedding model
     importance  FLOAT DEFAULT 0.5,
     created_at  TIMESTAMPTZ DEFAULT NOW(),
     accessed_at TIMESTAMPTZ DEFAULT NOW()
@@ -631,6 +658,12 @@ def transfer_to(agent_name: str, reason: str):
     puff.conversation.handoff(agent_name, reason=reason)
 ```
 
+**Handoff semantics:**
+- The full conversation history is passed by reference (same conversation ID, same Redis key) to the receiving agent. No copying.
+- The receiving agent's system prompt and context.md are prepended; the handing-off agent's are removed.
+- The original agent's thread terminates after the handoff call returns.
+- The reason string is injected as a system message visible to the receiving agent but not the user.
+
 ### Human-in-the-Loop
 
 ```python
@@ -640,7 +673,12 @@ def request_human_approval(action: str, details: str) -> bool:
     return puff.human.approve(action, details, timeout=3600)
 ```
 
-Sends a WebSocket event, pauses the agent thread, resumes on human response.
+**Protocol:**
+- Puff sends a WebSocket event: `{"type": "human_approval_needed", "action": "...", "details": "...", "request_id": "..."}`.
+- The agent thread blocks on a channel (not a poll loop).
+- The client responds via WebSocket: `{"type": "human_approval_response", "request_id": "...", "approved": true/false}`.
+- On timeout (default 3600s), `approve()` returns `False` and the agent receives a system message: "Human approval timed out."
+- If no WebSocket client is connected, the request is queued in Redis and served when a client connects.
 
 ## 6. Agent Server
 
@@ -698,10 +736,19 @@ secret_env = "PUFF_AUTH_SECRET"
 [puff]
 name = "acme-support"
 
+# Single instance (sugar for default connection):
 [postgres]
 url = "postgresql://localhost/acme"
 enable_pgvector = true
 max_connections = 20
+
+# Multiple named instances also supported (v1-compatible):
+# [[postgres]]
+# name = "primary"
+# url = "postgresql://primary-host/acme"
+# [[postgres]]
+# name = "analytics"
+# url = "postgresql://analytics-host/reporting"
 
 [redis]
 url = "redis://localhost"
@@ -723,6 +770,8 @@ ttl = 3600
 auto_extract = true
 recall_k = 10
 summarize_after = 50
+embedding_model = "text-embedding-3-small"   # determines vector dimensions automatically
+# embedding_dimensions = 1536                # or set explicitly
 
 [agent_server]
 port = 8080
@@ -737,18 +786,20 @@ secret_env = "PUFF_AUTH_SECRET"
 
 ### CLI Commands
 
+All subcommands use singular form consistently:
+
 ```bash
-puff agent <module>:<agent>       # serve an agent
-puff agent ask <agent>            # interactive REPL
-puff agents list                  # list defined agents
-puff agents bench <agent>         # run evaluation suite
-puff skill install <source>       # install a skill from git
-puff skill list                   # list installed skills
-puff skill info <name>            # show skill details
-puff tool <name> [args]           # run a tool directly
-puff memory search <query>        # search long-term memories
-puff memory stats                 # memory usage statistics
-puff usage report --last 7d       # cost/usage report
+puff agent serve <module>:<agent>  # serve an agent
+puff agent ask <agent>             # interactive REPL
+puff agent list                    # list defined agents
+puff agent bench <agent>           # run evaluation suite
+puff skill install <source>        # install a skill from git
+puff skill list                    # list installed skills
+puff skill info <name>             # show skill details
+puff tool <name> [args]            # run a tool directly
+puff memory search <query>         # search long-term memories
+puff memory stats                  # memory usage statistics
+puff usage report --last 7d        # cost/usage report
 ```
 
 ## 7. Observability
@@ -800,11 +851,16 @@ suite = EvalSuite(
         Case(
             input="I was charged twice for order #123",
             expect_tool_calls=["lookup_invoice"],
-            expect_contains="refund",
+            expect_semantic="offers a refund or credit",   # LLM-as-judge evaluation
         ),
         Case(
             input="How do I reset my password?",
             expect_handoff="technical",
+        ),
+        Case(
+            input="What's your return policy?",
+            expect_regex=r"\d+ days",                      # regex assertion
+            expect_no_tool_calls=True,                     # should answer from memory
         ),
     ],
 )
@@ -826,11 +882,15 @@ Total cost: $0.0089
 ## What Changes in the Codebase
 
 ### Removed
-- `src/python/async_python.rs` — greenlet executor (replaced by free-threaded Python threads)
-- Greenlet dependencies from `Cargo.toml`
+- `PyDispatchGreenlet` class and greenlet thread setup from `src/python/mod.rs` (lines ~123-134, ~316-344, ~379-420)
+- Greenlet configuration from `src/runtime/mod.rs` (`greenlets` field, `set_greenlets` method)
+- `greenlets` config key from `src/main.rs`
+- Python `greenlet` package dependency
+
+**Note:** `src/python/async_python.rs` is NOT removed — it contains `AsyncReturn` and `run_python_async`, which are the general-purpose Tokio-to-Python bridge mechanism. These are preserved and adapted for the free-threaded model.
 
 ### Modified
-- `src/python/mod.rs` — new agent Python bindings, free-threaded bootstrap
+- `src/python/mod.rs` — remove greenlet dispatch, add agent Python bindings, free-threaded bootstrap
 - `src/databases/postgres.rs` — add pgvector support
 - `src/web/server.rs` — add agent API endpoints
 - `src/graphql/` — add agent introspection queries
@@ -853,6 +913,87 @@ Total cost: $0.0089
 ### New Dependencies
 - `pgvector` — vector similarity search for Postgres
 - Provider-specific API types (minimal — mostly reqwest + serde)
+
+## 8. Resource Management
+
+### Thread Pool Sizing
+
+Agent threads are real OS threads with Python interpreter state — heavier than bare Rust blocking threads. Under the multi-agent patterns (Router + workers, Supervisor + workers, Parallel), a single conversation can spawn 3-5 threads.
+
+Puff uses a bounded thread pool for agent execution (default: `max_agent_threads = 256`). When the pool is saturated, new conversations queue with backpressure — the HTTP/WebSocket layer returns 503 with a `Retry-After` header.
+
+```toml
+[agent_server]
+max_agent_threads = 256     # bounded pool
+queue_depth = 1024          # max queued conversations before rejecting
+```
+
+**Memory estimate:** Each Python thread stack is ~8MB. At 256 threads, that's ~2GB for thread stacks alone. The actual working set depends on tool payloads and conversation context sizes.
+
+### Stream Forking
+
+When streaming LLM responses to clients, the SSE stream from the provider is parsed in Rust. The forking logic:
+
+1. Rust SSE parser receives each event from the provider.
+2. Text content events are immediately forwarded to the client WebSocket (no Python involved).
+3. Tool call events are buffered in Rust until the tool call is complete (partial JSON is not forwarded).
+4. Once a complete tool call is detected, the stream fork pauses client forwarding and sends the accumulated tool call to the Python agent thread for execution.
+5. After tool execution, the next LLM call resumes the fork.
+
+Backpressure: if the WebSocket client is slow, Rust buffers up to 64KB of text events before applying backpressure to the provider stream read.
+
+## 9. Error Handling
+
+### LLM Call Failures
+- **Transient errors (429, 500, 502, 503):** Automatic retry with exponential backoff (max 3 retries). If a fallback provider is configured, failover after the first retry.
+- **Permanent errors (401, 403):** Propagated immediately to the agent as a `PuffLLMError`. The agent can catch this or let it bubble to the conversation as an error message.
+- **Mid-stream failures:** If a stream drops partway through, the partial response is discarded and the call is retried from scratch. The client receives a `{"type": "retry", "reason": "stream interrupted"}` event.
+
+### Tool Execution Errors
+- Python exceptions in `@tool` functions are caught, serialized as a tool error result, and sent back to the LLM: `{"tool_call_id": "...", "error": "ValueError: invalid order ID"}`. The LLM decides how to recover.
+- CLI tool non-zero exit codes are treated the same way: stderr is captured and returned as the error message.
+- Tool timeouts (default 30s, configurable per-tool) kill the process/thread and return a timeout error to the LLM.
+
+### Infrastructure Failures
+- **Redis unavailable:** Conversation history falls back to in-memory (per-thread). A warning is logged. Long-term memory and auto-extraction still work (Postgres). Cached LLM responses are skipped.
+- **Postgres unavailable:** Agent still functions for conversations (Redis-only mode) but long-term memory, traces, and cost tracking are disabled. Errors are queued and flushed when Postgres reconnects.
+
+### Orchestration Errors
+- **Chain:** If an agent in a chain fails, the chain stops and returns the error with context about which step failed. No partial results are forwarded.
+- **Parallel:** If one agent in a parallel group fails, the others continue. The merge step receives both successful results and error messages, letting the merge LLM call decide how to handle partial failure.
+- **Supervisor:** Worker failures are reported back to the supervisor agent as tool errors. The supervisor decides whether to retry, reassign, or report failure.
+
+## 10. Migration from Puff v1
+
+### Config Compatibility
+
+The existing `puff.toml` format (flat keys: `greenlets`, `wsgi`, `asgi`, `django`, `graphql`, `[[postgres]]` array-of-tables) continues to work in v2 with deprecation warnings. Puff v2 detects the config format version and auto-upgrades:
+
+- `[[postgres]]` array-of-tables with `name` → supported for multiple named connections. The new `[postgres]` singleton is sugar for a single default connection.
+- `[[redis]]` array-of-tables → same treatment.
+- `greenlets = true` → ignored with a deprecation warning ("greenlets replaced by free-threaded Python").
+
+### Existing Commands
+
+All existing commands survive:
+- `puff wsgi`, `puff asgi`, `puff django`, `puff pytest`, `puff python` → unchanged.
+- New agent commands (`puff agent`, `puff skill`, `puff tool`, `puff memory`) are additive.
+- The v2 agent features are opt-in: if your `puff.toml` has no `[[agents]]` or `[llm]` sections, Puff behaves exactly like v1.
+
+### CLI Naming Convention
+
+All CLI subcommands use singular form consistently (following `docker container`, `kubectl get pod` conventions):
+
+```bash
+puff agent serve <module>:<agent>
+puff agent ask <agent>
+puff agent list
+puff agent bench <agent>
+puff skill install <source>
+puff skill list
+puff tool <name> [args]
+puff memory search <query>
+```
 
 ## Design Principles
 
