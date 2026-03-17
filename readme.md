@@ -740,7 +740,7 @@ Puff is designed so that you can build your own version using Puff as a library.
 
 Puff v2 consists of a multithreaded Tokio Runtime with free-threaded Python threads for agent and application code. Each agent runs on a real OS thread — when it calls into Puff for I/O (LLM calls, database queries, Redis), the call crosses into Rust via PyO3, dispatches to Tokio, and the thread blocks on a channel until the result returns. Other agent threads keep running in true parallel.
 
-```
+```text
 ┌──────────────────────────────────────────────────┐
 │                  Tokio Runtime                    │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐       │
