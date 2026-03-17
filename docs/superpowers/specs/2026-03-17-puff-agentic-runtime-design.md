@@ -868,7 +868,7 @@ results = suite.run(model="claude-haiku-4-5")
 ```
 
 ```bash
-$ puff agents bench my_agents:support_desk
+$ puff agent bench my_agents:support_desk
 
 Running 24 eval cases...
   ✓ double-charge lookup    420ms  $0.0003
