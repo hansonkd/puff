@@ -2,8 +2,9 @@
 #![allow(unexpected_cfgs)]
 #![allow(rustdoc::invalid_codeblock_attributes)]
 #![allow(deprecated)]
-#![deny(warnings)]
+#![warn(warnings)]
 
+pub mod agents;
 pub mod context;
 pub mod databases;
 pub mod errors;

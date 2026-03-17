@@ -36,7 +36,7 @@ owning_ref = "0.4"
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
-reqwest = { version = "0.12", features = ["json", "cookies", "multipart", "brotli", "gzip"] }
+reqwest = { version = "0.12", features = ["json", "cookies", "multipart", "brotli", "gzip", "stream"] }
 tracing-subscriber = "0.3"
 percent-encoding = "2"
 pyo3 = { version = "0.24", features = ["chrono", "py-clone", "macros"] }
@@ -53,6 +53,7 @@ tokio-stream = "0.1"
 base64 = "0.22"
 socket2 = { version = "0.5", features = ["all"] }
 thiserror = "2"
+regex = "1"
 tower-http = { version = "0.6", features = ["compression-full", "cors"], optional = true }
 tower = { version = "0.5", optional = true }
 tower-layer = "0.3"
