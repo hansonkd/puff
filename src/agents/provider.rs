@@ -23,6 +23,12 @@ pub trait Provider: Send + Sync {
     /// The full URL to POST streaming chat requests to.
     fn endpoint_url(&self) -> &str;
 
+    /// The full URL to POST embedding requests to.
+    /// Returns `None` if this provider does not support embeddings.
+    fn embeddings_url(&self) -> Option<String> {
+        None
+    }
+
     /// Returns headers required for authentication / versioning.
     fn auth_headers(&self) -> Vec<(String, String)>;
 
@@ -452,6 +458,13 @@ impl OpenAIProvider {
 impl Provider for OpenAIProvider {
     fn name(&self) -> &str {
         &self.provider_name
+    }
+
+    fn embeddings_url(&self) -> Option<String> {
+        Some(format!(
+            "{}/embeddings",
+            self.base_url.trim_end_matches('/')
+        ))
     }
 
     fn build_request_body(&self, request: &LlmRequest) -> serde_json::Value {

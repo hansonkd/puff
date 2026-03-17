@@ -182,6 +182,16 @@ pub struct RateLimitConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Returns `true` when the error message indicates a transient server-side
+/// HTTP failure (500, 502, 503) that is safe to retry.
+fn is_transient_error(msg: &str) -> bool {
+    msg.contains("HTTP 500") || msg.contains("HTTP 502") || msg.contains("HTTP 503")
+}
+
+// ---------------------------------------------------------------------------
 // LlmClient
 // ---------------------------------------------------------------------------
 
@@ -244,14 +254,134 @@ impl LlmClient {
     /// Make a streaming LLM call. Returns an `mpsc::Receiver` that yields
     /// `StreamChunk` values as they arrive from the provider.
     ///
+    /// Retries up to 3 times with exponential backoff (1 s, 2 s, 4 s) on
+    /// rate-limit (429) and transient errors (500, 502, 503). After all
+    /// retries are exhausted the method walks the fallback chain defined in
+    /// `config.fallback` for the requested model.
+    ///
     /// A background `tokio` task is spawned to drive the HTTP request and
     /// parse the SSE stream; the caller consumes chunks from the channel.
     pub async fn stream(
         &self,
         request: LlmRequest,
     ) -> Result<mpsc::Receiver<StreamChunk>, AgentError> {
-        let provider = self.resolve_provider(&request.model)?;
-        let body = provider.build_request_body(&request);
+        // Try primary model with up to 3 retries.
+        match self
+            .stream_with_retries(&request, &request.model.clone(), 3)
+            .await
+        {
+            Ok(rx) => return Ok(rx),
+            Err(primary_err) => {
+                // Attempt each fallback model in order.
+                if let Some(fallbacks) = self.config.fallback.get(&request.model) {
+                    for fallback_model in fallbacks {
+                        match self.stream_with_retries(&request, fallback_model, 1).await {
+                            Ok(rx) => {
+                                tracing::warn!(
+                                    primary = %request.model,
+                                    fallback = %fallback_model,
+                                    "Primary model failed; using fallback"
+                                );
+                                return Ok(rx);
+                            }
+                            Err(_) => continue,
+                        }
+                    }
+                }
+                Err(primary_err)
+            }
+        }
+    }
+
+    /// Try `stream_single_attempt` up to `max_retries + 1` times (initial
+    /// attempt plus up to `max_retries` retries) with exponential backoff.
+    ///
+    /// Only `LlmRateLimited` and transient HTTP errors are retried; all other
+    /// errors are returned immediately without further attempts.
+    async fn stream_with_retries(
+        &self,
+        request: &LlmRequest,
+        model: &str,
+        max_retries: u32,
+    ) -> Result<mpsc::Receiver<StreamChunk>, AgentError> {
+        let mut last_error: Option<AgentError> = None;
+
+        for attempt in 0..=max_retries {
+            if attempt > 0 {
+                // Exponential backoff: 1 s, 2 s, 4 s, ...
+                let delay = std::time::Duration::from_secs(1 << (attempt - 1));
+                tracing::debug!(
+                    attempt,
+                    delay_secs = delay.as_secs(),
+                    model,
+                    "Waiting before retry"
+                );
+                tokio::time::sleep(delay).await;
+            }
+
+            match self.stream_single_attempt(request, model).await {
+                Ok(rx) => return Ok(rx),
+                Err(e) => match &e {
+                    AgentError::LlmRateLimited { .. } => {
+                        tracing::warn!(
+                            attempt = attempt + 1,
+                            max = max_retries + 1,
+                            model,
+                            "Rate limited, will retry"
+                        );
+                        last_error = Some(e);
+                    }
+                    AgentError::LlmError(msg) if is_transient_error(msg) => {
+                        tracing::warn!(
+                            attempt = attempt + 1,
+                            max = max_retries + 1,
+                            model,
+                            error = %msg,
+                            "Transient error, will retry"
+                        );
+                        last_error = Some(e);
+                    }
+                    // Non-retryable -- propagate immediately.
+                    _ => return Err(e),
+                },
+            }
+        }
+
+        Err(last_error.expect("loop executed at least one iteration"))
+    }
+
+    /// Single, unrepeated attempt to stream from `model`. Resolves the
+    /// provider for `model`, builds the HTTP request, checks the response
+    /// status, spawns the SSE task, and returns the receiver channel.
+    ///
+    /// When `model` differs from `request.model` (i.e. a fallback is being
+    /// used) the request body is rebuilt with the fallback model name so that
+    /// the provider receives the correct model identifier.
+    async fn stream_single_attempt(
+        &self,
+        request: &LlmRequest,
+        model: &str,
+    ) -> Result<mpsc::Receiver<StreamChunk>, AgentError> {
+        let provider = self.resolve_provider(model)?;
+
+        // If we're targeting a different model (fallback), create an adjusted
+        // request so the provider serialises the right model name.
+        let effective_request;
+        let req: &LlmRequest = if model != request.model {
+            effective_request = LlmRequest {
+                model: model.to_string(),
+                messages: request.messages.clone(),
+                tools: request.tools.clone(),
+                max_tokens: request.max_tokens,
+                temperature: request.temperature,
+                system: request.system.clone(),
+            };
+            &effective_request
+        } else {
+            request
+        };
+
+        let body = provider.build_request_body(req);
         let url = provider.endpoint_url().to_string();
         let auth = provider.auth_headers();
 
@@ -331,6 +461,132 @@ impl LlmClient {
         });
 
         Ok(rx)
+    }
+
+    /// Generate embedding vectors for multiple texts in a single API call.
+    ///
+    /// Returns one `Vec<f32>` per input text, in the same order.
+    /// Anthropic does not support embeddings; use an OpenAI-compatible model
+    /// (e.g. `"text-embedding-3-small"` or `"ollama/nomic-embed-text"`).
+    pub async fn embed_batch(
+        &self,
+        model: &str,
+        texts: &[String],
+    ) -> Result<Vec<Vec<f32>>, AgentError> {
+        let provider = self.resolve_provider(model)?;
+
+        if provider.name() == "anthropic" {
+            return Err(AgentError::LlmError(
+                "Anthropic does not support embeddings. Use an OpenAI-compatible embedding model."
+                    .to_string(),
+            ));
+        }
+
+        let url = provider.embeddings_url().ok_or_else(|| {
+            AgentError::LlmError(format!(
+                "Provider '{}' does not support embeddings",
+                provider.name()
+            ))
+        })?;
+
+        let auth = provider.auth_headers();
+
+        let body = serde_json::json!({
+            "model": model,
+            "input": texts,
+        });
+
+        let mut req_builder = self
+            .http_client
+            .post(&url)
+            .header("Content-Type", "application/json");
+
+        for (key, value) in &auth {
+            req_builder = req_builder.header(key, value);
+        }
+
+        let response = req_builder
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AgentError::LlmError(format!("HTTP request failed: {e}")))?;
+
+        let status = response.status();
+
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let retry_after = response
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(|secs| secs * 1000);
+
+            return Err(AgentError::LlmRateLimited {
+                provider: provider.name().to_string(),
+                retry_after_ms: retry_after,
+            });
+        }
+
+        if !status.is_success() {
+            let error_body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "failed to read error body".to_string());
+            return Err(AgentError::LlmError(format!(
+                "HTTP {}: {}",
+                status, error_body
+            )));
+        }
+
+        let json: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| AgentError::LlmError(format!("failed to parse embeddings response: {e}")))?;
+
+        let data = json
+            .get("data")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                AgentError::LlmError("embeddings response missing 'data' array".to_string())
+            })?;
+
+        let embeddings = data
+            .iter()
+            .map(|item| {
+                item.get("embedding")
+                    .and_then(|v| v.as_array())
+                    .ok_or_else(|| {
+                        AgentError::LlmError(
+                            "embedding item missing 'embedding' field".to_string(),
+                        )
+                    })
+                    .and_then(|arr| {
+                        arr.iter()
+                            .map(|v| {
+                                v.as_f64()
+                                    .map(|f| f as f32)
+                                    .ok_or_else(|| {
+                                        AgentError::LlmError(
+                                            "embedding value is not a number".to_string(),
+                                        )
+                                    })
+                            })
+                            .collect::<Result<Vec<f32>, AgentError>>()
+                    })
+            })
+            .collect::<Result<Vec<Vec<f32>>, AgentError>>()?;
+
+        Ok(embeddings)
+    }
+
+    /// Generate an embedding vector for a single text string.
+    ///
+    /// Delegates to [`embed_batch`] with a single-element slice.
+    pub async fn embed(&self, model: &str, text: &str) -> Result<Vec<f32>, AgentError> {
+        let mut results = self.embed_batch(model, &[text.to_string()]).await?;
+        results
+            .pop()
+            .ok_or_else(|| AgentError::LlmError("empty embeddings response".to_string()))
     }
 
     /// Make a blocking (non-streaming) LLM call that collects the full
@@ -446,5 +702,83 @@ impl LlmClient {
             stop_reason,
             model,
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ------------------------------------------------------------------
+    // is_transient_error
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn transient_error_matches_500() {
+        assert!(is_transient_error("HTTP 500: Internal Server Error"));
+    }
+
+    #[test]
+    fn transient_error_matches_502() {
+        assert!(is_transient_error("HTTP 502: Bad Gateway"));
+    }
+
+    #[test]
+    fn transient_error_matches_503() {
+        assert!(is_transient_error("HTTP 503: Service Unavailable"));
+    }
+
+    #[test]
+    fn transient_error_does_not_match_400() {
+        assert!(!is_transient_error("HTTP 400: Bad Request"));
+    }
+
+    #[test]
+    fn transient_error_does_not_match_401() {
+        assert!(!is_transient_error("HTTP 401: Unauthorized"));
+    }
+
+    #[test]
+    fn transient_error_does_not_match_404() {
+        assert!(!is_transient_error("HTTP 404: Not Found"));
+    }
+
+    #[test]
+    fn transient_error_does_not_match_empty() {
+        assert!(!is_transient_error(""));
+    }
+
+    #[test]
+    fn transient_error_does_not_match_generic_message() {
+        assert!(!is_transient_error("something went wrong"));
+    }
+
+    // ------------------------------------------------------------------
+    // LlmConfig fallback field
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn llm_config_default_has_empty_fallback() {
+        let config = LlmConfig::default();
+        assert!(config.fallback.is_empty());
+    }
+
+    #[test]
+    fn llm_config_fallback_roundtrips_through_serde() {
+        let toml_src = r#"
+            [fallback]
+            "claude-sonnet-4-6" = ["gpt-4o", "gpt-4o-mini"]
+        "#;
+
+        let config: LlmConfig = toml::from_str(toml_src).expect("parse failed");
+        let fallbacks = config
+            .fallback
+            .get("claude-sonnet-4-6")
+            .expect("key missing");
+        assert_eq!(fallbacks, &["gpt-4o", "gpt-4o-mini"]);
     }
 }
