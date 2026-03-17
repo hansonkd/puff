@@ -473,14 +473,16 @@ impl LlmClient {
         model: &str,
         texts: &[String],
     ) -> Result<Vec<Vec<f32>>, AgentError> {
-        let provider = self.resolve_provider(model)?;
-
-        if provider.name() == "anthropic" {
+        // Reject Anthropic models before provider resolution so that a missing
+        // ANTHROPIC_API_KEY env var does not shadow the real error.
+        if resolve_provider_for_model(model) == "anthropic" {
             return Err(AgentError::LlmError(
                 "Anthropic does not support embeddings. Use an OpenAI-compatible embedding model."
                     .to_string(),
             ));
         }
+
+        let provider = self.resolve_provider(model)?;
 
         let url = provider.embeddings_url().ok_or_else(|| {
             AgentError::LlmError(format!(
@@ -780,5 +782,31 @@ mod tests {
             .get("claude-sonnet-4-6")
             .expect("key missing");
         assert_eq!(fallbacks, &["gpt-4o", "gpt-4o-mini"]);
+    }
+
+    // ------------------------------------------------------------------
+    // embed_batch
+    // ------------------------------------------------------------------
+
+    /// embed_batch must return a clear error for Anthropic models without
+    /// requiring a real API key to be set in the environment.
+    #[tokio::test]
+    async fn test_embed_batch_anthropic_returns_error() {
+        let client = LlmClient::new(LlmConfig::default()).expect("failed to build LlmClient");
+
+        let result = client
+            .embed_batch("claude-3-opus", &["hello world".to_string()])
+            .await;
+
+        assert!(result.is_err(), "expected an error for Anthropic embeddings");
+        match result.unwrap_err() {
+            AgentError::LlmError(msg) => {
+                assert!(
+                    msg.contains("Anthropic does not support embeddings"),
+                    "unexpected error message: {msg}"
+                );
+            }
+            other => panic!("expected LlmError, got: {other:?}"),
+        }
     }
 }
