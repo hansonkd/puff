@@ -1,4 +1,6 @@
 pub mod error;
+pub mod llm;
+pub mod streaming;
 
 pub use error::AgentError;
 
