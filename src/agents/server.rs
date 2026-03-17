@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use axum::extract::ws::{Message as WsMessage, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -10,7 +12,9 @@ use tokio::sync::RwLock;
 
 use crate::agents::agent::Agent;
 use crate::agents::conversation::Conversation;
-use crate::agents::llm::LlmClient;
+use crate::agents::llm::{
+    ContentBlock, LlmClient, LlmRequest, Message, MessageContent, Role, StreamChunk, ToolCall,
+};
 
 // ---------------------------------------------------------------------------
 // Shared state
@@ -73,6 +77,7 @@ pub fn agent_router(state: Arc<AgentServerState>) -> axum::Router {
         )
         .route("/api/agents", get(list_agents))
         .route("/health", get(health_check))
+        .route("/ws/conversations/{id}", get(ws_conversation))
         .with_state(state)
 }
 
@@ -210,4 +215,459 @@ async fn health_check(
         status: "ok".to_string(),
         agents: state.agents.len(),
     })
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket streaming handler
+// ---------------------------------------------------------------------------
+
+/// Upgrade handler: accepts the WebSocket upgrade request and hands off to
+/// `handle_ws` once the connection is established.
+async fn ws_conversation(
+    ws: WebSocketUpgrade,
+    Path(id): Path<String>,
+    State(state): State<Arc<AgentServerState>>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_ws(socket, id, state))
+}
+
+/// Human-in-the-loop approval timeout (seconds).
+const APPROVAL_TIMEOUT_SECS: u64 = 3600;
+
+/// Helper: send a JSON value over the WebSocket, ignoring send errors (the
+/// outer loop will notice the disconnect on the next recv).
+async fn ws_send_json(socket: &mut WebSocket, value: serde_json::Value) {
+    let _ = socket
+        .send(WsMessage::Text(value.to_string().into()))
+        .await;
+}
+
+/// State for accumulating an in-flight tool call from streaming chunks.
+struct PendingToolCall {
+    id: String,
+    name: String,
+    json_buf: String,
+}
+
+/// Core WebSocket loop.  For each text message received from the client the
+/// server:
+///
+/// 1. Parses the JSON payload for `message` and (optional) `agent` fields.
+/// 2. Looks up or creates the conversation identified by `conv_id`.
+/// 3. Builds an LLM request and calls `llm_client.stream()`.
+/// 4. Forwards every `StreamChunk` to the client immediately as a JSON
+///    WebSocket message.
+/// 5. When the LLM requests tool calls, executes them (stub) and loops back
+///    to call the LLM again with the results.
+/// 6. When a tool has `requires_approval = true`, sends a
+///    `human_approval_needed` event and waits (up to 1 h) for the client's
+///    `human_approval_response` before executing or skipping the tool.
+async fn handle_ws(mut socket: WebSocket, conv_id: String, state: Arc<AgentServerState>) {
+    while let Some(Ok(msg)) = socket.recv().await {
+        let text = match msg {
+            WsMessage::Text(t) => t.to_string(),
+            WsMessage::Close(_) => return,
+            // Ignore binary / ping / pong frames.
+            _ => continue,
+        };
+
+        // --- Parse client message -------------------------------------------
+        let parsed: serde_json::Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(e) => {
+                ws_send_json(
+                    &mut socket,
+                    serde_json::json!({"type": "error", "message": e.to_string()}),
+                )
+                .await;
+                continue;
+            }
+        };
+
+        // Handle human_approval_response messages (unexpected outside the
+        // approval flow — just ignore them here).
+        if parsed.get("type").and_then(|v| v.as_str()) == Some("human_approval_response") {
+            continue;
+        }
+
+        let user_message = parsed["message"].as_str().unwrap_or("").to_string();
+        let agent_name_opt = parsed["agent"].as_str().map(String::from);
+
+        // --- Look up or create the conversation ------------------------------
+        let agent_name = {
+            // Try to get the agent name from the existing conversation first,
+            // falling back to the one supplied in the request payload.
+            let convs = state.conversations.read().await;
+            if let Some(conv) = convs.get(&conv_id) {
+                conv.agent_name.clone()
+            } else {
+                match agent_name_opt {
+                    Some(n) => n,
+                    None => {
+                        ws_send_json(
+                            &mut socket,
+                            serde_json::json!({
+                                "type": "error",
+                                "message": "No conversation found and no 'agent' field provided"
+                            }),
+                        )
+                        .await;
+                        continue;
+                    }
+                }
+            }
+        };
+
+        // Validate the agent exists before taking the write lock.
+        if !state.agents.contains_key(&agent_name) {
+            ws_send_json(
+                &mut socket,
+                serde_json::json!({
+                    "type": "error",
+                    "message": format!("Agent '{}' not found", agent_name)
+                }),
+            )
+            .await;
+            continue;
+        }
+
+        // Insert or update the conversation (add the user message).
+        {
+            let mut convs = state.conversations.write().await;
+            let conv = convs
+                .entry(conv_id.clone())
+                .or_insert_with(|| Conversation::new(&agent_name).with_id(conv_id.clone()));
+            conv.add_user_message(&user_message);
+        }
+
+        // --- Streaming agent turn -------------------------------------------
+        // Run the full agentic loop (LLM call → tool execution → repeat) while
+        // streaming every token/event back to the client in real-time.
+        let max_rounds: usize = 10;
+
+        'agent_loop: for _round in 0..max_rounds {
+            // Snapshot the current messages for the LLM request.
+            let (model, messages, tool_defs, system_prompt) = {
+                let convs = state.conversations.read().await;
+                let conv = match convs.get(&conv_id) {
+                    Some(c) => c,
+                    None => break 'agent_loop,
+                };
+                let agent = state.agents.get(&agent_name).unwrap(); // validated above
+                (
+                    agent.config.model.clone(),
+                    conv.messages.clone(),
+                    agent.tools.definitions(),
+                    agent.build_system_prompt(),
+                )
+            };
+
+            let mut llm_req = LlmRequest::new(model, messages);
+            if !system_prompt.is_empty() {
+                llm_req = llm_req.with_system(system_prompt);
+            }
+            if !tool_defs.is_empty() {
+                llm_req = llm_req.with_tools(tool_defs);
+            }
+
+            // Call the streaming API.
+            let mut rx = match state.llm_client.stream(llm_req).await {
+                Ok(r) => r,
+                Err(e) => {
+                    ws_send_json(
+                        &mut socket,
+                        serde_json::json!({"type": "error", "message": e.to_string()}),
+                    )
+                    .await;
+                    break 'agent_loop;
+                }
+            };
+
+            // Accumulate the full response text and tool calls so we can
+            // update the conversation history after the stream ends.
+            let mut response_text = String::new();
+            let mut pending_tool_calls: Vec<PendingToolCall> = Vec::new();
+            let mut completed_tool_calls: Vec<ToolCall> = Vec::new();
+            let mut current_tool_idx: Option<usize> = None;
+            let mut got_tool_use = false;
+
+            // Forward each chunk to the WebSocket client.
+            while let Some(chunk) = rx.recv().await {
+                match chunk {
+                    StreamChunk::TextDelta(ref delta) => {
+                        response_text.push_str(delta);
+                        ws_send_json(
+                            &mut socket,
+                            serde_json::json!({"type": "text", "content": delta}),
+                        )
+                        .await;
+                    }
+                    StreamChunk::ToolCallStart { ref id, ref name } => {
+                        got_tool_use = true;
+                        let idx = pending_tool_calls.len();
+                        pending_tool_calls.push(PendingToolCall {
+                            id: id.clone(),
+                            name: name.clone(),
+                            json_buf: String::new(),
+                        });
+                        current_tool_idx = Some(idx);
+                        ws_send_json(
+                            &mut socket,
+                            serde_json::json!({
+                                "type": "tool_call",
+                                "name": name,
+                                "status": "running"
+                            }),
+                        )
+                        .await;
+                    }
+                    StreamChunk::ToolCallDelta {
+                        ref id,
+                        ref input_json,
+                    } => {
+                        let target = if !id.is_empty() {
+                            pending_tool_calls.iter_mut().find(|tc| tc.id == *id)
+                        } else {
+                            current_tool_idx.and_then(|i| pending_tool_calls.get_mut(i))
+                        };
+                        if let Some(tc) = target {
+                            tc.json_buf.push_str(input_json);
+                        }
+                    }
+                    StreamChunk::ToolCallEnd { ref id } => {
+                        let target_idx = if !id.is_empty() {
+                            pending_tool_calls.iter().position(|tc| tc.id == *id)
+                        } else {
+                            current_tool_idx
+                        };
+                        if let Some(idx) = target_idx {
+                            let tc = pending_tool_calls.remove(idx);
+                            let arguments: serde_json::Value =
+                                serde_json::from_str(&tc.json_buf)
+                                    .unwrap_or(serde_json::Value::Null);
+                            completed_tool_calls.push(ToolCall {
+                                id: tc.id,
+                                name: tc.name,
+                                arguments,
+                            });
+                            current_tool_idx = None;
+                        }
+                    }
+                    StreamChunk::Done { .. } => {
+                        // Flush any remaining pending tool calls.
+                        for tc in pending_tool_calls.drain(..) {
+                            let arguments: serde_json::Value =
+                                serde_json::from_str(&tc.json_buf)
+                                    .unwrap_or(serde_json::Value::Null);
+                            completed_tool_calls.push(ToolCall {
+                                id: tc.id,
+                                name: tc.name,
+                                arguments,
+                            });
+                        }
+                    }
+                    StreamChunk::Error(ref e) => {
+                        ws_send_json(
+                            &mut socket,
+                            serde_json::json!({"type": "error", "message": e}),
+                        )
+                        .await;
+                        break 'agent_loop;
+                    }
+                }
+            }
+
+            // --- Update conversation history ---------------------------------
+            if !got_tool_use {
+                // Final text response — add assistant message and finish.
+                if !response_text.is_empty() {
+                    let mut convs = state.conversations.write().await;
+                    if let Some(conv) = convs.get_mut(&conv_id) {
+                        conv.add_assistant_message(&response_text);
+                    }
+                }
+                ws_send_json(
+                    &mut socket,
+                    serde_json::json!({"type": "done", "conversation_id": conv_id}),
+                )
+                .await;
+                break 'agent_loop;
+            }
+
+            // The LLM made tool calls.  Add the assistant message with
+            // ToolUse blocks and then process each tool call.
+            {
+                let mut convs = state.conversations.write().await;
+                if let Some(conv) = convs.get_mut(&conv_id) {
+                    let mut blocks: Vec<ContentBlock> = Vec::new();
+                    if !response_text.is_empty() {
+                        blocks.push(ContentBlock::Text {
+                            text: response_text.clone(),
+                        });
+                    }
+                    for tc in &completed_tool_calls {
+                        blocks.push(ContentBlock::ToolUse {
+                            id: tc.id.clone(),
+                            name: tc.name.clone(),
+                            input: tc.arguments.clone(),
+                        });
+                    }
+                    conv.add_message(Message {
+                        role: Role::Assistant,
+                        content: MessageContent::Blocks(blocks),
+                        tool_call_id: None,
+                    });
+                }
+            }
+
+            // Execute each tool call, handling human-in-the-loop when needed.
+            for tc in &completed_tool_calls {
+                let requires_approval = state
+                    .agents
+                    .get(&agent_name)
+                    .and_then(|a| a.tools.get(&tc.name))
+                    .map(|t| t.requires_approval)
+                    .unwrap_or(false);
+
+                if requires_approval {
+                    let request_id = uuid::Uuid::new_v4().to_string();
+                    ws_send_json(
+                        &mut socket,
+                        serde_json::json!({
+                            "type": "human_approval_needed",
+                            "action": tc.name,
+                            "details": tc.arguments.to_string(),
+                            "request_id": request_id
+                        }),
+                    )
+                    .await;
+
+                    // Wait for the client's approval response with a timeout.
+                    let approved = 'approval: loop {
+                        let timeout = tokio::time::timeout(
+                            std::time::Duration::from_secs(APPROVAL_TIMEOUT_SECS),
+                            socket.recv(),
+                        )
+                        .await;
+
+                        match timeout {
+                            Err(_elapsed) => {
+                                // Timed out — treat as rejection.
+                                ws_send_json(
+                                    &mut socket,
+                                    serde_json::json!({
+                                        "type": "error",
+                                        "message": "Human approval timed out"
+                                    }),
+                                )
+                                .await;
+                                break 'approval false;
+                            }
+                            Ok(None) | Ok(Some(Err(_))) => {
+                                // Socket closed.
+                                return;
+                            }
+                            Ok(Some(Ok(WsMessage::Close(_)))) => {
+                                return;
+                            }
+                            Ok(Some(Ok(WsMessage::Text(t)))) => {
+                                let resp: serde_json::Value =
+                                    serde_json::from_str(&t.to_string()).unwrap_or_default();
+                                if resp.get("type").and_then(|v| v.as_str())
+                                    == Some("human_approval_response")
+                                    && resp
+                                        .get("request_id")
+                                        .and_then(|v| v.as_str())
+                                        == Some(request_id.as_str())
+                                {
+                                    break 'approval resp
+                                        .get("approved")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false);
+                                }
+                                // Wrong message type — keep waiting.
+                            }
+                            Ok(Some(Ok(_))) => {
+                                // Binary/ping/pong — keep waiting.
+                            }
+                        }
+                    };
+
+                    if !approved {
+                        // Record a "skipped" tool result and continue with
+                        // the next tool.
+                        {
+                            let mut convs = state.conversations.write().await;
+                            if let Some(conv) = convs.get_mut(&conv_id) {
+                                conv.add_message(Message {
+                                    role: Role::User,
+                                    content: MessageContent::Blocks(vec![
+                                        ContentBlock::ToolResult {
+                                            tool_use_id: tc.id.clone(),
+                                            content: "Tool execution rejected by user".to_string(),
+                                            is_error: Some(true),
+                                        },
+                                    ]),
+                                    tool_call_id: Some(tc.id.clone()),
+                                });
+                            }
+                        }
+                        ws_send_json(
+                            &mut socket,
+                            serde_json::json!({
+                                "type": "tool_result",
+                                "name": tc.name,
+                                "result": "rejected"
+                            }),
+                        )
+                        .await;
+                        continue;
+                    }
+                }
+
+                // Execute the tool (stub).
+                let (result_content, is_error) = if state
+                    .agents
+                    .get(&agent_name)
+                    .and_then(|a| a.tools.get(&tc.name))
+                    .is_some()
+                {
+                    (format!("Tool '{}' executed (stub)", tc.name), None)
+                } else {
+                    (
+                        format!("Tool '{}' not found in registry", tc.name),
+                        Some(true),
+                    )
+                };
+
+                ws_send_json(
+                    &mut socket,
+                    serde_json::json!({
+                        "type": "tool_result",
+                        "name": tc.name,
+                        "result": result_content
+                    }),
+                )
+                .await;
+
+                // Add the tool result to the conversation.
+                {
+                    let mut convs = state.conversations.write().await;
+                    if let Some(conv) = convs.get_mut(&conv_id) {
+                        conv.add_message(Message {
+                            role: Role::User,
+                            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                                tool_use_id: tc.id.clone(),
+                                content: result_content,
+                                is_error,
+                            }]),
+                            tool_call_id: Some(tc.id.clone()),
+                        });
+                    }
+                }
+            }
+
+            // Loop back to call the LLM again with the tool results.
+        } // end agent_loop
+    } // end socket recv loop
 }

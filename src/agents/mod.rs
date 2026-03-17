@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod conversation;
 pub mod error;
+pub mod eval;
 pub mod llm;
 pub mod memory;
 pub mod orchestration;
