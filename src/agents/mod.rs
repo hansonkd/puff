@@ -5,6 +5,7 @@ pub mod llm;
 pub mod memory;
 pub mod orchestration;
 pub mod provider;
+pub mod server;
 pub mod skill;
 pub mod streaming;
 pub mod tool;
