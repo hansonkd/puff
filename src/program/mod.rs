@@ -310,7 +310,6 @@ impl Program {
                     let dispatcher = setup_python_executors(
                         rt_config.clone(),
                         mutex_switcher.clone(),
-                        rt.handle().clone(),
                     )?;
                     Some(dispatcher)
                 } else {

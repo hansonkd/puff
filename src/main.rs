@@ -20,10 +20,8 @@ use tower_http::compression::CompressionLayer;
 use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
 
 #[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Config {
     django: Option<bool>,
-    greenlets: Option<bool>,
     asyncio: Option<bool>,
     dotenv: Option<bool>,
     add_cwd_to_path: Option<bool>,
@@ -457,7 +455,6 @@ fn help_text() -> String {
             subscription_url: Some("/subscriptions/".into()),
             playground_url: Some("/playground/".into()),
         }],
-        greenlets: Some(true),
         asyncio: Some(false),
         dotenv: Some(false),
         add_cwd_to_path: Some(true),
@@ -549,7 +546,6 @@ fn main() -> ExitCode {
     }
 
     let mut rc = RuntimeConfig::default()
-        .set_greenlets(config.greenlets.unwrap_or(true))
         .set_asyncio(config.asyncio.unwrap_or(false));
 
     for c in config.graphql.iter() {

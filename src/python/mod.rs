@@ -8,8 +8,6 @@ use crate::tasks::GlobalTaskQueue;
 use crate::types::text::Text;
 use crate::web::client::GlobalHttpClient;
 use pyo3::types::{IntoPyDict, PyBytes, PyDict, PyString, PyTuple};
-use tokio::runtime::Handle;
-
 use std::os::raw::c_int;
 
 use std::cell::RefCell;
@@ -28,8 +26,6 @@ use crate::python::pubsub::GlobalPubSub;
 use pyo3::exceptions::PyTypeError;
 pub use pyo3::prelude::*;
 use std::str;
-
-use self::queue::PyEventLoopQueue;
 
 pub mod asgi;
 pub mod async_python;
@@ -116,20 +112,6 @@ impl ReadFileBytes {
                 PyBytes::new(py, contents.as_slice()).to_object(py)
             }))
         })
-    }
-}
-
-#[pyclass]
-struct PyDispatchGreenlet;
-
-#[pymethods]
-impl PyDispatchGreenlet {
-    pub fn __call__(&self, return_func: PyObject, f: PyObject) -> PyResult<()> {
-        let dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
-        run_python_async(return_func, async move {
-            Ok(dispatcher.dispatch1(f, ())?.await??)
-        });
-        Ok(())
     }
 }
 
@@ -232,7 +214,6 @@ pub(crate) fn bootstrap_puff_globals(config: RuntimeConfig) -> PuffResult<()> {
         puff_rust_functions.setattr("global_gql_getter", GlobalGraphQL)?;
         puff_rust_functions.setattr("global_task_queue_getter", GlobalTaskQueue)?;
         puff_rust_functions.setattr("global_http_client_getter", GlobalHttpClient)?;
-        puff_rust_functions.setattr("dispatch_greenlet", PyDispatchGreenlet.into_py(py))?;
         puff_rust_functions.setattr("dispatch_asyncio", PyDispatchAsyncIO.into_py(py))?;
         puff_rust_functions.setattr("dispatch_asyncio_coro", PyDispatchAsyncCoro.into_py(py))?;
         puff_json_mod.add_function(wrap_pyfunction!(load, &puff_json_mod)?)?;
@@ -282,19 +263,15 @@ impl PythonPuffContextSetter {
 }
 
 pub struct PythonDispatcher {
-    thread_obj: Option<PyObject>,
     asyncio_obj: Option<PyObject>,
     spawn_blocking_fn: PyObject,
-    blocking: bool,
 }
 
 impl Clone for PythonDispatcher {
     fn clone(&self) -> Self {
         Python::with_gil(|py| Self {
-            thread_obj: self.thread_obj.as_ref().map(|o| o.clone_ref(py)),
             asyncio_obj: self.asyncio_obj.as_ref().map(|o| o.clone_ref(py)),
             spawn_blocking_fn: self.spawn_blocking_fn.clone_ref(py),
-            blocking: self.blocking,
         })
     }
 }
@@ -309,25 +286,8 @@ impl PythonDispatcher {
     pub fn new(
         config: RuntimeConfig,
         context_waiting: Arc<Mutex<Option<PuffContext>>>,
-        handle: Handle,
     ) -> PyResult<Self> {
-        let (thread_obj, asyncio_obj, spawn_blocking_fn) = Python::with_gil(|py| {
-            let puff = py.import("puff")?;
-            let greenlet_thread = if config.greenlets() {
-                Some(
-                    puff.call_method1(
-                        "start_event_loop",
-                        (
-                            PyEventLoopQueue::new(handle),
-                            PythonPuffContextWaitingSetter(context_waiting.clone()),
-                        ),
-                    )?
-                    .into_py(py),
-                )
-            } else {
-                None
-            };
-
+        let (asyncio_obj, spawn_blocking_fn) = Python::with_gil(|py| {
             let asyncio_thread = if config.asyncio() {
                 let puff_asyncio = py.import("puff.asyncio_support")?;
                 Some(
@@ -341,14 +301,12 @@ impl PythonDispatcher {
             } else {
                 None
             };
-            PyResult::Ok((greenlet_thread, asyncio_thread, spawn_blocking_fn(py)?))
+            PyResult::Ok((asyncio_thread, spawn_blocking_fn(py)?))
         })?;
 
         PyResult::Ok(Self {
-            thread_obj,
             asyncio_obj,
             spawn_blocking_fn,
-            blocking: false,
         })
     }
 
@@ -376,8 +334,8 @@ impl PythonDispatcher {
         Ok(rec)
     }
 
-    /// Acquires the GIL and Executes the python function on the greenlet thread or a new thread
-    /// depending if greenlets were enabled. Takes no keyword arguments
+    /// Acquires the GIL and executes the python function on a blocking thread.
+    /// Takes no keyword arguments.
     pub fn dispatch1<A: IntoPy<Py<PyTuple>> + Send + 'static>(
         &self,
         function: PyObject,
@@ -386,8 +344,7 @@ impl PythonDispatcher {
         self.dispatch(function, args, None)
     }
 
-    /// Acquires the GIL and Executes the python function on the greenlet thread or a new thread
-    /// depending if greenlets were enabled.
+    /// Acquires the GIL and executes the python function on a blocking thread.
     pub fn dispatch<A: IntoPy<Py<PyTuple>>>(
         &self,
         function: PyObject,
@@ -397,38 +354,8 @@ impl PythonDispatcher {
         Python::with_gil(|py| {
             let kwargs: Py<PyDict> = kwargs
                 .unwrap_or_else(|| PyDict::new(py).unbind());
-            if self.blocking {
-                self.dispatch_blocking(py, function, args, kwargs)
-            } else {
-                self.dispatch_greenlet(py, function, args, kwargs)
-            }
+            self.dispatch_blocking(py, function, args, kwargs)
         })
-    }
-
-    /// Executes the python function on the greenlet thread.
-    pub fn dispatch_greenlet<A: IntoPy<Py<PyTuple>>>(
-        &self,
-        py: Python,
-        function: PyObject,
-        args: A,
-        kwargs: Py<PyDict>,
-    ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
-        let (sender, rec) = oneshot::channel();
-        let returner = AsyncReturn::new(Some(sender));
-        self.thread_obj
-            .as_ref()
-            .expect("Greenlets not enabled")
-            .call_method1(
-                py,
-                "spawn",
-                (
-                    function,
-                    args.into_py(py).into_any(),
-                    kwargs.into_any(),
-                    returner,
-                ),
-            )?;
-        Ok(rec)
     }
 
     /// Executes the python function on the asyncio thread to create an awaitable to add.
@@ -477,9 +404,8 @@ impl PythonDispatcher {
 pub fn setup_python_executors(
     config: RuntimeConfig,
     context_waiting: Arc<Mutex<Option<PuffContext>>>,
-    handle: Handle,
 ) -> PyResult<PythonDispatcher> {
-    PythonDispatcher::new(config, context_waiting, handle)
+    PythonDispatcher::new(config, context_waiting)
 }
 
 pub fn py_obj_to_bytes<'py>(val: &Bound<'py, PyAny>) -> PyResult<Vec<u8>> {

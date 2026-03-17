@@ -155,7 +155,6 @@ pub struct RuntimeConfig {
     pubsub: HashMap<Text, PubSubOpts>,
     http_client_builder: HashMap<Text, HttpClientOpts>,
     task_queue: HashMap<Text, TaskQueueOpts>,
-    greenlets: bool,
     asyncio: bool,
     env_vars: Vec<(Text, Text)>,
     python_paths: Vec<Text>,
@@ -216,10 +215,6 @@ impl RuntimeConfig {
         &self.task_queue
     }
 
-    /// Get if greenlets will be enabled.
-    pub fn greenlets(&self) -> bool {
-        self.greenlets
-    }
     /// Get if asyncio will be enabled.
     pub fn asyncio(&self) -> bool {
         self.asyncio
@@ -360,16 +355,7 @@ impl RuntimeConfig {
         new
     }
 
-    /// Sets whether to use greenlets when executing python.
-    ///
-    /// Default: true
-    pub fn set_greenlets(self, greenlets: bool) -> Self {
-        let mut new = self;
-        new.greenlets = greenlets;
-        new
-    }
-
-    /// Sets whether to use greenlets when executing python.
+    /// Sets whether to use asyncio when executing python.
     ///
     /// Default: false
     pub fn set_asyncio(self, asyncio: bool) -> Self {
@@ -461,7 +447,6 @@ impl Default for RuntimeConfig {
             tokio_worker_threads: num_cpus::get(),
             python: true,
             global_state_fn: None,
-            greenlets: true,
             asyncio: false,
             redis: HashMap::new(),
             postgres: HashMap::new(),
