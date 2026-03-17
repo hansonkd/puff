@@ -5,8 +5,9 @@ use http::Method;
 use puff_rs::graphql::handlers::{handle_graphql_named, handle_subscriptions_named, playground};
 use puff_rs::prelude::*;
 use puff_rs::program::commands::{
-    ASGIServerCommand, AgentServeCommand, BasicCommand, DjangoManagementCommand, PytestCommand,
-    PythonCommand, ServerCommand, WSGIServerCommand, WaitForever,
+    ASGIServerCommand, AgentAskCommand, AgentListCommand, AgentServeCommand, BasicCommand,
+    DjangoManagementCommand, PytestCommand, PythonCommand, ServerCommand, SkillListCommand,
+    WSGIServerCommand, WaitForever,
 };
 use puff_rs::runtime::{
     GqlOpts, HttpClientOpts, PostgresOpts, PubSubOpts, RedisOpts, TaskQueueOpts,
@@ -710,9 +711,27 @@ fn main() -> ExitCode {
             .unwrap_or(8080);
         program = program.command(AgentServeCommand {
             agent_configs: agent_configs.clone(),
-            llm_config,
+            llm_config: llm_config.clone(),
             port,
         });
+        program = program.command(AgentAskCommand {
+            agent_configs: agent_configs.clone(),
+            llm_config: llm_config.clone(),
+        });
+        program = program.command(AgentListCommand {
+            agent_configs: agent_configs.clone(),
+        });
+
+        // Collect all unique skill paths across all agents.
+        let skill_paths: Vec<String> = {
+            let mut seen = std::collections::HashSet::new();
+            agent_configs
+                .iter()
+                .flat_map(|c| c.skills.iter().cloned())
+                .filter(|p| seen.insert(p.clone()))
+                .collect()
+        };
+        program = program.command(SkillListCommand { skill_paths });
     }
 
     program.run()

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::agents::error::AgentError;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Trace {
     pub trace_id: String,
@@ -77,4 +79,34 @@ impl Trace {
         }
         self.events.push(event);
     }
+}
+
+/// Save a trace to Postgres.
+pub async fn save_trace(
+    client: &tokio_postgres::Client,
+    trace: &Trace,
+) -> Result<(), AgentError> {
+    let trace_json = serde_json::to_value(&trace.events)
+        .map_err(|e| AgentError::MemoryError(format!("Failed to serialize trace: {}", e)))?;
+
+    client
+        .execute(
+            "INSERT INTO puff_traces (id, agent, conversation, trace_data, total_latency_ms, total_cost_usd) \
+             VALUES ($1::uuid, $2, $3::uuid, $4, $5, $6)",
+            &[
+                &Uuid::parse_str(&trace.trace_id).unwrap_or_else(|_| Uuid::new_v4()),
+                &trace.agent,
+                &trace
+                    .conversation
+                    .as_ref()
+                    .and_then(|c| Uuid::parse_str(c).ok()),
+                &trace_json,
+                &(trace.total_latency_ms as i32),
+                &(trace.total_cost_usd as f64),
+            ],
+        )
+        .await
+        .map_err(|e| AgentError::MemoryError(format!("Failed to save trace: {}", e)))?;
+
+    Ok(())
 }

@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tracing::info;
 
-pub use agent::AgentServeCommand;
+pub use agent::{AgentAskCommand, AgentListCommand, AgentServeCommand, SkillListCommand};
 pub use asgi::ASGIServerCommand;
 pub use django_management::DjangoManagementCommand;
 pub use http::ServerCommand;

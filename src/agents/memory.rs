@@ -155,6 +155,56 @@ pub async fn save_memory(
         .map_err(|e| AgentError::MemoryError(format!("save_memory failed: {e}")))
 }
 
+/// Record LLM usage to Postgres.
+pub async fn record_llm_usage(
+    client: &tokio_postgres::Client,
+    agent: &str,
+    conversation_id: Option<&str>,
+    provider: &str,
+    model: &str,
+    input_tokens: u32,
+    output_tokens: u32,
+    cost_usd: f64,
+    latency_ms: u32,
+    cached: bool,
+) -> Result<(), AgentError> {
+    client
+        .execute(
+            "INSERT INTO puff_llm_usage (agent, conversation, provider, model, input_tokens, output_tokens, cost_usd, latency_ms, cached) \
+             VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9)",
+            &[
+                &agent,
+                &conversation_id
+                    .and_then(|c| uuid::Uuid::parse_str(c).ok()),
+                &provider,
+                &model,
+                &(input_tokens as i32),
+                &(output_tokens as i32),
+                &cost_usd,
+                &(latency_ms as i32),
+                &cached,
+            ],
+        )
+        .await
+        .map_err(|e| AgentError::MemoryError(format!("Failed to record usage: {}", e)))?;
+
+    Ok(())
+}
+
+/// Estimate cost in USD based on model and token counts.
+/// Prices are approximate and should be updated periodically.
+pub fn estimate_cost(model: &str, input_tokens: u32, output_tokens: u32) -> f64 {
+    let (input_price, output_price) = match model {
+        m if m.starts_with("claude-opus") => (15.0, 75.0),   // per 1M tokens
+        m if m.starts_with("claude-sonnet") => (3.0, 15.0),
+        m if m.starts_with("claude-haiku") => (0.25, 1.25),
+        m if m.starts_with("gpt-4o") => (2.5, 10.0),
+        m if m.starts_with("gpt-4") => (30.0, 60.0),
+        _ => (1.0, 2.0), // default conservative estimate
+    };
+    (input_tokens as f64 * input_price + output_tokens as f64 * output_price) / 1_000_000.0
+}
+
 /// Recall memories using cosine similarity via pgvector.
 pub async fn recall_memories(
     client: &tokio_postgres::Client,
@@ -212,4 +262,68 @@ pub async fn recall_memories(
         .collect();
 
     Ok(records)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::estimate_cost;
+
+    fn approx_eq(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-9
+    }
+
+    #[test]
+    fn test_estimate_cost_claude_opus() {
+        // 1M input + 1M output at $15/$75 per 1M → $90
+        let cost = estimate_cost("claude-opus-4", 1_000_000, 1_000_000);
+        assert!(approx_eq(cost, 90.0), "expected 90.0, got {cost}");
+    }
+
+    #[test]
+    fn test_estimate_cost_claude_sonnet() {
+        // 500k input + 500k output at $3/$15 per 1M → $9
+        let cost = estimate_cost("claude-sonnet-3-5", 500_000, 500_000);
+        assert!(approx_eq(cost, 9.0), "expected 9.0, got {cost}");
+    }
+
+    #[test]
+    fn test_estimate_cost_claude_haiku() {
+        // 1M input + 1M output at $0.25/$1.25 per 1M → $1.50
+        let cost = estimate_cost("claude-haiku-3", 1_000_000, 1_000_000);
+        assert!(approx_eq(cost, 1.5), "expected 1.5, got {cost}");
+    }
+
+    #[test]
+    fn test_estimate_cost_gpt4o() {
+        // 1M input + 1M output at $2.5/$10 per 1M → $12.5
+        let cost = estimate_cost("gpt-4o-mini", 1_000_000, 1_000_000);
+        assert!(approx_eq(cost, 12.5), "expected 12.5, got {cost}");
+    }
+
+    #[test]
+    fn test_estimate_cost_gpt4() {
+        // 1M input + 1M output at $30/$60 per 1M → $90
+        let cost = estimate_cost("gpt-4-turbo", 1_000_000, 1_000_000);
+        assert!(approx_eq(cost, 90.0), "expected 90.0, got {cost}");
+    }
+
+    #[test]
+    fn test_estimate_cost_unknown_model() {
+        // 1M input + 1M output at $1/$2 per 1M → $3
+        let cost = estimate_cost("unknown-model-x", 1_000_000, 1_000_000);
+        assert!(approx_eq(cost, 3.0), "expected 3.0, got {cost}");
+    }
+
+    #[test]
+    fn test_estimate_cost_zero_tokens() {
+        let cost = estimate_cost("claude-sonnet-4", 0, 0);
+        assert!(approx_eq(cost, 0.0), "expected 0.0, got {cost}");
+    }
+
+    #[test]
+    fn test_estimate_cost_only_input_tokens() {
+        // 1M input, 0 output at $3/$15 per 1M → $3
+        let cost = estimate_cost("claude-sonnet-4-5", 1_000_000, 0);
+        assert!(approx_eq(cost, 3.0), "expected 3.0, got {cost}");
+    }
 }
