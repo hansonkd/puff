@@ -1,7 +1,7 @@
 [package]
 name = "puff-rs"
-version = "0.1.9"
-description = "Puff - Deep Stack Python Runtime and GraphQL library."
+version = "0.2.0"
+description = "Puff - Deep Stack Python Runtime for AI Agents, GraphQL, and more."
 license = "MIT"
 edition = "2021"
 rust-version = "1.75"

@@ -1,8 +1,8 @@
 # ☁ Puff ☁
 
-Python with an all-in-one async runtime for GraphQL, ASGI, WSGI, Postgres, PubSub, Redis, Distributed Tasks, and HTTP2 Client.
+The deep stack runtime for Python. An all-in-one async runtime for AI Agents, GraphQL, ASGI, WSGI, Postgres, PubSub, Redis, Distributed Tasks, and HTTP2 Client.
 
-Works with Greenlets or Asyncio.
+Now with a built-in Agent Runtime — one binary, one process, everything agents need.
 
 [![Crates.io][crates-badge]][crates-url]
 [![MIT licensed][mit-badge]][mit-url]
@@ -15,6 +15,7 @@ Works with Greenlets or Asyncio.
 
 - [What is Puff?](#what-is-puff)
   * [Quick Start](#quick-start)
+  * [Puff ♥ Agents](#puff--agents) **NEW in v2**
   * [Puff ♥ Python](#puff--python)
   * [Puff ♥ Django](#puff--django)
   * [Puff ♥ Graphql](#puff--graphql)
@@ -34,20 +35,27 @@ Works with Greenlets or Asyncio.
 
 # What is Puff?
 
-Puff is a batteries included "deep stack" for Python. It's an experiment to minimize the barrier between Python and Rust to unlock the full potential of high level languages. Build your own Runtime using standard CPython and extend it with Rust. Imagine if GraphQL, Postgres, Redis and PubSu, Distributed Tasks were part of the standard library. That's Puff.
+Puff is a batteries included "deep stack" for Python. It's an experiment to minimize the barrier between Python and Rust to unlock the full potential of high level languages. Build your own Runtime using standard CPython and extend it with Rust. Imagine if GraphQL, Postgres, Redis, PubSub, Distributed Tasks, and now AI Agents were part of the standard library. That's Puff.
 
 The old approach for integrating Rust in Python would be to make a Python package that uses rust and import it from Python. This approach has some flaws as the rust packages can't cooperate. Puff gives Rust its own layer, so you can build a cohesive set of tools in Rust that all work flawlessly together without having to re-enter Python.
 
+**Puff v2** takes this further. Every agent framework today is pure Python, stitching together HTTP calls to external services, serializing everything, managing state through hope. Puff already has the infrastructure — Postgres for memory, Redis for caching, pub/sub for coordination, task queues for background work, WebSockets for streaming. It just needed to be pointed at the right problem. Now it has a built-in agent runtime where LLM calls stream through Rust, tools execute on real threads, and everything runs in one process.
+
 High level overview is that Puff gives Python
 
-* Greenlets on Rust's Tokio.
+* **AI Agent Runtime** — define agents with tools, memory, and orchestration patterns
+* **Multi-provider LLM Gateway** — Anthropic, OpenAI, Ollama with streaming, retry, and fallback
+* **Skills + CLI Tools** — curated capability packages with whitelisted CLI commands
+* **Three-tier Memory** — Redis conversations, Postgres+pgvector long-term, working memory
+* **Multi-agent Orchestration** — Router, Supervisor, Chain, Parallel patterns
+* Free-threaded Python on Rust's Tokio (replaces greenlets)
 * High performance HTTP Server - combine Axum with Python WSGI apps (Flask, Django, etc.)
 * Rust / Python natively in the same process, no sockets or serialization.
 * AsyncIO / uvloop / ASGI integration with Rust
 * An easy-to-use GraphQL service
 * Multi-node pub-sub
 * Rust level Redis Pool
-* Rust level Postgres Pool
+* Rust level Postgres Pool with pgvector
 * Websockets
 * HTTP Client
 * Distributed, at-least-once, priority and scheduled task queue
@@ -67,7 +75,7 @@ leads to greater efficiency in terms of productivity, scalability and performanc
 | ✅ Fast iteration to prototype                      | ❌ Requires planning for correctness             |
 | ✅ Google a problem, copy paste, it works.          | ❌ Less examples floating in the wild            |
 | ❌ Weak type system                                 | ✅ Great Type System                             |
-| ❌ GIL prevents threading                           | ✅ High Performance                              |
+| ✅ Free-threaded mode (3.13+) unlocks parallelism   | ✅ High Performance                              |
 | ❌ Not-so safe                                      | ✅ Safe                                          |
 
 
@@ -110,11 +118,130 @@ Now from `my_puff_proj_py` you can run your project with `poetry run puff` to ac
 The Python project doesn't need to be inside off your Rust package. It only needs to be on the PYTHONPATH or inside an virtualenv. If you don't want to use poetry, you will have to set up something like a virtual environment when running Puff.
 
 
+## Puff ♥ Agents
+
+Puff v2 is a deep stack agent runtime. Define agents in Python, back them with Rust-speed infrastructure, serve them with one command. Every piece of infrastructure an agent needs — LLM calls, tool execution, memory, multi-agent coordination, streaming — is baked in, not bolted on.
+
+```python
+from puff import Agent
+
+# Define an agent with a system prompt and model
+support = Agent(
+    name="customer-support",
+    model="claude-sonnet-4-6",
+    system_prompt="You are a helpful customer support agent for Acme Corp.",
+    skills=["./skills/github", "./skills/database"],
+    memory=True,
+)
+```
+
+### Skills: CLI Tools as Agent Capabilities
+
+Tools are organized as skills — curated packages of whitelisted CLI commands with context for the agent. No arbitrary shell access. Every command pattern is explicitly allowed.
+
+```toml
+# skills/github/skill.toml
+[skill]
+name = "github"
+description = "Interact with GitHub repositories"
+
+[[tools]]
+name = "list-prs"
+description = "List open pull requests"
+command = "gh pr list --json number,title,author,url"
+output = "json"
+
+[[tools]]
+name = "create-pr"
+description = "Create a new pull request"
+command = "gh pr create"
+args = { title = { type = "str" }, body = { type = "str" } }
+requires_approval = true    # human-in-the-loop for mutations
+
+[permissions]
+allow = ["gh pr *", "gh issue *"]
+deny = ["gh repo delete *"]
+```
+
+Skills can include a `context.md` that gets injected into the agent's system prompt — domain knowledge that helps the agent use the tools effectively.
+
+### Multi-Agent Orchestration
+
+Multiple agents working together. Router dispatches to specialists. Supervisor delegates and reviews. Chain pipes output through a sequence. Parallel runs agents simultaneously on real threads.
+
+```python
+from puff import Agent, Router
+
+billing  = Agent(name="billing",  model="claude-haiku-4-5", skills=["./skills/billing"])
+technical = Agent(name="technical", model="claude-sonnet-4-6", skills=["./skills/docs"])
+
+support_desk = Router(
+    name="support-desk",
+    agents=[billing, technical],
+    router_prompt="Route billing/payment to billing, technical issues to technical.",
+    model="claude-haiku-4-5",
+)
+```
+
+### Agent Server
+
+One command starts everything — REST API, WebSocket streaming, health checks:
+
+```bash
+puff agent --port 8080
+```
+
+```bash
+# Start a conversation
+curl -X POST http://localhost:8080/api/conversations \
+  -d '{"agent": "support-desk", "message": "I was double-charged"}'
+
+# Real-time streaming via WebSocket
+wscat -c ws://localhost:8080/ws/conversations/abc-123
+```
+
+### Three-Tier Memory
+
+Agents remember things. Conversation history in Redis, long-term facts in Postgres with pgvector for semantic search. Puff manages it automatically — the developer never touches it.
+
+### LLM Gateway
+
+All LLM calls go through Rust. Streaming SSE parsed at native speed. Multi-provider (Anthropic, OpenAI, Ollama) with automatic retry, exponential backoff, and provider fallback chains. Cost tracked per call, per agent, per conversation.
+
+```toml
+# puff.toml
+[llm]
+default_model = "claude-sonnet-4-6"
+
+[llm.providers.anthropic]
+api_key_env = "ANTHROPIC_API_KEY"
+
+[llm.providers.openai]
+api_key_env = "OPENAI_API_KEY"
+
+[llm.fallback]
+"claude-sonnet-4-6" = ["gpt-4o"]
+
+[memory]
+auto_extract = true
+recall_k = 10
+```
+
+### Eval
+
+Test your agents like you test your code:
+
+```bash
+$ puff agent-ask --agent support-desk
+> I was charged twice for order #123
+Looking into that for you...
+```
+
 ## Puff ♥ Python
 
 Python programs in Puff are run by building a `Program` in Rust and registering the Python function there.
 
-The Python method is bootstrapped and run as a greenlet in the Puff runtime.
+The Python method is bootstrapped and run on a thread in the Puff runtime.
 
 Create a `puff.toml`
 
@@ -129,7 +256,7 @@ Python:
 ```python title="/app/my_puff_proj_py/__init__.py"
 import puff
 
-# Standard python functions run on Puff greenlets. You can only use special Puff async functions without pausing other greenlets.
+# Python functions run on Puff threads. Use Puff async functions for non-blocking I/O.
 def hello_world():
     fn = "my_file.zip"
     result_bytes = puff.read_file_bytes(fn) # Puff async function that runs in Tokio.
@@ -611,13 +738,25 @@ Puff is designed so that you can build your own version using Puff as a library.
 
 ## Architecture
 
-Puff consists of multithreaded Tokio Runtime and a single thread which runs all Python computations on Greenlets. Python offloads the IO to Tokio which schedules it and returns it if necessary.
+Puff v2 consists of a multithreaded Tokio Runtime with free-threaded Python threads for agent and application code. Each agent runs on a real OS thread — when it calls into Puff for I/O (LLM calls, database queries, Redis), the call crosses into Rust via PyO3, dispatches to Tokio, and the thread blocks on a channel until the result returns. Other agent threads keep running in true parallel.
 
-![Untitled Diagram-2](https://user-images.githubusercontent.com/496914/195153405-7a1c7bcf-a864-4502-806c-c7d5e7aac3b9.png)
-
+```
+┌──────────────────────────────────────────────────┐
+│                  Tokio Runtime                    │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐       │
+│  │LLM Stream│  │ Postgres │  │  Redis   │       │
+│  │(reqwest) │  │(bb8+pgv) │  │(bb8 pool)│       │
+│  └────▲─────┘  └────▲─────┘  └────▲─────┘       │
+│       │              │             │              │
+│       └──────────────┴─────────────┘              │
+│              PyO3 FFI boundary                    │
+│  ┌───────────────────────────────────────────┐   │
+│  │   Free-Threaded Python Thread Pool         │   │
+│  │  Agent 1      Agent 2      Agent 3        │   │
+│  └───────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────┘
+```
 
 ## Status
 
-This is extremely early in development. The scope of the project is ambitious. Expect things to break. 
-
-Probably the end game of puff is to have something like gevent's monkeypatch to automatically make existing projects compatible.
+Puff v2 is in active development. The agent runtime is functional — LLM gateway, tools, memory, orchestration, and server all work. The scope of the project is ambitious. Expect things to evolve. Contributions welcome.

@@ -1,3 +1,24 @@
+# 0.2.0
+
+Puff v2: Deep Stack Agent Runtime.
+
+* **BREAKING:** Remove greenlet executor. Free-threaded Python (3.13+) replaces greenlets for parallelism.
+* Add AI Agent runtime with LLM-powered agent execution loop
+* Add multi-provider LLM Gateway (Anthropic, OpenAI, Ollama) with SSE streaming in Rust
+* Add retry with exponential backoff and provider fallback chains
+* Add embedding generation (embed, embed_batch)
+* Add Tool system with ToolRegistry and CLI tool execution
+* Add Skills — curated capability packages with TOML config, whitelisted CLI commands, and permission enforcement
+* Add three-tier memory: Redis conversation history, Postgres+pgvector long-term memory, working memory
+* Add multi-agent orchestration: Router, Supervisor, Chain, Parallel (real tokio::spawn)
+* Add mid-conversation agent Handoff
+* Add Agent Server with REST API (5 endpoints) and WebSocket streaming with human-in-the-loop approval
+* Add observability: structured traces, cost estimation, Postgres persistence for usage and traces
+* Add evaluation framework with contains, regex, tool_call, and semantic assertions
+* Add CLI commands: puff agent, agent-ask, agent-list, skill-list
+* Add Python bindings: puff.Agent(), puff.ToolDef() via PyO3
+* Add pgvector support for semantic memory search
+
 # 0.1.9
 
 * Add layer cache for Graphql
