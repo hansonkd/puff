@@ -36,6 +36,7 @@ pub trait Provider: Send + Sync {
 
 pub struct AnthropicProvider {
     api_key: String,
+    #[allow(dead_code)]
     base_url: String,
     endpoint: String,
 }
@@ -302,6 +303,7 @@ fn anthropic_stop_reason(s: &str) -> StopReason {
 
 pub struct OpenAIProvider {
     api_key: Option<String>,
+    #[allow(dead_code)]
     base_url: String,
     endpoint: String,
     provider_name: String,
