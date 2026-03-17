@@ -64,6 +64,13 @@ impl Agent {
         self
     }
 
+    /// Attach a pre-existing `Arc<ToolRegistry>` without double-wrapping.
+    /// Useful when sharing a registry across parallel tasks.
+    pub fn with_tools_arc(mut self, tools: Arc<ToolRegistry>) -> Self {
+        self.tools = tools;
+        self
+    }
+
     /// Add a context snippet (e.g. from a skill's `context.md`).
     pub fn with_context(mut self, context: String) -> Self {
         self.context_snippets.push(context);

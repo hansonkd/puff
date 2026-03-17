@@ -1,4 +1,6 @@
-use crate::agents::agent::Agent;
+use std::sync::Arc;
+
+use crate::agents::agent::{Agent, AgentConfig};
 use crate::agents::conversation::Conversation;
 use crate::agents::error::AgentError;
 use crate::agents::llm::*;
@@ -138,16 +140,17 @@ pub struct Parallel {
 }
 
 impl Parallel {
-    /// Run all agents against `input` and collect their responses.
+    /// Run all agents against `input` in parallel and collect their responses.
     ///
-    /// Results are formatted as `"[agent_name]: response"`. If `merge_prompt`
-    /// is set, a final LLM call is made to synthesise the results into a
-    /// single response; otherwise the formatted results are concatenated with
-    /// newlines.
+    /// Each agent is spawned as an independent `tokio` task so all agents run
+    /// concurrently. Results are formatted as `"[agent_name]: response"`. If
+    /// `merge_prompt` is set, a final LLM call is made to synthesise the
+    /// results into a single response; otherwise the formatted results are
+    /// concatenated with newlines.
     pub async fn run(
         &self,
         input: &str,
-        llm_client: &LlmClient,
+        llm_client: Arc<LlmClient>,
     ) -> Result<String, AgentError> {
         if self.agents.is_empty() {
             return Err(AgentError::OrchestrationError(format!(
@@ -156,18 +159,48 @@ impl Parallel {
             )));
         }
 
-        // Run each agent sequentially (Phase 2: true async parallel).
-        let mut results: Vec<String> = Vec::with_capacity(self.agents.len());
+        let mut handles = Vec::with_capacity(self.agents.len());
 
         for agent in &self.agents {
-            let mut conversation = Conversation::new(&agent.config.name);
-            conversation.add_user_message(input);
+            let input_owned = input.to_string();
+            let agent_name = agent.config.name.clone();
+            let agent_model = agent.config.model.clone();
+            let system_prompt = agent.build_system_prompt();
+            let tools = Arc::clone(&agent.tools);
+            let client = Arc::clone(&llm_client);
 
-            let response = agent.run_turn(&mut conversation, llm_client).await?;
-            results.push(format!("[{}]: {}", agent.config.name, response.text));
+            let handle = tokio::spawn(async move {
+                let config = AgentConfig {
+                    name: agent_name.clone(),
+                    model: agent_model,
+                    system_prompt: Some(system_prompt),
+                    skills: vec![],
+                    tools_module: None,
+                    memory: None,
+                    permissions: None,
+                };
+                let task_agent = Agent::new(config).with_tools_arc(tools);
+                let mut conv = Conversation::new(&agent_name);
+                conv.add_user_message(&input_owned);
+
+                match task_agent.run_turn(&mut conv, &client).await {
+                    Ok(response) => format!("[{}]: {}", agent_name, response.text),
+                    Err(e) => format!("[{}]: Error: {}", agent_name, e),
+                }
+            });
+
+            handles.push(handle);
         }
 
-        let combined = results.join("\n");
+        let mut results = Vec::with_capacity(handles.len());
+        for handle in handles {
+            match handle.await {
+                Ok(result) => results.push(result),
+                Err(e) => results.push(format!("Task panicked: {}", e)),
+            }
+        }
+
+        let combined = results.join("\n\n");
 
         // Optionally merge with an LLM call.
         match (&self.merge_prompt, &self.merge_model) {
