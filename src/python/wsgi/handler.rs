@@ -22,7 +22,6 @@ use crate::types::Text;
 use tracing::error;
 use wsgi::Sender;
 
-#[derive(Clone)]
 pub struct WsgiHandler {
     app: PyObject,
     server_name: Text,
@@ -30,6 +29,19 @@ pub struct WsgiHandler {
     python_dispatcher: PythonDispatcher,
     std_err: PyObject,
     bytesio: PyObject,
+}
+
+impl Clone for WsgiHandler {
+    fn clone(&self) -> Self {
+        Python::with_gil(|py| Self {
+            app: self.app.clone_ref(py),
+            server_name: self.server_name.clone(),
+            server_port: self.server_port,
+            python_dispatcher: self.python_dispatcher.clone(),
+            std_err: self.std_err.clone_ref(py),
+            bytesio: self.bytesio.clone_ref(py),
+        })
+    }
 }
 
 impl WsgiHandler {
@@ -114,7 +126,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
     type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
     fn call(self, req: Request<Body>, _state: S) -> Self::Future {
-        let app = self.app.clone();
+        let app = Python::with_gil(|py| self.app.clone_ref(py));
         let (http_sender, http_sender_rx) = Sender::new();
         let disconnected = Arc::new(AtomicBool::new(false));
         let (req, body): (_, Body) = req.into_parts();
@@ -143,7 +155,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                         self.bytesio
                             .call1(py, (PyByteArray::new(py, &body_bytes[..]),))?,
                     )?;
-                    environ.set_item(get_cached_string(py, "wsgi.errors"), self.std_err.clone())?;
+                    environ.set_item(get_cached_string(py, "wsgi.errors"), self.std_err.clone_ref(py))?;
                     environ.set_item(get_cached_string(py, "wsgi.multithread"), false)?;
                     environ.set_item(get_cached_string(py, "wsgi.run_once"), false)?;
 

@@ -61,6 +61,9 @@ toml = { version = "0.8", optional = true }
 dotenvy = { version = "0.15", optional = true }
 notify = { version = "7", optional = true }
 
+[build-dependencies]
+pyo3-build-config = "0.24"
+
 [features]
 puff-binary = ["toml", "dotenvy", "tower-http", "tower"]
 watch-binary = ["notify"]

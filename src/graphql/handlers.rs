@@ -271,6 +271,7 @@ impl<S: ScalarValue> TryFrom<AxumMessage> for ClientMessage<S> {
     }
 }
 
+#[cfg(not(Py_GIL_DISABLED))]
 pub async fn handle_graphql_socket<S: Schema>(socket: WebSocket, schema: S, context: S::Context) {
     let config = ConnectionConfig::new(context);
     let (ws_tx, ws_rx) = socket.split();
@@ -302,6 +303,17 @@ pub async fn handle_graphql_socket<S: Schema>(socket: WebSocket, schema: S, cont
     .await;
 }
 
+#[cfg(Py_GIL_DISABLED)]
+pub async fn handle_graphql_socket<S: Schema>(mut socket: WebSocket, _schema: S, _context: S::Context) {
+    // GraphQL subscriptions over WebSocket are not yet supported under free-threaded Python
+    // due to Unpin constraints on PyObject in the juniper subscription bridge.
+    let _ = socket.send(Message::Text(
+        r#"{"type":"error","payload":{"message":"GraphQL subscriptions not supported under free-threaded Python"}}"#.into()
+    )).await;
+    socket.close().await.ok();
+}
+
+#[cfg(not(Py_GIL_DISABLED))]
 pub fn graphql_subscriptions<S: Schema>(
     schema: S,
     context: S::Context,
@@ -316,6 +328,20 @@ where
             .max_message_size(1024)
 
             .on_upgrade(move |socket| handle_graphql_socket(socket, schema, context));
+        future::ready(s)
+    }
+}
+
+#[cfg(Py_GIL_DISABLED)]
+pub fn graphql_subscriptions<S: Schema>(
+    _schema: S,
+    _context: S::Context,
+) -> impl FnOnce(WebSocketUpgrade, ()) -> future::Ready<Response> + Clone + Send
+where
+    <S as Schema>::Context: Clone,
+{
+    move |ws: WebSocketUpgrade, _| {
+        let s = ws.on_upgrade(move |socket| handle_graphql_socket(socket, _schema, _context));
         future::ready(s)
     }
 }
@@ -435,11 +461,29 @@ async fn auth_result(
     }
 }
 
+#[cfg(not(Py_GIL_DISABLED))]
 pub fn handle_subscriptions(
 ) -> impl FnOnce(HeaderMap, WebSocketUpgrade, ()) -> BoxFuture<'static, Response> + Clone + Send {
     handle_subscriptions_named("default")
 }
 
+#[cfg(Py_GIL_DISABLED)]
+pub fn handle_subscriptions(
+) -> impl FnOnce(HeaderMap, WebSocketUpgrade, ()) -> BoxFuture<'static, Response> + Clone + Send {
+    move |_headers: HeaderMap, ws: WebSocketUpgrade, _| {
+        let fut = async {
+            ws.on_upgrade(|mut socket| async move {
+                let _ = socket.send(Message::Text(
+                    r#"{"type":"error","payload":{"message":"GraphQL subscriptions not supported under free-threaded Python"}}"#.into()
+                )).await;
+                socket.close().await.ok();
+            }).into_response()
+        };
+        fut.boxed()
+    }
+}
+
+#[cfg(not(Py_GIL_DISABLED))]
 pub fn handle_subscriptions_named<N: Into<Text>>(
     name: N,
 ) -> impl FnOnce(HeaderMap, WebSocketUpgrade, ()) -> BoxFuture<'static, Response> + Clone + Send {
@@ -473,6 +517,23 @@ pub fn handle_subscriptions_named<N: Into<Text>>(
                 }
                 Err(_e) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal Error").into_response(),
             }
+        };
+        fut.boxed()
+    }
+}
+
+#[cfg(Py_GIL_DISABLED)]
+pub fn handle_subscriptions_named<N: Into<Text>>(
+    _name: N,
+) -> impl FnOnce(HeaderMap, WebSocketUpgrade, ()) -> BoxFuture<'static, Response> + Clone + Send {
+    move |_headers: HeaderMap, ws: WebSocketUpgrade, _| {
+        let fut = async {
+            ws.on_upgrade(|mut socket| async move {
+                let _ = socket.send(Message::Text(
+                    r#"{"type":"error","payload":{"message":"GraphQL subscriptions not supported under free-threaded Python"}}"#.into()
+                )).await;
+                socket.close().await.ok();
+            }).into_response()
         };
         fut.boxed()
     }

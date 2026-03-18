@@ -1,0 +1,2 @@
+wsgi = "wsgi_app.application"
+add_cwd_to_path = true
