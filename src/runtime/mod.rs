@@ -443,7 +443,10 @@ impl RuntimeConfig {
 impl Default for RuntimeConfig {
     fn default() -> Self {
         RuntimeConfig {
-            max_blocking_threads: 1024,
+            // Under free-threaded Python, blocking threads run Python in true parallel.
+            // Too many threads causes cache thrashing and contention. Default to num_cpus * 4
+            // for mixed I/O + CPU workloads. Tune down to num_cpus for pure CPU-bound work.
+            max_blocking_threads: num_cpus::get() * 4,
             tokio_worker_threads: num_cpus::get(),
             python: true,
             global_state_fn: None,

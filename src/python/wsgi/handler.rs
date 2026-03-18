@@ -126,7 +126,9 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
     type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
     fn call(self, req: Request<Body>, _state: S) -> Self::Future {
-        let app = Python::with_gil(|py| self.app.clone_ref(py));
+        // No with_gil here — we move self into the async block and access
+        // PyObjects only inside with_gil blocks below. This eliminates one
+        // GIL acquisition per request.
         let (http_sender, http_sender_rx) = Sender::new();
         let disconnected = Arc::new(AtomicBool::new(false));
         let (req, body): (_, Body) = req.into_parts();
@@ -138,11 +140,12 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                 error!("Could not extract request body.");
                 return WsgiError::ExpectedResponseBody.into_response();
             };
-            let mut content_length: Option<u64> = None;
 
-            // receiver_tx.send(Some(body)).unwrap();
             let _disconnected = SetTrueOnDrop(disconnected);
-            let args_to_send: Result<Result<(PyObject, PyObject), Response>, Error> =
+
+            // Single with_gil block: build environ + clone app + create sender args
+            // This merges what was previously 2 separate with_gil calls.
+            let args_to_send: Result<Result<(PyObject, PyObject, PyObject), Response>, Error> =
                 Python::with_gil(|py| {
                     let environ = PyDict::new(py);
                     environ.set_item(get_cached_string(py, "wsgi.version"), (1, 0))?;
@@ -156,7 +159,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                             .call1(py, (PyByteArray::new(py, &body_bytes[..]),))?,
                     )?;
                     environ.set_item(get_cached_string(py, "wsgi.errors"), self.std_err.clone_ref(py))?;
-                    environ.set_item(get_cached_string(py, "wsgi.multithread"), false)?;
+                    environ.set_item(get_cached_string(py, "wsgi.multithread"), true)?;
                     environ.set_item(get_cached_string(py, "wsgi.run_once"), false)?;
 
                     let server_protocol = match req.version {
@@ -180,8 +183,6 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                     if let Some(path_and_query) = req.uri.path_and_query() {
                         let path = path_and_query.path();
                         let raw_path = path.as_bytes();
-                        // the spec requires this to be percent decoded at this point
-                        // https://asgi.readthedocs.io/en/latest/specs/www.html#http-connection-scope
                         let path = if let Ok(r) =
                             percent_encoding::percent_decode(raw_path).decode_utf8()
                         {
@@ -201,8 +202,6 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                             )?;
                         }
                     } else {
-                        // TODO: is it even possible to get here?
-                        // we have to set these to something as they're not optional in the spec
                         environ.set_item("PATH_INFO", "")?;
                         environ.set_item("QUERY_STRING", "")?;
                     }
@@ -210,11 +209,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
 
                     for (name, value) in req.headers.iter() {
                         let corrected_name = match name.to_string().to_uppercase().as_str() {
-                            "CONTENT-LENGTH" => {
-                                let the_string = str::from_utf8(value.as_bytes())?;
-                                content_length = Some(the_string.parse()?);
-                                "CONTENT_LENGTH".to_owned()
-                            }
+                            "CONTENT-LENGTH" => "CONTENT_LENGTH".to_owned(),
                             "CONTENT-TYPE" => "CONTENT_TYPE".to_owned(),
                             s => format!("HTTP_{}", s.replace("-", "_")),
                         };
@@ -227,21 +222,22 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                         }
                     }
 
-                    // TODO: client/server args
                     let sender = Py::new(py, http_sender)?;
                     let args = (environ.into_any().unbind(), sender.into_py(py));
+                    // Clone app inside this same with_gil — no extra GIL acquisition
+                    let app_for_dispatch = self.app.clone_ref(py);
 
-                    Ok::<_, Error>(Ok(args))
+                    Ok::<_, Error>(Ok((args.0, args.1, app_for_dispatch)))
                 });
 
             match args_to_send {
                 Ok(Err(res)) => res.into_response(),
-                Ok(Ok(args)) => {
+                Ok(Ok((arg0, arg1, app))) => {
                     let calculate_value = async {
                         let r = {
-                            let rec = self.python_dispatcher.dispatch1(app, args)?;
+                            let rec = self.python_dispatcher.dispatch1(app, (arg0, arg1))?;
                             rec.await.map_err(|_e| {
-                                PyException::new_err("Could not await greenlet result in wsgi.")
+                                PyException::new_err("Could not await result in wsgi.")
                             })??
                         };
                         Ok(r)
