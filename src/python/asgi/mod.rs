@@ -183,7 +183,9 @@ impl<T: AsyncFn> ServerContext<T> {
                     }
 
                     // create asgi service
-                    let asgi_handler = AsgiHandler::new(app.clone(), dispatcher.clone());
+                    let asgi_handler = Python::with_gil(|py| {
+                        AsgiHandler::new(app.clone_ref(py), dispatcher.clone())
+                    });
 
                     server.call(asgi_handler, rx).await;
 

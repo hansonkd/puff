@@ -554,10 +554,13 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                 );
 
                 let py_dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
-                let acceptor_method = field
-                    .acceptor_method
-                    .clone()
-                    .expect("Subscription field needs an acceptor");
+                let acceptor_method = Python::with_gil(|py| {
+                    field
+                        .acceptor_method
+                        .as_ref()
+                        .map(|o| o.clone_ref(py))
+                })
+                .expect("Subscription field needs an acceptor");
 
                 let python_context = PyContext::new(
                     parents.clone(),

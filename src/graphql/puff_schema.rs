@@ -80,7 +80,7 @@ impl AggroContext {
     }
 
     pub fn auth(&self) -> Option<PyObject> {
-        self.auth.clone()
+        Python::with_gil(|py| self.auth.as_ref().map(|o| o.clone_ref(py)))
     }
 }
 
@@ -125,13 +125,22 @@ pub struct DecodedType {
     pub type_info: AggroTypeInfo,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct AggroArgument {
     pub default: Py<PyAny>,
     pub param_type: DecodedType,
 }
 
-#[derive(Debug, Clone)]
+impl Clone for AggroArgument {
+    fn clone(&self) -> Self {
+        Python::with_gil(|py| Self {
+            default: self.default.clone_ref(py),
+            param_type: self.param_type.clone(),
+        })
+    }
+}
+
+#[derive(Debug)]
 pub struct AggroField {
     pub name: Text,
     pub return_type: DecodedType,
@@ -145,12 +154,29 @@ pub struct AggroField {
     pub default: Py<PyAny>,
 }
 
+impl Clone for AggroField {
+    fn clone(&self) -> Self {
+        Python::with_gil(|py| Self {
+            name: self.name.clone(),
+            return_type: self.return_type.clone(),
+            is_async: self.is_async,
+            depends_on: self.depends_on.clone(),
+            value_from_column: self.value_from_column.clone(),
+            producer_method: self.producer_method.as_ref().map(|o| o.clone_ref(py)),
+            acceptor_method: self.acceptor_method.as_ref().map(|o| o.clone_ref(py)),
+            arguments: self.arguments.clone(),
+            safe_without_context: self.safe_without_context,
+            default: self.default.clone_ref(py),
+        })
+    }
+}
+
 impl AggroField {
     pub fn as_argument(&self) -> AggroArgument {
-        AggroArgument {
-            default: self.default.clone(),
+        Python::with_gil(|py| AggroArgument {
+            default: self.default.clone_ref(py),
             param_type: self.return_type.clone(),
-        }
+        })
     }
 }
 
@@ -265,7 +291,6 @@ pub fn convert_obj(name: &str, desc: BTreeMap<String, Bound<'_, PyAny>>) -> PyRe
     });
 }
 
-#[derive(Clone)]
 #[pyclass]
 pub struct PyContext {
     conn: Option<Connection>,
@@ -273,6 +298,18 @@ pub struct PyContext {
     extractor: Arc<dyn ExtractValues + Send + Sync>,
     auth: Option<PyObject>,
     cache: Py<PyDict>,
+}
+
+impl Clone for PyContext {
+    fn clone(&self) -> Self {
+        Python::with_gil(|py| Self {
+            conn: self.conn.clone(),
+            required_columns: self.required_columns.clone(),
+            extractor: self.extractor.clone(),
+            auth: self.auth.as_ref().map(|o| o.clone_ref(py)),
+            cache: self.cache.clone_ref(py),
+        })
+    }
 }
 
 impl PyContext {
@@ -492,7 +529,7 @@ pub async fn do_returned_values_into_stream(
     layer_cache: Py<PyDict>,
 ) -> PuffResult<Vec<AggroValue>> {
     let type_info = aggro_field.return_type.type_info.clone();
-    let class_method = aggro_field.producer_method.clone();
+    let class_method = Python::with_gil(|py| aggro_field.producer_method.as_ref().map(|o| o.clone_ref(py)));
     let aggro_value_optional = aggro_field.return_type.optional;
     let aggro_value_is_list = aggro_field.return_type.type_info.is_list();
     if rows.len() == 0 {
@@ -711,7 +748,7 @@ pub async fn do_returned_values_into_stream(
                             let new_layer_cache: Py<PyDict> =
                                 Python::with_gil(|py| PyDict::new(py).unbind());
                             for (child, new_lookahead) in child_fields {
-                                let this_layer_cache = new_layer_cache.clone();
+                                let this_layer_cache = Python::with_gil(|py| new_layer_cache.clone_ref(py));
                                 let fut = async {
                                     let children = returned_values_into_stream(
                                         rr.clone(),
@@ -822,7 +859,7 @@ pub async fn do_returned_values_into_stream(
                             let new_layer_cache: Py<PyDict> =
                                 Python::with_gil(|py| PyDict::new(py).unbind());
                             for (child, new_lookahead) in child_fields {
-                                let this_layer_cache = new_layer_cache.clone();
+                                let this_layer_cache = Python::with_gil(|py| new_layer_cache.clone_ref(py));
                                 let fut = async {
                                     let children = returned_values_into_stream(
                                         rr.clone(),
@@ -950,7 +987,7 @@ pub async fn do_returned_values_into_stream(
                 let new_layer_cache: Py<PyDict> =
                     Python::with_gil(|py| PyDict::new(py).unbind());
                 for (child, new_lookahead) in child_fields {
-                    let this_layer_cache = new_layer_cache.clone();
+                    let this_layer_cache = Python::with_gil(|py| new_layer_cache.clone_ref(py));
                     let fut = async {
                         let children = returned_values_into_stream(
                             rows.clone(),
@@ -988,10 +1025,29 @@ pub async fn do_returned_values_into_stream(
     }
 }
 
-#[derive(Clone)]
 pub enum LookAheadFields {
     Terminal(BTreeMap<Text, PyObject>),
     Nested(BTreeMap<Text, PyObject>, BTreeMap<Text, LookAheadFields>),
+}
+
+fn clone_pyobject_btreemap(py: Python, map: &BTreeMap<Text, PyObject>) -> BTreeMap<Text, PyObject> {
+    map.iter()
+        .map(|(k, v)| (k.clone(), v.clone_ref(py)))
+        .collect()
+}
+
+impl Clone for LookAheadFields {
+    fn clone(&self) -> Self {
+        Python::with_gil(|py| match self {
+            LookAheadFields::Terminal(args) => {
+                LookAheadFields::Terminal(clone_pyobject_btreemap(py, args))
+            }
+            LookAheadFields::Nested(args, children) => LookAheadFields::Nested(
+                clone_pyobject_btreemap(py, args),
+                children.clone(),
+            ),
+        })
+    }
 }
 
 impl LookAheadFields {
@@ -1103,10 +1159,10 @@ impl SubscriptionSender {
 #[pymethods]
 impl SubscriptionSender {
     fn __call__(&self, py: Python, ret_func: PyObject, new_function: PyObject) {
-        let this_lookahead = self.look_ahead.clone();
-        let this_field = self.field.clone();
+        let this_lookahead = self.look_ahead.clone(); // GIL held via py param
+        let this_field = self.field.clone(); // GIL held via py param
         let all_objects = self.all_objs.clone();
-        let auth = self.auth.clone();
+        let auth = self.auth.as_ref().map(|o| o.clone_ref(py));
         let this_sender = self.sender.clone();
         let rows = self.rows.clone();
         let context = self.gql_config.new_context(auth);

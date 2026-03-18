@@ -24,12 +24,22 @@ use tokio::sync::mpsc::{self, UnboundedReceiver};
 use tokio::sync::Mutex;
 use tokio_stream::wrappers::ReceiverStream;
 
-#[derive(Clone)]
 pub struct AsgiHandler {
     app: PyObject,
     dispatcher: PythonDispatcher,
     asgi_spec: Py<PyDict>,
     handle: Handle,
+}
+
+impl Clone for AsgiHandler {
+    fn clone(&self) -> Self {
+        Python::with_gil(|py| Self {
+            app: self.app.clone_ref(py),
+            dispatcher: self.dispatcher.clone(),
+            asgi_spec: self.asgi_spec.clone_ref(py),
+            handle: self.handle.clone(),
+        })
+    }
 }
 
 impl AsgiHandler {
@@ -160,7 +170,13 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
     type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
     fn call(self, req: Request<Body>, _state: S) -> Self::Future {
-        let app = self.app.clone();
+        let (app, dispatcher, asgi) = Python::with_gil(|py| {
+            (
+                self.app.clone_ref(py),
+                self.dispatcher.clone(),
+                self.asgi_spec.clone_ref(py),
+            )
+        });
         let (http_sender, mut http_sender_rx) = Sender::new();
         let disconnected = Arc::new(AtomicBool::new(false));
         let (receiver_tx, receiver_rx) = mpsc::unbounded_channel();
@@ -181,8 +197,6 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
                 }
             }
         });
-        let dispatcher = self.dispatcher.clone();
-        let asgi = self.asgi_spec.clone();
         Box::pin(async move {
             let _disconnected = SetTrueOnDrop(disconnected);
             match Python::with_gil(|py| {

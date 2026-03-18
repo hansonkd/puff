@@ -26,12 +26,22 @@ use crate::types::Text;
 pub(crate) type PuffGraphqlRoot =
     Arc<RootNode<'static, PuffGqlObject, PuffGqlObject, PuffGqlObject, AggroScalarValue>>;
 
-#[derive(Clone)]
 pub struct PuffGraphqlConfig {
     root: PuffGraphqlRoot,
     db: Option<Text>,
     auth: Option<PyObject>,
     auth_async: bool,
+}
+
+impl Clone for PuffGraphqlConfig {
+    fn clone(&self) -> Self {
+        Python::with_gil(|py| Self {
+            root: self.root.clone(),
+            db: self.db.clone(),
+            auth: self.auth.as_ref().map(|o| o.clone_ref(py)),
+            auth_async: self.auth_async,
+        })
+    }
 }
 
 impl PuffGraphqlConfig {

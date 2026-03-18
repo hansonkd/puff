@@ -265,9 +265,10 @@ impl Cursor {
         Ok(())
     }
 
-    fn do_get_rowcount(&self, return_fun: PyObject) {
+    fn do_get_rowcount(&self, py: Python, return_fun: PyObject) {
         let inner_loop = self.transaction_loop.clone();
-        self.spawn_and_recover(return_fun.clone(), async move {
+        let return_fun_clone = return_fun.clone_ref(py);
+        self.spawn_and_recover(return_fun_clone, async move {
             let txn_loop = {
                 let m = inner_loop.lock().await;
                 m.clone()
@@ -320,8 +321,9 @@ impl Cursor {
         };
 
         let this_self = self.clone();
+        let return_func_clone = return_func.clone_ref(py);
 
-        self.spawn_and_recover(return_func.clone(), async move {
+        self.spawn_and_recover(return_func_clone, async move {
             let job_sender = get_sender(this_self.pool, this_self.transaction_loop).await;
             Ok(job_sender
                 .send(TxnCommand::ExecuteMany(return_func, operation, seqs))
@@ -353,7 +355,8 @@ impl Cursor {
         };
 
         let this_self = self.clone();
-        self.spawn_and_recover(return_func.clone(), async move {
+        let return_func_clone = return_func.clone_ref(py);
+        self.spawn_and_recover(return_func_clone, async move {
             let job_sender = get_sender(this_self.pool, this_self.transaction_loop).await;
             Ok(job_sender
                 .send(TxnCommand::Execute(return_func, operation, sql_p))
@@ -365,9 +368,10 @@ impl Cursor {
 
     fn callproc(&self, _procname: Bound<'_, PyString>, _parameters: Option<Bound<'_, PyList>>) {}
 
-    fn description(&mut self, return_func: PyObject) {
+    fn description(&mut self, py: Python, return_func: PyObject) {
         let this_self = self.clone();
-        self.spawn_and_recover(return_func.clone(), async move {
+        let return_func_clone = return_func.clone_ref(py);
+        self.spawn_and_recover(return_func_clone, async move {
             let job_sender = get_sender(this_self.pool, this_self.transaction_loop).await;
             Ok(job_sender
                 .send(TxnCommand::Description(return_func))
@@ -375,18 +379,20 @@ impl Cursor {
         });
     }
 
-    fn fetchone(&mut self, return_func: PyObject) {
+    fn fetchone(&mut self, py: Python, return_func: PyObject) {
         let this_self = self.clone();
-        self.spawn_and_recover(return_func.clone(), async move {
+        let return_func_clone = return_func.clone_ref(py);
+        self.spawn_and_recover(return_func_clone, async move {
             let job_sender = get_sender(this_self.pool, this_self.transaction_loop).await;
             Ok(job_sender.send(TxnCommand::FetchOne(return_func)).await?)
         });
     }
 
-    fn fetchmany(&mut self, return_func: PyObject, rowcount: Option<i32>) {
+    fn fetchmany(&mut self, py: Python, return_func: PyObject, rowcount: Option<i32>) {
         let real_row_count = rowcount.unwrap_or(self.arraysize);
         let this_self = self.clone();
-        self.spawn_and_recover(return_func.clone(), async move {
+        let return_func_clone = return_func.clone_ref(py);
+        self.spawn_and_recover(return_func_clone, async move {
             let job_sender = get_sender(this_self.pool, this_self.transaction_loop).await;
             Ok(job_sender
                 .send(TxnCommand::FetchMany(return_func, real_row_count))
@@ -394,9 +400,10 @@ impl Cursor {
         });
     }
 
-    fn fetchall(&mut self, return_func: PyObject) {
+    fn fetchall(&mut self, py: Python, return_func: PyObject) {
         let this_self = self.clone();
-        self.spawn_and_recover(return_func.clone(), async move {
+        let return_func_clone = return_func.clone_ref(py);
+        self.spawn_and_recover(return_func_clone, async move {
             let job_sender = get_sender(this_self.pool, this_self.transaction_loop).await;
             Ok(job_sender.send(TxnCommand::FetchAll(return_func)).await?)
         });
@@ -509,8 +516,14 @@ impl Debug for TxnCommand {
         }
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PythonSqlValue(PyObject);
+
+impl Clone for PythonSqlValue {
+    fn clone(&self) -> Self {
+        Python::with_gil(|py| PythonSqlValue(self.0.clone_ref(py)))
+    }
+}
 
 impl PythonSqlValue {
     pub fn new(value: PyObject) -> PythonSqlValue {
