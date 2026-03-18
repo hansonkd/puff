@@ -77,7 +77,7 @@ async fn get_sender(
     if let Some(l) = x.as_ref() {
         l.clone()
     } else {
-        let (sender, rec) = channel(1);
+        let (sender, rec) = channel(32);
         *x = Some(sender.clone());
         let handle = with_puff_context(|ctx| ctx.handle());
         handle.spawn(async move { run_loop(loop_pool, rec).await.unwrap() });
@@ -416,7 +416,7 @@ pub(crate) fn column_to_python(
     c: &Column,
     row: &Row,
 ) -> PyResult<Py<PyAny>> {
-    let val = match c.type_().clone() {
+    let val = match *c.type_() {
         Type::BOOL => row.get::<_, Option<bool>>(ix).into_py(py),
         Type::TIME => row.get::<_, Option<NaiveTime>>(ix).into_py(py),
         Type::DATE => row.get::<_, Option<NaiveDate>>(ix).into_py(py),
@@ -459,7 +459,7 @@ pub(crate) fn column_to_python(
         Type::DATE_ARRAY => row
             .get::<_, Option<Vec<Option<NaiveDate>>>>(ix)
             .into_py(py),
-        t => {
+        ref t => {
             return Err(NotSupportedError::new_err(format!(
                 "Unsupported postgres type {:?}",
                 t
@@ -538,7 +538,7 @@ impl ToSql for PythonSqlValue {
     {
         Python::with_gil(|py| {
             let obj_ref = self.0.bind(py);
-            match ty.clone() {
+            match *ty {
                 Type::JSON => depythonize::<Option<serde_json::Value>>(obj_ref)?.to_sql(ty, out),
                 Type::JSONB => depythonize::<Option<serde_json::Value>>(obj_ref)?.to_sql(ty, out),
                 Type::TIMESTAMP => obj_ref
@@ -578,7 +578,7 @@ impl ToSql for PythonSqlValue {
                 Type::FLOAT8_ARRAY => obj_ref.extract::<Option<Vec<f64>>>()?.to_sql(ty, out),
                 Type::OID_ARRAY => obj_ref.extract::<Option<Vec<u32>>>()?.to_sql(ty, out),
                 Type::BYTEA_ARRAY => obj_ref.extract::<Option<Vec<Vec<u8>>>>()?.to_sql(ty, out),
-                t => {
+                ref t => {
                     Err(anyhow!(
                         "Could not convert postgres type {:?} from python {:?}",
                         t,
@@ -671,7 +671,7 @@ fn postgres_to_python_exception(e: tokio_postgres::Error) -> PyErr {
                 "Message: {}, Severity: {}{}{}{}{}{}{}",
                 message, severity, hint, pos, schema, table, column, constraint
             );
-            match db_err.code().clone() {
+            match *db_err.code() {
                 SqlState::WARNING => Warning::new_err(formatted),
                 SqlState::SYNTAX_ERROR => ProgrammingError::new_err(formatted),
                 SqlState::INVALID_TABLE_DEFINITION => ProgrammingError::new_err(formatted),
@@ -739,7 +739,7 @@ async fn run_loop(
 }
 
 fn pg_type_to_db2_type(py: Python, ty: &Type) -> PyResult<PyObject> {
-    match ty.clone() {
+    match *ty {
         Type::TIME => get_cached_object(py, "puff.postgres.TIME".into()),
         Type::DATE => get_cached_object(py, "puff.postgres.DATE".into()),
         Type::TIMESTAMP => get_cached_object(py, "puff.postgres.DATETIME".into()),
@@ -753,7 +753,7 @@ fn pg_type_to_db2_type(py: Python, ty: &Type) -> PyResult<PyObject> {
         Type::FLOAT8 => get_cached_object(py, "puff.postgres.NUMBER".into()),
         Type::OID => get_cached_object(py, "puff.postgres.ROWID".into()),
         Type::BYTEA => get_cached_object(py, "puff.postgres.BINARY".into()),
-        t => get_cached_object(py, "puff.postgres.TypeObject".into())?.call1(py, (t.to_string(),)),
+        ref t => get_cached_object(py, "puff.postgres.TypeObject".into())?.call1(py, (t.to_string(),)),
     }
 }
 
@@ -1134,16 +1134,10 @@ async fn run_autocommit_loop<'a>(
                 handle_python_return(ret, async {
                     if let Some(v) = current_stream.as_mut() {
                         let num_rows = real_row_count as usize;
-                        let mut real_result = Vec::with_capacity(num_rows);
+                        let mut rows = Vec::with_capacity(num_rows);
                         for _ in 0..num_rows {
-                            let result = v.next().await;
-                            match result {
-                                Some(Ok(row)) => {
-                                    let obj = Python::with_gil(|py| {
-                                        PyResult::Ok(row_to_pyton(py, row)?.into_py(py))
-                                    })?;
-                                    real_result.push(obj);
-                                }
+                            match v.next().await {
+                                Some(Ok(row)) => rows.push(row),
                                 Some(Err(e)) => {
                                     current_stream = None;
                                     return Err(postgres_to_python_exception(e));
@@ -1154,7 +1148,13 @@ async fn run_autocommit_loop<'a>(
                                 }
                             }
                         }
-                        Ok(real_result)
+                        Python::with_gil(|py| {
+                            let mut result = Vec::with_capacity(rows.len());
+                            for row in rows {
+                                result.push(row_to_pyton(py, row)?.into_py(py));
+                            }
+                            Ok(result)
+                        })
                     } else {
                         Ok(Vec::new())
                     }
@@ -1164,16 +1164,10 @@ async fn run_autocommit_loop<'a>(
             TxnCommand::FetchAll(ret) => {
                 handle_python_return(ret, async {
                     if let Some(v) = current_stream.as_mut() {
-                        let mut real_result = Vec::new();
+                        let mut rows = Vec::new();
                         loop {
-                            let result = v.next().await;
-                            match result {
-                                Some(Ok(row)) => {
-                                    let obj = Python::with_gil(|py| {
-                                        PyResult::Ok(row_to_pyton(py, row)?.into_py(py))
-                                    })?;
-                                    real_result.push(obj);
-                                }
+                            match v.next().await {
+                                Some(Ok(row)) => rows.push(row),
                                 Some(Err(e)) => {
                                     current_stream = None;
                                     return Err(postgres_to_python_exception(e));
@@ -1181,7 +1175,13 @@ async fn run_autocommit_loop<'a>(
                                 None => break,
                             }
                         }
-                        Ok(real_result)
+                        Python::with_gil(|py| {
+                            let mut result = Vec::with_capacity(rows.len());
+                            for row in rows {
+                                result.push(row_to_pyton(py, row)?.into_py(py));
+                            }
+                            Ok(result)
+                        })
                     } else {
                         Err(InternalError::new_err(format!(
                             "Fetchone Cursor not ready."
