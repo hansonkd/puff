@@ -304,24 +304,22 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                         Python::with_gil(|py| {
                             let iter_py = iterator.bind(py);
                             if let Ok(iter) = iter_py.iter() {
-                                for x in iter {
-                                    if let Ok(item) = x {
-                                        let chunk =
-                                            if let Ok(bytes) = item.downcast::<PyBytes>() {
-                                                Some(axum::body::Bytes::copy_from_slice(
-                                                    bytes.as_bytes(),
-                                                ))
-                                            } else if let Ok(s) = item.downcast::<PyString>() {
-                                                Some(axum::body::Bytes::copy_from_slice(
-                                                    s.to_str().unwrap_or("").as_bytes(),
-                                                ))
-                                            } else {
-                                                None
-                                            };
-                                        if let Some(chunk) = chunk {
-                                            if body_tx.blocking_send(Ok(chunk)).is_err() {
-                                                break; // client disconnected
-                                            }
+                                for item in iter.flatten() {
+                                    let chunk =
+                                        if let Ok(bytes) = item.downcast::<PyBytes>() {
+                                            Some(axum::body::Bytes::copy_from_slice(
+                                                bytes.as_bytes(),
+                                            ))
+                                        } else if let Ok(s) = item.downcast::<PyString>() {
+                                            Some(axum::body::Bytes::copy_from_slice(
+                                                s.to_str().unwrap_or("").as_bytes(),
+                                            ))
+                                        } else {
+                                            None
+                                        };
+                                    if let Some(chunk) = chunk {
+                                        if body_tx.blocking_send(Ok(chunk)).is_err() {
+                                            break; // client disconnected
                                         }
                                     }
                                 }
