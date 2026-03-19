@@ -1,10 +1,9 @@
 """Minimal ASGI benchmark app for Puff integration profiling."""
 from __future__ import annotations
 
-import inspect
+import asyncio
 
 import puff
-from puff.redis import global_redis
 
 
 REDIS_KEY = "bench:key"
@@ -21,45 +20,35 @@ def _to_bytes(value) -> bytes:
     return str(value).encode("utf-8")
 
 
-async def _maybe_await(value):
-    if inspect.isawaitable(value):
-        return await value
-    return value
+async def _call_puff(method, *args):
+    loop = asyncio.get_running_loop()
+    result = loop.create_future()
 
+    def done(value, error):
+        if error is None:
+            loop.call_soon_threadsafe(result.set_result, value)
+        else:
+            loop.call_soon_threadsafe(result.set_exception, error)
 
-def _new_postgres_connection():
-    postgres_api = getattr(puff, "postgres", None)
-    if callable(postgres_api):
-        return postgres_api()
-    if postgres_api is not None:
-        for name in ("PostgresConnection", "Connection", "connect"):
-            constructor = getattr(postgres_api, name, None)
-            if constructor is not None:
-                return constructor()
-    raise RuntimeError("Puff Postgres API is not available")
+    method(done, *args)
+    return await result
 
 
 async def _postgres_lookup() -> bytes:
-    conn = _new_postgres_connection()
+    conn = puff.rust_objects.global_postgres_getter()
     try:
-        set_auto_commit = getattr(conn, "set_auto_commit", None)
-        if callable(set_auto_commit):
-            await _maybe_await(set_auto_commit(True))
+        await _call_puff(conn.set_auto_commit, True)
         cursor = conn.cursor()
-        result = await _maybe_await(cursor.execute(POSTGRES_SQL))
-        if isinstance(result, tuple) and len(result) == 3:
-            rows = result[0]
-        else:
-            rows = await _maybe_await(cursor.fetchall())
+        result = await _call_puff(cursor.execute, POSTGRES_SQL, None)
+        rows = result[0] if isinstance(result, tuple) and len(result) == 3 else result
         return _to_bytes(rows[0][0])
     finally:
-        close = getattr(conn, "close", None)
-        if callable(close):
-            await _maybe_await(close())
+        conn.close()
 
 
 async def _redis_lookup() -> bytes:
-    return _to_bytes(await _maybe_await(global_redis.get(REDIS_KEY)))
+    client = puff.rust_objects.global_redis_getter()
+    return _to_bytes(await _call_puff(client.get, REDIS_KEY))
 
 
 async def application(scope, receive, send):
@@ -86,7 +75,8 @@ async def application(scope, receive, send):
     elif path == "/pg":
         body = await _postgres_lookup()
     elif path == "/combo":
-        body = await _redis_lookup() + b":" + await _postgres_lookup()
+        body = await _redis_lookup()
+        body += b":" + await _postgres_lookup()
     else:
         status = 404
         body = b"not-found"

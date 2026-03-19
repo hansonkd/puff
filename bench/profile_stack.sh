@@ -73,7 +73,7 @@ wait_for_redis() {
 
 wait_for_postgres() {
     for _ in $(seq 1 60); do
-        if docker exec "$POSTGRES_CONTAINER" pg_isready -U postgres -d postgres >/dev/null 2>&1; then
+        if docker exec "$POSTGRES_CONTAINER" pg_isready -h 127.0.0.1 -U postgres -d postgres >/dev/null 2>&1; then
             return 0
         fi
         sleep 0.5
@@ -87,7 +87,8 @@ seed_redis() {
 }
 
 seed_postgres() {
-    docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d postgres >/dev/null <<'SQL'
+    for _ in $(seq 1 20); do
+        if docker exec -i "$POSTGRES_CONTAINER" psql -h 127.0.0.1 -U postgres -d postgres >/dev/null <<'SQL'
 CREATE TABLE IF NOT EXISTS puff_bench_lookup (
     id integer PRIMARY KEY,
     value text NOT NULL
@@ -96,6 +97,13 @@ INSERT INTO puff_bench_lookup (id, value)
 VALUES (1, 'postgres-value')
 ON CONFLICT (id) DO UPDATE SET value = EXCLUDED.value;
 SQL
+        then
+            return 0
+        fi
+        sleep 0.5
+    done
+    echo "postgres seeding failed" >&2
+    return 1
 }
 
 run_wrk() {

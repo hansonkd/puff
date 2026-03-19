@@ -296,11 +296,23 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
                     // Call the ASGI app — returns a coroutine
                     let coro = app.call1(py, (scope, receiver, sender))?;
 
-                    // Run the coroutine using asyncio.run() on THIS thread.
-                    // Each request gets its own thread (from Tokio's blocking pool)
-                    // and drives its own event loop.
+                    // Run the coroutine on a thread-local event loop.
+                    // asyncio.run() creates+destroys a loop per call (~1ms overhead).
+                    // Instead, we create one loop per blocking thread and reuse it
+                    // via loop.run_until_complete(coro).
                     let asyncio = py.import("asyncio")?;
-                    let result = asyncio.call_method1("run", (coro,));
+
+                    // Get or create a thread-local event loop
+                    let loop_obj = match asyncio.call_method0("get_event_loop") {
+                        Ok(l) if !l.call_method0("is_closed").and_then(|r| r.extract::<bool>()).unwrap_or(true) => l,
+                        _ => {
+                            let new_loop = asyncio.call_method0("new_event_loop")?;
+                            asyncio.call_method1("set_event_loop", (&new_loop,))?;
+                            new_loop
+                        }
+                    };
+
+                    let result = loop_obj.call_method1("run_until_complete", (coro,));
                     match result {
                         Ok(_) => Ok(()),
                         Err(e) => {
