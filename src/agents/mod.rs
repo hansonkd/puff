@@ -4,6 +4,7 @@ pub mod capabilities;
 pub mod conversation;
 pub mod error;
 pub mod eval;
+pub mod graphql_tool;
 pub mod llm;
 pub mod memory;
 pub mod orchestration;

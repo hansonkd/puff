@@ -34,6 +34,10 @@ pub enum ToolExecutor {
     Wasm {
         module_path: std::path::PathBuf,
     },
+    /// Execute a GraphQL query against a Puff schema.
+    GraphQL {
+        schema_name: Option<String>,
+    },
     Noop,
 }
 
@@ -49,6 +53,7 @@ pub struct RegisteredTool {
 // ToolRegistry
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 pub struct ToolRegistry {
     tools: HashMap<String, RegisteredTool>,
 }
@@ -182,6 +187,19 @@ pub async fn execute_registered_tool(
                     message: format!("failed to serialize tool input: {e}"),
                 })?;
             crate::agents::wasm::execute_wasm_tool(module_path, &input_json, tool.timeout_ms)
+        }
+        ToolExecutor::GraphQL { schema_name } => {
+            let query = arguments
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let variables = arguments.get("variables");
+            crate::agents::graphql_tool::execute_graphql_query(
+                query,
+                variables,
+                schema_name.as_deref(),
+            )
+            .await
         }
         ToolExecutor::Noop => Ok(format!("Tool '{}' completed (no-op)", tool.definition.name)),
     }

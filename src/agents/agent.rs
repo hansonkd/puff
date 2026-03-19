@@ -105,6 +105,20 @@ impl Agent {
         self.rebuild_tool_definitions()
     }
 
+    /// Add the built-in GraphQL query tool to this agent.
+    ///
+    /// If `schema_name` is `None`, the default schema is used and the tool
+    /// is called `graphql_query`. Otherwise the tool name becomes
+    /// `graphql_query_{name}`.
+    pub fn with_graphql_tool(mut self, schema_name: Option<&str>) -> Self {
+        let tool = crate::agents::graphql_tool::graphql_query_tool(schema_name);
+        let mut registry = Arc::try_unwrap(self.tools)
+            .unwrap_or_else(|arc| (*arc).clone());
+        registry.register(tool);
+        self.tools = Arc::new(registry);
+        self.rebuild_tool_definitions()
+    }
+
     /// Attach a pre-existing `Arc<ToolRegistry>` without double-wrapping.
     /// Useful when sharing a registry across parallel tasks.
     pub fn with_tools_arc(mut self, tools: Arc<ToolRegistry>) -> Self {
