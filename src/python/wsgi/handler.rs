@@ -10,6 +10,7 @@ use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyBytes, PyDict, PyString};
 use pyo3::DowncastError;
+use std::convert::Infallible;
 use std::future::Future;
 
 use std::pin::Pin;
@@ -18,6 +19,7 @@ use std::sync::Arc;
 
 use crate::errors::handle_puff_error;
 use crate::types::Text;
+use tokio_stream::wrappers::ReceiverStream;
 use tracing::error;
 use wsgi::Sender;
 
@@ -276,11 +278,7 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                         Err(_) => return WsgiError::FailedToCreateResponse.into_response(),
                     };
                     let headers = response.headers_mut().unwrap();
-                    let mut resp_content_len: Option<u64> = None;
                     for (name, value) in pyheaders {
-                        if name.to_uppercase() == "CONTENT-LENGTH" {
-                            resp_content_len = value.parse().ok();
-                        }
                         let name = match HeaderName::from_bytes(name.as_bytes()) {
                             Ok(name) => name,
                             Err(_e) => {
@@ -296,30 +294,46 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                         headers.append(name, value);
                     }
                     response = response.status(status_code);
-                    let res = Python::with_gil(|py| {
-                        let iter_py = iterator.bind(py);
 
-                        // Collect all body parts
-                        let mut combined =
-                            Vec::with_capacity(resp_content_len.unwrap_or(0) as usize);
-                        for x in iter_py.iter()? {
-                            let item = x?;
-                            if let Ok(bytes) = item.downcast::<PyBytes>() {
-                                combined.extend_from_slice(bytes.as_bytes());
-                            } else if let Ok(s) = item.downcast::<PyString>() {
-                                combined.extend_from_slice(s.to_str().unwrap().as_bytes());
+                    // Stream the response body through a channel instead of
+                    // buffering the entire iterator in memory.
+                    let (body_tx, body_rx) =
+                        tokio::sync::mpsc::channel::<Result<axum::body::Bytes, Infallible>>(4);
+
+                    tokio::task::spawn_blocking(move || {
+                        Python::with_gil(|py| {
+                            let iter_py = iterator.bind(py);
+                            if let Ok(iter) = iter_py.iter() {
+                                for x in iter {
+                                    if let Ok(item) = x {
+                                        let chunk =
+                                            if let Ok(bytes) = item.downcast::<PyBytes>() {
+                                                Some(axum::body::Bytes::copy_from_slice(
+                                                    bytes.as_bytes(),
+                                                ))
+                                            } else if let Ok(s) = item.downcast::<PyString>() {
+                                                Some(axum::body::Bytes::copy_from_slice(
+                                                    s.to_str().unwrap_or("").as_bytes(),
+                                                ))
+                                            } else {
+                                                None
+                                            };
+                                        if let Some(chunk) = chunk {
+                                            if body_tx.blocking_send(Ok(chunk)).is_err() {
+                                                break; // client disconnected
+                                            }
+                                        }
+                                    }
+                                }
                             }
-                        }
-                        let body = Body::from(combined);
-                        Ok(response
-                            .body(body)
-                            .map(|f| f.into_response())
-                            .unwrap_or(WsgiError::FailedToCreateResponse.into_response()))
+                            // body_tx is dropped here, signalling end-of-stream
+                        });
                     });
 
-                    match res {
-                        Ok(r) => r,
-                        Err(e) => WsgiError::PyErr(e).into_response(),
+                    let body = Body::from_stream(ReceiverStream::new(body_rx));
+                    match response.body(body) {
+                        Ok(r) => r.into_response(),
+                        Err(_e) => WsgiError::FailedToCreateResponse.into_response(),
                     }
                 }
                 Err(e) => {
