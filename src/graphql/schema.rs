@@ -23,10 +23,8 @@ use crate::errors::log_puff_error;
 
 /// Extract the parent GqlValue from a resolver context's parent_value.
 ///
-/// async-graphql stores the parent's FieldValue in `ctx.parent_value`.
-/// When the parent resolver returned `FieldValue::value(GqlValue::Object({...}))`
-/// we retrieve it via `try_to_value()`.  This is the standard representation
-/// used by the layer engine for object types.
+/// Parent values are stored as FieldValue::value(GqlValue::Object({...})).
+/// async-graphql passes this directly to child field resolvers.
 fn extract_parent_gql_value<'a>(ctx: &'a ResolverContext<'_>) -> Option<&'a GqlValue> {
     ctx.parent_value.try_to_value().ok()
 }
@@ -124,15 +122,14 @@ fn resolve_root_scalar_fast_path(
     })
 }
 
-/// Convert a resolved GqlValue into a FieldValue suitable for async-graphql.
+/// Convert a resolved GqlValue into a FieldValue for async-graphql.
 ///
-/// Returns `None` for null values (which async-graphql treats as absent/null).
-/// For all other values, wraps them with `FieldValue::value()`. async-graphql
-/// handles object and list-of-object resolution automatically: when the schema
-/// type is an Object, it calls `resolve_container` which invokes child field
-/// resolvers with the parent FieldValue. Child resolvers then use
-/// `extract_parent_gql_value` to read from the parent object's data.
-fn gql_to_field_value(val: GqlValue) -> Option<FieldValue<'static>> {
+/// async-graphql resolves the type from the schema definition, not from
+/// the FieldValue wrapper. So FieldValue::value() is sufficient for all
+/// types — async-graphql matches (Type::Object, _) in resolve_value and
+/// calls resolve_container which invokes child resolvers. For lists,
+/// FieldValue::value(GqlValue::List(...)) is auto-expanded by resolve().
+fn gql_to_field_value(val: GqlValue, _field: &AggroField) -> Option<FieldValue<'static>> {
     if val == GqlValue::Null {
         None
     } else {
@@ -184,7 +181,7 @@ fn build_object_type(
                             .cloned()
                             .unwrap_or(GqlValue::Null);
 
-                        return Ok(gql_to_field_value(val));
+                        return Ok(gql_to_field_value(val, &field));
                     }
                     // If we could not extract from parent, fall through to
                     // layer engine (should not normally happen for well-formed
@@ -197,7 +194,7 @@ fn build_object_type(
                         resolve_root_scalar_fast_path(&field, &inputs, aggro_ctx, &ctx.args),
                     );
                     return match result {
-                        Ok(val) => Ok(gql_to_field_value(val)),
+                        Ok(val) => Ok(gql_to_field_value(val, &field)),
                         Err(e) => Err(async_graphql::Error::new(format!("{}", e))),
                     };
                 }
@@ -232,7 +229,7 @@ fn build_object_type(
 
                 let result = log_puff_error("GQL", fut.await);
                 match result {
-                    Ok(val) => Ok(gql_to_field_value(val)),
+                    Ok(val) => Ok(gql_to_field_value(val, &field)),
                     Err(e) => Err(async_graphql::Error::new(format!("{}", e))),
                 }
             })
