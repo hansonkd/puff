@@ -1,19 +1,23 @@
+//! Core schema types and resolver logic for async-graphql dynamic schema.
+//!
+//! Retains the Python dataclass parsing (AggroObject, AggroField, etc.) and
+//! the layer-based resolution strategy, but builds async_graphql::dynamic types
+//! instead of juniper types.
+
 use crate::context::with_puff_context;
 use crate::errors::{to_py_error, PuffResult};
-use crate::graphql::puff_schema::LookAheadFields::{Nested, Terminal};
-use crate::graphql::row_return::{ExtractValues, PostgresResultRows, PythonResultRows};
-use crate::graphql::scalar::{AggroScalarValue, AggroValue};
+use crate::graphql::row_return::{
+    ExtractValues, PostgresResultRows, PythonResultRows,
+};
+use crate::graphql::scalar::AggroValue;
 use crate::python::async_python::run_python_async;
 use crate::python::postgres::{execute_rust, Connection, PythonSqlValue};
 use crate::types::text::ToText;
 use crate::types::Text;
 use anyhow::{anyhow, bail};
 
-use futures_util::FutureExt;
-use juniper::{
-    BoxFuture, ExecutionError, LookAheadArgument, LookAheadMethods, LookAheadSelection,
-    LookAheadValue, Object, Value,
-};
+use async_graphql::dynamic::*;
+use async_graphql::Value as GqlValue;
 
 use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyBytes, PyDict, PyList, PyString};
@@ -22,9 +26,10 @@ use std::collections::{BTreeMap, HashSet};
 use base64::Engine;
 use chrono::{DateTime, NaiveDateTime};
 use futures_util::future::join_all;
+use futures_util::FutureExt;
+use indexmap::IndexMap;
 use std::sync::Arc;
 
-use crate::graphql;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Mutex;
 
@@ -44,13 +49,15 @@ fn args_to_py_dict<'py>(
     Ok(dict)
 }
 
+// ---------------------------------------------------------------------------
+// AggroContext -- request-scoped context passed through async-graphql Data
+// ---------------------------------------------------------------------------
+
 pub struct AggroContext {
     auth: Option<PyObject>,
     conn: Option<Mutex<Connection>>,
     config: PuffGraphqlConfig,
 }
-
-impl juniper::Context for AggroContext {}
 
 impl AggroContext {
     pub fn new(auth: Option<PyObject>, config: PuffGraphqlConfig) -> Self {
@@ -66,7 +73,7 @@ impl AggroContext {
         conn: Option<Connection>,
         config: PuffGraphqlConfig,
     ) -> Self {
-        let conn = conn.map(|c| Mutex::new(c));
+        let conn = conn.map(Mutex::new);
         Self { auth, config, conn }
     }
 
@@ -87,6 +94,10 @@ impl AggroContext {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Schema type definitions (kept from original)
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone)]
 pub enum AggroTypeInfo {
     String,
@@ -105,21 +116,6 @@ impl AggroTypeInfo {
     fn is_list(&self) -> bool {
         matches!(self, AggroTypeInfo::List(_))
     }
-    // fn is_scalar(&self) -> bool {
-    //     matches!(
-    //         self,
-    //         AggroTypeInfo::String
-    //             | AggroTypeInfo::Int
-    //             | AggroTypeInfo::Boolean
-    //             | AggroTypeInfo::Float
-    //     )
-    // }
-    // fn is_object(&self) -> bool {
-    //     matches!(self, AggroTypeInfo::Object(_))
-    // }
-    // fn is_complex(&self) -> bool {
-    //     !(self.is_object() || self.is_list())
-    // }
 }
 
 #[derive(Debug, Clone)]
@@ -301,6 +297,10 @@ pub fn convert_obj(name: &str, desc: BTreeMap<String, Bound<'_, PyAny>>) -> PyRe
     })
 }
 
+// ---------------------------------------------------------------------------
+// PyContext (passed to Python producer/acceptor methods)
+// ---------------------------------------------------------------------------
+
 #[pyclass]
 pub struct PyContext {
     conn: Option<Connection>,
@@ -365,33 +365,37 @@ impl PyContext {
     }
 }
 
-fn input_to_python(
+// ---------------------------------------------------------------------------
+// Input conversion (Python arguments from async_graphql::Value)
+// ---------------------------------------------------------------------------
+
+fn input_value_to_python(
     py: Python,
     t: &DecodedType,
     all_inputs: &Arc<BTreeMap<Text, AggroObject>>,
-    v: &LookAheadValue<AggroScalarValue>,
+    v: &GqlValue,
 ) -> PuffResult<Py<PyAny>> {
-    if v == &LookAheadValue::Null {
+    if v == &GqlValue::Null {
         if t.optional {
-            return Ok(PyList::empty(py).into_py(py));
+            return Ok(py.None());
         } else {
             bail!("Null supplied to non-optional field");
         }
-    };
+    }
 
     match &t.type_info {
         AggroTypeInfo::List(inner_t) => match v {
-            LookAheadValue::List(inner) => {
+            GqlValue::List(inner) => {
                 let mut val_vec: Vec<PyObject> = Vec::with_capacity(inner.len());
                 for iv in inner {
-                    val_vec.push(input_to_python(py, inner_t, all_inputs, iv)?);
+                    val_vec.push(input_value_to_python(py, inner_t, all_inputs, iv)?);
                 }
                 PuffResult::Ok(PyList::new(py, val_vec)?.into_py(py))
             }
             _ => bail!("Input non-list to a list input"),
         },
         AggroTypeInfo::Object(inner_t_name) => match v {
-            LookAheadValue::Object(inner) => {
+            GqlValue::Object(inner) => {
                 if let Some(inner_t) = all_inputs.get(inner_t_name) {
                     let mut required = HashSet::new();
                     for (n, f) in inner_t.fields.iter() {
@@ -401,12 +405,12 @@ fn input_to_python(
                     }
                     let mut val_vec: Vec<(PyObject, PyObject)> = Vec::with_capacity(inner.len());
                     for (k, iv) in inner {
-                        let key = k.to_text();
+                        let key = k.as_str().to_text();
                         if let Some(f) = inner_t.fields.get(&key) {
                             required.remove(&key);
                             val_vec.push((
                                 key.into_py(py),
-                                input_to_python(py, &f.return_type, all_inputs, iv)?,
+                                input_value_to_python(py, &f.return_type, all_inputs, iv)?,
                             ));
                         }
                     }
@@ -419,95 +423,295 @@ fn input_to_python(
                     bail!("Could not find type {}", inner_t_name)
                 }
             }
-            _ => bail!("Input non-object to a object input"),
+            _ => bail!("Input non-object to an object input"),
         },
         AggroTypeInfo::Int => match v {
-            LookAheadValue::Scalar(&AggroScalarValue::Int(i)) => Ok(i.into_py(py)),
-            LookAheadValue::Scalar(&AggroScalarValue::Long(i)) => Ok(i.into_py(py)),
-            _ => bail!("Input non-int to a int input"),
+            GqlValue::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Ok(i.into_py(py))
+                } else {
+                    bail!("Input non-int to an int input")
+                }
+            }
+            _ => bail!("Input non-int to an int input"),
         },
         AggroTypeInfo::Float => match v {
-            LookAheadValue::Scalar(&AggroScalarValue::Float(i)) => Ok(i.into_py(py)),
+            GqlValue::Number(n) => {
+                if let Some(f) = n.as_f64() {
+                    Ok(f.into_py(py))
+                } else {
+                    bail!("Input non-float to a float input")
+                }
+            }
             _ => bail!("Input non-float to a float input"),
         },
         AggroTypeInfo::String => match v {
-            LookAheadValue::Scalar(AggroScalarValue::String(i)) => Ok(i.clone().into_py(py)),
+            GqlValue::String(i) => Ok(i.clone().into_py(py)),
             _ => bail!("Input non-string to a string input"),
         },
         AggroTypeInfo::Binary => match v {
-            LookAheadValue::Scalar(AggroScalarValue::String(i)) => Ok(PyBytes::new(
+            GqlValue::String(i) => Ok(PyBytes::new(
                 py,
                 &base64::engine::general_purpose::STANDARD.decode(i.as_str())?,
             )
             .into_py(py)),
-            LookAheadValue::Scalar(AggroScalarValue::Binary(i)) => Ok(i.clone().into_py(py)),
-            _ => bail!("Binary input expected base64 string or binary"),
+            _ => bail!("Binary input expected base64 string"),
         },
         AggroTypeInfo::Datetime => match v {
-            LookAheadValue::Scalar(AggroScalarValue::String(i)) => {
+            GqlValue::String(i) => {
                 let py_obj: NaiveDateTime = DateTime::parse_from_rfc3339(i.as_str())?.naive_utc();
                 Ok(py_obj.into_py(py))
             }
-            LookAheadValue::Scalar(AggroScalarValue::Datetime(i)) => {
-                let py_obj: NaiveDateTime = i.to_chrono().naive_utc();
-                Ok(py_obj.into_py(py))
-            }
-            _ => bail!("Datetime input expected string or datetime"),
+            _ => bail!("Datetime input expected string"),
         },
         AggroTypeInfo::Uuid => match v {
-            LookAheadValue::Scalar(AggroScalarValue::String(i)) => {
-                Ok(Uuid::parse_str(i.as_str())?.to_string().into_py(py))
-            }
-            LookAheadValue::Scalar(AggroScalarValue::Uuid(i)) => Ok(i.to_string().into_py(py)),
-            _ => bail!("Input non-string to a string input"),
+            GqlValue::String(i) => Ok(Uuid::parse_str(i.as_str())?.to_string().into_py(py)),
+            _ => bail!("Uuid input expected string"),
         },
         AggroTypeInfo::Boolean => match v {
-            LookAheadValue::Scalar(AggroScalarValue::Boolean(i)) => Ok(i.into_py(py)),
+            GqlValue::Boolean(i) => Ok(i.into_py(py)),
             _ => bail!("Input non-bool to a bool input"),
         },
         AggroTypeInfo::Any => match v {
-            LookAheadValue::Null => Ok(py.None()),
-            LookAheadValue::Scalar(s) => graphql::scalar_to_python(py, s),
-            LookAheadValue::List(vals) => {
-                let mut v = Vec::with_capacity(vals.len());
+            GqlValue::Null => Ok(py.None()),
+            GqlValue::Boolean(b) => Ok(b.into_py(py)),
+            GqlValue::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Ok(i.into_py(py))
+                } else if let Some(f) = n.as_f64() {
+                    Ok(f.into_py(py))
+                } else {
+                    Ok(py.None())
+                }
+            }
+            GqlValue::String(s) => Ok(s.clone().into_py(py)),
+            GqlValue::List(vals) => {
+                let mut vec = Vec::with_capacity(vals.len());
                 for val in vals {
-                    v.push(input_to_python(py, t, all_inputs, val)?);
+                    vec.push(input_value_to_python(py, t, all_inputs, val)?);
                 }
-                Ok(PyList::new(py, v)?.into_py(py))
+                Ok(PyList::new(py, vec)?.into_py(py))
             }
-            LookAheadValue::Object(vals) => {
-                let mut v = BTreeMap::new();
+            GqlValue::Object(vals) => {
+                let mut map = BTreeMap::new();
                 for (k, val) in vals {
-                    v.insert(k, input_to_python(py, t, all_inputs, val)?);
+                    map.insert(k.as_str(), input_value_to_python(py, t, all_inputs, val)?);
                 }
-                Ok(v.into_py_dict(py)?.into_py(py))
+                Ok(map.into_py_dict(py)?.into_py(py))
             }
-            _ => bail!("Input non-bool to a bool input"),
+            _ => bail!("Unsupported value for Any type"),
         },
     }
 }
 
-fn key_from_extracted<I: Iterator<Item = AggroValue>>(row_iter: &mut I, len: usize) -> Vec<u8> {
-    let v = if len == 1 {
-        row_iter.next().unwrap_or(AggroValue::Null)
-    } else {
-        let mut obj = Object::with_capacity(len);
-        for c in 0..len {
-            obj.add_field(
-                *NUMBERS.get(c).unwrap(),
-                row_iter.next().unwrap_or(AggroValue::Null),
+/// Collect arguments from an ObjectAccessor into Python dict entries.
+pub(crate) fn collect_arguments_for_python(
+    py: Python,
+    all_inputs: &Arc<BTreeMap<Text, AggroObject>>,
+    field: &AggroField,
+    args: &ObjectAccessor<'_>,
+) -> PuffResult<BTreeMap<Text, PyObject>> {
+    let mut ret = BTreeMap::new();
+    for (arg_name, arg_def) in &field.arguments {
+        if let Some(val) = args.get(arg_name.as_str()) {
+            let gql_val = val.as_value().clone();
+            ret.insert(
+                arg_name.clone(),
+                input_value_to_python(py, &arg_def.param_type, all_inputs, &gql_val)?,
             );
         }
-        AggroValue::Object(obj)
+    }
+    Ok(ret)
+}
+
+// ---------------------------------------------------------------------------
+// Key building for correlation (unchanged from original)
+// ---------------------------------------------------------------------------
+
+fn key_from_extracted<I: Iterator<Item = GqlValue>>(row_iter: &mut I, len: usize) -> Vec<u8> {
+    let v = if len == 1 {
+        row_iter.next().unwrap_or(GqlValue::Null)
+    } else {
+        let mut obj = IndexMap::with_capacity(len);
+        for c in 0..len {
+            obj.insert(
+                async_graphql::Name::new(*NUMBERS.get(c).unwrap()),
+                row_iter.next().unwrap_or(GqlValue::Null),
+            );
+        }
+        GqlValue::Object(obj)
     };
 
-    bincode::serialize(&v).expect("Could not make correlation Key")
+    serde_json::to_vec(&v).expect("Could not make correlation Key")
 }
+
+// ---------------------------------------------------------------------------
+// Layer-based resolution engine
+// ---------------------------------------------------------------------------
 
 enum PythonMethodResult {
     SqlQuery(String, Vec<PythonSqlValue>),
     PythonList(Py<PyList>),
 }
+
+pub enum LookAheadFields {
+    Terminal(BTreeMap<Text, PyObject>),
+    Nested(BTreeMap<Text, PyObject>, BTreeMap<Text, LookAheadFields>),
+}
+
+fn clone_pyobject_btreemap(py: Python, map: &BTreeMap<Text, PyObject>) -> BTreeMap<Text, PyObject> {
+    map.iter()
+        .map(|(k, v)| (k.clone(), v.clone_ref(py)))
+        .collect()
+}
+
+impl Clone for LookAheadFields {
+    fn clone(&self) -> Self {
+        Python::with_gil(|py| match self {
+            LookAheadFields::Terminal(args) => {
+                LookAheadFields::Terminal(clone_pyobject_btreemap(py, args))
+            }
+            LookAheadFields::Nested(args, children) => {
+                LookAheadFields::Nested(clone_pyobject_btreemap(py, args), children.clone())
+            }
+        })
+    }
+}
+
+impl LookAheadFields {
+    pub fn arguments(&self) -> &BTreeMap<Text, PyObject> {
+        match self {
+            LookAheadFields::Terminal(args) => args,
+            LookAheadFields::Nested(args, _) => args,
+        }
+    }
+}
+
+/// Build a LookAheadFields from a ResolverContext (inspects the selection set).
+pub fn build_look_ahead_from_ctx(
+    py: Python,
+    field: &AggroField,
+    ctx: &async_graphql::Context<'_>,
+    all_inputs: &Arc<BTreeMap<Text, AggroObject>>,
+    all_objects: &Arc<BTreeMap<Text, AggroObject>>,
+    args: &ObjectAccessor<'_>,
+) -> PuffResult<LookAheadFields> {
+    let py_args = collect_arguments_for_python(py, all_inputs, field, args)?;
+
+    let has_children = ctx.field().selection_set().count() > 0;
+
+    if has_children {
+        let t = match &field.return_type.type_info {
+            AggroTypeInfo::Object(t) => t,
+            AggroTypeInfo::List(inner) => match &inner.type_info {
+                AggroTypeInfo::Object(t) => t,
+                _ => return Ok(LookAheadFields::Terminal(py_args)),
+            },
+            _ => return Ok(LookAheadFields::Terminal(py_args)),
+        };
+
+        if let Some(obj) = all_objects.get(t) {
+            let mut children = BTreeMap::new();
+            for sel_field in ctx.field().selection_set() {
+                let child_name = sel_field.name().to_text();
+                if let Some(child_field) = obj.fields.get(&child_name) {
+                    let child_args =
+                        collect_child_args_for_python(py, all_inputs, child_field, &sel_field)?;
+                    let child_has_children = sel_field.selection_set().count() > 0;
+                    if child_has_children {
+                        let child_laf = build_child_look_ahead(
+                            py,
+                            child_field,
+                            &sel_field,
+                            all_inputs,
+                            all_objects,
+                            child_args,
+                        )?;
+                        children.insert(child_name, child_laf);
+                    } else {
+                        children.insert(child_name, LookAheadFields::Terminal(child_args));
+                    }
+                }
+            }
+            Ok(LookAheadFields::Nested(py_args, children))
+        } else {
+            Ok(LookAheadFields::Terminal(py_args))
+        }
+    } else {
+        Ok(LookAheadFields::Terminal(py_args))
+    }
+}
+
+fn collect_child_args_for_python(
+    py: Python,
+    all_inputs: &Arc<BTreeMap<Text, AggroObject>>,
+    field: &AggroField,
+    sel_field: &async_graphql::SelectionField<'_>,
+) -> PuffResult<BTreeMap<Text, PyObject>> {
+    let mut ret = BTreeMap::new();
+    if let Ok(args) = sel_field.arguments() {
+        for (arg_name, arg_def) in &field.arguments {
+            if let Some((_name, val)) = args
+                .iter()
+                .find(|(name, _)| name.as_str() == arg_name.as_str())
+            {
+                ret.insert(
+                    arg_name.clone(),
+                    input_value_to_python(py, &arg_def.param_type, all_inputs, val)?,
+                );
+            }
+        }
+    }
+    Ok(ret)
+}
+
+fn build_child_look_ahead(
+    py: Python,
+    field: &AggroField,
+    sel_field: &async_graphql::SelectionField<'_>,
+    all_inputs: &Arc<BTreeMap<Text, AggroObject>>,
+    all_objects: &Arc<BTreeMap<Text, AggroObject>>,
+    py_args: BTreeMap<Text, PyObject>,
+) -> PuffResult<LookAheadFields> {
+    let t = match &field.return_type.type_info {
+        AggroTypeInfo::Object(t) => t,
+        AggroTypeInfo::List(inner) => match &inner.type_info {
+            AggroTypeInfo::Object(t) => t,
+            _ => return Ok(LookAheadFields::Terminal(py_args)),
+        },
+        _ => return Ok(LookAheadFields::Terminal(py_args)),
+    };
+
+    if let Some(obj) = all_objects.get(t) {
+        let mut children = BTreeMap::new();
+        for child_sel in sel_field.selection_set() {
+            let child_name = child_sel.name().to_text();
+            if let Some(child_field) = obj.fields.get(&child_name) {
+                let child_args =
+                    collect_child_args_for_python(py, all_inputs, child_field, &child_sel)?;
+                let child_has_children = child_sel.selection_set().count() > 0;
+                if child_has_children {
+                    let child_laf = build_child_look_ahead(
+                        py,
+                        child_field,
+                        &child_sel,
+                        all_inputs,
+                        all_objects,
+                        child_args,
+                    )?;
+                    children.insert(child_name, child_laf);
+                } else {
+                    children.insert(child_name, LookAheadFields::Terminal(child_args));
+                }
+            }
+        }
+        Ok(LookAheadFields::Nested(py_args, children))
+    } else {
+        Ok(LookAheadFields::Terminal(py_args))
+    }
+}
+
+// The core layer-resolution function (ported from original)
 
 pub fn returned_values_into_stream<'a>(
     rows: Arc<dyn ExtractValues + Send + Sync>,
@@ -516,7 +720,7 @@ pub fn returned_values_into_stream<'a>(
     all_objects: Arc<BTreeMap<Text, AggroObject>>,
     aggro_context: &'a AggroContext,
     layer_cache: Py<PyDict>,
-) -> BoxFuture<'a, PuffResult<Vec<AggroValue>>> {
+) -> futures_util::future::BoxFuture<'a, PuffResult<Vec<AggroValue>>> {
     do_returned_values_into_stream(
         rows,
         look_ahead,
@@ -551,16 +755,19 @@ pub async fn do_returned_values_into_stream(
     let (args, child_fields) = match look_ahead {
         LookAheadFields::Nested(args, children) => {
             let ret_type = match type_info {
-                AggroTypeInfo::List(l) => {
-                    match l.type_info {
-                        AggroTypeInfo::Object(l) => all_objects.get(&l),
-                        at => {
-                            bail!("Attempted to look up children {:?} on a list of scalar values {} {:?}", children.keys().collect::<Vec<_>>(), aggro_field.name, at)
-                        }
+                AggroTypeInfo::List(l) => match l.type_info {
+                    AggroTypeInfo::Object(l) => all_objects.get(&l),
+                    ref at => {
+                        bail!(
+                            "Attempted to look up children {:?} on a list of scalar values {} {:?}",
+                            children.keys().collect::<Vec<_>>(),
+                            aggro_field.name,
+                            at
+                        )
                     }
-                }
-                AggroTypeInfo::Object(l) => all_objects.get(&l),
-                at => {
+                },
+                AggroTypeInfo::Object(ref l) => all_objects.get(l),
+                ref at => {
                     bail!(
                         "Attempted to look up children {:?} on a scalar value {} {:?}",
                         children.keys().collect::<Vec<_>>(),
@@ -571,9 +778,9 @@ pub async fn do_returned_values_into_stream(
             };
             let mut child_fields = Vec::with_capacity(children.len());
             if let Some(obj) = ret_type {
-                for (child, nested_lookahad) in children.iter() {
+                for (child, nested_lookahead) in children.iter() {
                     if let Some(field) = obj.fields.get(child) {
-                        child_fields.push((field, nested_lookahad))
+                        child_fields.push((field, nested_lookahead))
                     } else {
                         bail!(
                             "Could not find child field {} type for {}",
@@ -590,7 +797,6 @@ pub async fn do_returned_values_into_stream(
         LookAheadFields::Terminal(args) => (args, Vec::new()),
     };
 
-    // Collect children database fields
     let mut child_depends_on_vec = HashSet::new();
     for (f, _) in child_fields.iter().copied() {
         for x in &f.depends_on {
@@ -619,7 +825,6 @@ pub async fn do_returned_values_into_stream(
 
                     let rec = if let Some(s) = aggro_context.maybe_connection() {
                         let conn = s.lock().await;
-
                         let py_extractor = PyContext::new(
                             rows.clone(),
                             aggro_context.auth(),
@@ -627,8 +832,6 @@ pub async fn do_returned_values_into_stream(
                             layer_cache,
                             children_require,
                         );
-
-                        // Method must be run with lock held to prevent concurrent access to db conn.
                         Python::with_gil(|py| {
                             let arg_dict = args_to_py_dict(py, args)?;
                             if aggro_field.is_async {
@@ -638,7 +841,11 @@ pub async fn do_returned_values_into_stream(
                                     Some(arg_dict.unbind()),
                                 )
                             } else {
-                                py_dispatcher.dispatch(cm, (py_extractor,), Some(arg_dict.unbind()))
+                                py_dispatcher.dispatch(
+                                    cm,
+                                    (py_extractor,),
+                                    Some(arg_dict.unbind()),
+                                )
                             }
                         })?
                     } else {
@@ -658,11 +865,14 @@ pub async fn do_returned_values_into_stream(
                                     Some(arg_dict.unbind()),
                                 )
                             } else {
-                                py_dispatcher.dispatch(cm, (py_extractor,), Some(arg_dict.unbind()))
+                                py_dispatcher.dispatch(
+                                    cm,
+                                    (py_extractor,),
+                                    Some(arg_dict.unbind()),
+                                )
                             }
                         })?
                     };
-
                     rec.await??
                 }
             };
@@ -725,8 +935,9 @@ pub async fn do_returned_values_into_stream(
             let rr: Arc<dyn ExtractValues + Send + Sync> = match method_result {
                 PythonMethodResult::PythonList(l) => Arc::new(PythonResultRows { py_list: l }),
                 PythonMethodResult::SqlQuery(q, params) => {
-                    let conn_mutex = aggro_context.connection()
-                        .ok_or_else(|| anyhow!("SQL query returned but Postgres is not configured"))?;
+                    let conn_mutex = aggro_context.connection().ok_or_else(|| {
+                        anyhow!("SQL query returned but Postgres is not configured")
+                    })?;
                     let conn = conn_mutex.lock().await;
                     let (statement, rows) = execute_rust(&conn, q, params).await?;
                     Arc::new(PostgresResultRows::new(statement, rows))
@@ -739,121 +950,62 @@ pub async fn do_returned_values_into_stream(
                     let children_vec = if child_fields.is_empty() {
                         if let Some(col) = aggro_field.value_from_column.as_ref() {
                             let vals = rr.extract_values(std::slice::from_ref(col))?;
-                            let mut ret_val = Vec::with_capacity(vals.len());
-                            for val in vals {
-                                ret_val.push(
+                            vals.into_iter()
+                                .map(|val| {
                                     val.and_then(|v| v.into_iter().next())
-                                        .unwrap_or(AggroValue::Null),
-                                );
-                            }
-                            ret_val
+                                        .unwrap_or(GqlValue::Null)
+                                })
+                                .collect()
                         } else {
                             rr.extract_first()?
                         }
                     } else {
-                        let mut objs = Vec::with_capacity(rr.len());
-                        for present in rr.row_presence() {
-                            if !present {
-                                objs.push(None)
-                            } else {
-                                objs.push(Some(juniper::Object::<AggroScalarValue>::with_capacity(
-                                    child_fields.len(),
-                                )))
-                            }
-                        }
-                        if objs.iter().all(|f| f.is_none()) {
-                            objs.iter().map(|_| AggroValue::Null).collect::<Vec<_>>()
-                        } else {
-                            let mut to_compute = Vec::with_capacity(child_fields.len());
-                            let new_layer_cache: Py<PyDict> =
-                                Python::with_gil(|py| PyDict::new(py).unbind());
-                            for (child, new_lookahead) in child_fields.iter().copied() {
-                                let child_rows = rr.clone();
-                                let child_objects = all_objects.clone();
-                                let this_layer_cache =
-                                    Python::with_gil(|py| new_layer_cache.clone_ref(py));
-                                let fut = async move {
-                                    let children = returned_values_into_stream(
-                                        child_rows,
-                                        new_lookahead,
-                                        child,
-                                        child_objects,
-                                        aggro_context,
-                                        this_layer_cache,
-                                    )
-                                    .await;
-                                    (child, children)
-                                };
-                                to_compute.push(fut)
-                            }
-                            let children_results = join_all(to_compute).await;
-                            for (child, children) in children_results {
-                                for (obj, new_value) in objs.iter_mut().zip(children?) {
-                                    if new_value.is_null() && !child.return_type.optional {
-                                        bail!("Missing value in return for field {} which is not optional.", child.name);
-                                    } else if let Some(o) = obj {
-                                        o.add_field(child.name.as_str(), new_value);
-                                    }
-                                }
-                            }
-                            objs.into_iter()
-                                .map(|f| match f {
-                                    Some(o) => AggroValue::Object(o),
-                                    None => AggroValue::null(),
-                                })
-                                .collect::<Vec<_>>()
-                        }
+                        build_child_objects(rr, &child_fields, &all_objects, aggro_context).await?
                     };
                     let mut final_vec = Vec::with_capacity(parent_row_len);
-
                     if aggro_value_is_list {
-                        final_vec.push(AggroValue::List(children_vec));
-
+                        final_vec.push(GqlValue::List(children_vec));
                         for _ in 1..parent_row_len {
-                            final_vec.push(AggroValue::List(vec![]));
+                            final_vec.push(GqlValue::List(vec![]));
                         }
                     } else {
                         let mut child_iter = children_vec.into_iter();
-
                         for _ in 0..parent_row_len {
                             if let Some(c) = child_iter.next() {
                                 final_vec.push(c)
                             } else if aggro_value_optional {
-                                final_vec.push(AggroValue::Null)
+                                final_vec.push(GqlValue::Null)
                             } else {
-                                bail!("Missing value in return for field {} which is not optional. Only received {} of {} children.", aggro_field.name, final_vec.len(), parent_row_len);
+                                bail!(
+                                    "Missing value in return for field {} which is not optional.",
+                                    aggro_field.name
+                                );
                             }
                         }
                     }
-
                     Ok(final_vec)
                 }
                 Some((parent_cor, cor)) => {
                     let parent_vals = rows.extract_values(&parent_cor)?;
                     if parent_vals.iter().all(|f| f.is_none()) {
-                        Ok(parent_vals
-                            .iter()
-                            .map(|_| AggroValue::Null)
-                            .collect::<Vec<_>>())
+                        Ok(parent_vals.iter().map(|_| GqlValue::Null).collect())
                     } else {
                         let mapped_children = if child_fields.is_empty() {
                             let mut rows_to_get = cor.clone();
                             if let Some(col) = aggro_field.value_from_column.as_ref() {
                                 rows_to_get.push(col.clone())
                             }
-                            let vals = rr
+                            let vals: Vec<Vec<GqlValue>> = rr
                                 .extract_values(rows_to_get.as_slice())?
                                 .into_iter()
                                 .flatten()
-                                .collect::<Vec<_>>();
+                                .collect();
                             let mut return_vec = BTreeMap::new();
                             for v in vals {
                                 let mut row_iter = v.into_iter();
-
                                 let cor_val = key_from_extracted(&mut row_iter, cor.len());
-
                                 let value = if aggro_field.return_type.optional {
-                                    row_iter.next().unwrap_or(AggroValue::Null)
+                                    row_iter.next().unwrap_or(GqlValue::Null)
                                 } else {
                                     row_iter.next().ok_or(anyhow!(
                                         "Could not find a value for non-optional field {}",
@@ -864,87 +1016,15 @@ pub async fn do_returned_values_into_stream(
                             }
                             return_vec
                         } else {
-                            let mut objs = Vec::with_capacity(rr.len());
-                            for present in rr.row_presence() {
-                                if !present {
-                                    objs.push(None);
-                                } else {
-                                    objs.push(Some(
-                                        juniper::Object::<AggroScalarValue>::with_capacity(
-                                            child_fields.len(),
-                                        ),
-                                    ));
-                                }
-                            }
-                            let mut to_compute = Vec::with_capacity(child_fields.len());
-                            let new_layer_cache: Py<PyDict> =
-                                Python::with_gil(|py| PyDict::new(py).unbind());
-                            for (child, new_lookahead) in child_fields.iter().copied() {
-                                let child_rows = rr.clone();
-                                let child_objects = all_objects.clone();
-                                let this_layer_cache =
-                                    Python::with_gil(|py| new_layer_cache.clone_ref(py));
-                                let fut = async move {
-                                    let children = returned_values_into_stream(
-                                        child_rows,
-                                        new_lookahead,
-                                        child,
-                                        child_objects,
-                                        aggro_context,
-                                        this_layer_cache,
-                                    )
-                                    .await;
-                                    (child, children)
-                                };
-                                to_compute.push(fut)
-                            }
-                            let children_results = join_all(to_compute).await;
-                            for (child, children) in children_results {
-                                for (obj, new_value) in objs.iter_mut().zip(children?) {
-                                    if new_value.is_null() && !child.return_type.optional {
-                                        bail!("Missing value in return for field {} which is not optional.", child.name);
-                                    } else if let Some(o) = obj {
-                                        o.add_field(child.name.as_str(), new_value);
-                                    }
-                                }
-                            }
-
-                            let cor_vals = rr
-                                .extract_values(&cor)?
-                                .into_iter()
-                                .flatten()
-                                .collect::<Vec<_>>();
-                            let cor_len = cor.len();
-                            if aggro_value_is_list {
-                                let mut hm = BTreeMap::new();
-                                for (obj, row_cor) in objs.into_iter().zip(cor_vals) {
-                                    let mut row_cor_iter = row_cor.into_iter();
-                                    let key = key_from_extracted(&mut row_cor_iter, cor_len);
-                                    hm.entry(key).or_insert_with(|| Vec::with_capacity(1)).push(
-                                        match obj {
-                                            Some(o) => AggroValue::Object(o),
-                                            None => AggroValue::null(),
-                                        },
-                                    )
-                                }
-                                hm.into_iter()
-                                    .map(|(k, v)| (k, AggroValue::List(v)))
-                                    .collect::<BTreeMap<_, _>>()
-                            } else {
-                                objs.into_iter()
-                                    .zip(cor_vals)
-                                    .map(|(val, row_cor)| {
-                                        let mut row_cor_iter = row_cor.into_iter();
-                                        let cor_val =
-                                            key_from_extracted(&mut row_cor_iter, cor_len);
-                                        let ag_val = match val {
-                                            Some(o) => AggroValue::Object(o),
-                                            None => AggroValue::null(),
-                                        };
-                                        (cor_val, ag_val)
-                                    })
-                                    .collect::<BTreeMap<_, _>>()
-                            }
+                            build_correlated_child_objects(
+                                rr,
+                                &child_fields,
+                                &all_objects,
+                                aggro_context,
+                                &cor,
+                                aggro_value_is_list,
+                            )
+                            .await?
                         };
                         let mut final_vec = Vec::with_capacity(parent_vals.len());
                         for parent in parent_vals {
@@ -953,17 +1033,19 @@ pub async fn do_returned_values_into_stream(
                                 let mut row_cor_iter = p.into_iter();
                                 let key = key_from_extracted(&mut row_cor_iter, row_cor_len);
                                 let r = mapped_children.get(&key).cloned();
-
                                 let val = if aggro_value_is_list {
-                                    r.unwrap_or_else(|| AggroValue::List(vec![]))
+                                    r.unwrap_or_else(|| GqlValue::List(vec![]))
                                 } else if aggro_value_optional {
-                                    r.unwrap_or(AggroValue::Null)
+                                    r.unwrap_or(GqlValue::Null)
                                 } else {
-                                    r.ok_or(anyhow!("Missing value in return for field {} which is not optional.", aggro_field.name))?
+                                    r.ok_or(anyhow!(
+                                        "Missing value in return for field {} which is not optional.",
+                                        aggro_field.name
+                                    ))?
                                 };
                                 final_vec.push(val)
                             } else {
-                                final_vec.push(AggroValue::null())
+                                final_vec.push(GqlValue::Null)
                             }
                         }
                         Ok(final_vec)
@@ -981,172 +1063,238 @@ pub async fn do_returned_values_into_stream(
                             if let Some(s) = v.into_iter().next() {
                                 ret_val.push(s);
                             } else if aggro_value_optional {
-                                ret_val.push(AggroValue::Null);
+                                ret_val.push(GqlValue::Null);
                             } else {
-                                bail!("Missing value in return for field {} which is not optional. Value missing from row {} column value {:?}", aggro_field.name, pos, &aggro_field.value_from_column);
+                                bail!(
+                                    "Missing value for field {} row {} column {:?}",
+                                    aggro_field.name,
+                                    pos,
+                                    &aggro_field.value_from_column
+                                );
                             }
                         } else {
-                            ret_val.push(AggroValue::Null)
+                            ret_val.push(GqlValue::Null)
                         }
                     }
                     ret_val
                 } else {
                     rows.extract_first()?
                 };
-
                 Ok(vals)
             } else {
-                let mut objs = Vec::with_capacity(rows.len());
-                for _x in 0..rows.len() {
-                    objs.push(juniper::Object::<AggroScalarValue>::with_capacity(
-                        child_fields.len(),
-                    ))
-                }
-
-                let mut to_compute = Vec::with_capacity(child_fields.len());
-                let new_layer_cache: Py<PyDict> = Python::with_gil(|py| PyDict::new(py).unbind());
-                for (child, new_lookahead) in child_fields.iter().copied() {
-                    let child_rows = rows.clone();
-                    let child_objects = all_objects.clone();
-                    let this_layer_cache = Python::with_gil(|py| new_layer_cache.clone_ref(py));
-                    let fut = async move {
-                        let children = returned_values_into_stream(
-                            child_rows,
-                            new_lookahead,
-                            child,
-                            child_objects,
-                            aggro_context,
-                            this_layer_cache,
-                        )
-                        .await;
-                        (child, children)
-                    };
-                    to_compute.push(fut)
-                }
-                let children_results = join_all(to_compute).await;
-                for (child, children) in children_results {
-                    for (obj, new_value) in objs.iter_mut().zip(children?) {
-                        if new_value.is_null() && !child.return_type.optional {
-                            bail!(
-                                "Missing value in return for field {} which is not optional.",
-                                child.name
-                            );
-                        } else {
-                            obj.add_field(child.name.as_str(), new_value);
-                        }
-                    }
-                }
-
-                Ok(objs
-                    .into_iter()
-                    .map(AggroValue::Object)
-                    .collect::<Vec<_>>())
+                build_child_objects_from_rows(rows, &child_fields, &all_objects, aggro_context)
+                    .await
             }
         }
     }
 }
 
-pub enum LookAheadFields {
-    Terminal(BTreeMap<Text, PyObject>),
-    Nested(BTreeMap<Text, PyObject>, BTreeMap<Text, LookAheadFields>),
-}
-
-fn clone_pyobject_btreemap(py: Python, map: &BTreeMap<Text, PyObject>) -> BTreeMap<Text, PyObject> {
-    map.iter()
-        .map(|(k, v)| (k.clone(), v.clone_ref(py)))
-        .collect()
-}
-
-impl Clone for LookAheadFields {
-    fn clone(&self) -> Self {
-        Python::with_gil(|py| match self {
-            LookAheadFields::Terminal(args) => {
-                LookAheadFields::Terminal(clone_pyobject_btreemap(py, args))
-            }
-            LookAheadFields::Nested(args, children) => {
-                LookAheadFields::Nested(clone_pyobject_btreemap(py, args), children.clone())
-            }
-        })
-    }
-}
-
-impl LookAheadFields {
-    /// Extract python arguments from lookahead.
-    pub fn arguments(&self) -> &BTreeMap<Text, PyObject> {
-        match self {
-            Terminal(args) => args,
-            Nested(args, _) => args,
-        }
-    }
-}
-
-pub fn selection_to_fields(
-    py: Python,
-    field: &AggroField,
-    look_ahead_selection: &LookAheadSelection<AggroScalarValue>,
-    all_inputs: &Arc<BTreeMap<Text, AggroObject>>,
+async fn build_child_objects(
+    rr: Arc<dyn ExtractValues + Send + Sync>,
+    child_fields: &[(&AggroField, &LookAheadFields)],
     all_objects: &Arc<BTreeMap<Text, AggroObject>>,
-) -> PuffResult<LookAheadFields> {
-    let args =
-        collect_arguments_for_python(py, all_inputs, field, look_ahead_selection.arguments())?;
-    if look_ahead_selection.has_children() {
-        let t = match &field.return_type.type_info {
-            AggroTypeInfo::Object(t) => t,
-            AggroTypeInfo::List(inner) => match &inner.type_info {
-                AggroTypeInfo::Object(t) => t,
-                _ => {
-                    bail!("Input with children passed an object when none was expected.",)
-                }
-            },
-            _ => {
-                bail!("Input with children passed an object when none was expected.",)
-            }
-        };
-
-        if let Some(obj) = all_objects.get(t) {
-            let children = look_ahead_selection.children();
-            let mut final_res = BTreeMap::new();
-            for child in children {
-                let child_text_name = child.field_name().to_text();
-                if let Some(f) = obj.fields.get(&child_text_name) {
-                    final_res.insert(
-                        child_text_name,
-                        selection_to_fields(py, f, child, all_inputs, all_objects)?,
-                    );
-                }
-            }
-            Ok(Nested(args, final_res))
+    aggro_context: &AggroContext,
+) -> PuffResult<Vec<GqlValue>> {
+    let mut objs: Vec<Option<IndexMap<async_graphql::Name, GqlValue>>> =
+        Vec::with_capacity(rr.len());
+    for present in rr.row_presence() {
+        if !present {
+            objs.push(None)
         } else {
-            bail!("Couldn't find type {}", t)
+            objs.push(Some(IndexMap::with_capacity(child_fields.len())))
         }
+    }
+    if objs.iter().all(|f| f.is_none()) {
+        return Ok(objs.iter().map(|_| GqlValue::Null).collect());
+    }
+    let mut to_compute = Vec::with_capacity(child_fields.len());
+    let new_layer_cache: Py<PyDict> = Python::with_gil(|py| PyDict::new(py).unbind());
+    for (child, new_lookahead) in child_fields.iter().copied() {
+        let child_rows = rr.clone();
+        let child_objects = all_objects.clone();
+        let this_layer_cache = Python::with_gil(|py| new_layer_cache.clone_ref(py));
+        let fut = async move {
+            let children = returned_values_into_stream(
+                child_rows,
+                new_lookahead,
+                child,
+                child_objects,
+                aggro_context,
+                this_layer_cache,
+            )
+            .await;
+            (child, children)
+        };
+        to_compute.push(fut)
+    }
+    let children_results = join_all(to_compute).await;
+    for (child, children) in children_results {
+        for (obj, new_value) in objs.iter_mut().zip(children?) {
+            if new_value == GqlValue::Null && !child.return_type.optional {
+                bail!(
+                    "Missing value in return for field {} which is not optional.",
+                    child.name
+                );
+            } else if let Some(o) = obj {
+                o.insert(async_graphql::Name::new(child.name.as_str()), new_value);
+            }
+        }
+    }
+    Ok(objs
+        .into_iter()
+        .map(|f| match f {
+            Some(o) => GqlValue::Object(o),
+            None => GqlValue::Null,
+        })
+        .collect())
+}
+
+async fn build_correlated_child_objects(
+    rr: Arc<dyn ExtractValues + Send + Sync>,
+    child_fields: &[(&AggroField, &LookAheadFields)],
+    all_objects: &Arc<BTreeMap<Text, AggroObject>>,
+    aggro_context: &AggroContext,
+    cor: &[Text],
+    is_list: bool,
+) -> PuffResult<BTreeMap<Vec<u8>, GqlValue>> {
+    let mut objs: Vec<Option<IndexMap<async_graphql::Name, GqlValue>>> =
+        Vec::with_capacity(rr.len());
+    for present in rr.row_presence() {
+        if !present {
+            objs.push(None);
+        } else {
+            objs.push(Some(IndexMap::with_capacity(child_fields.len())));
+        }
+    }
+    let mut to_compute = Vec::with_capacity(child_fields.len());
+    let new_layer_cache: Py<PyDict> = Python::with_gil(|py| PyDict::new(py).unbind());
+    for (child, new_lookahead) in child_fields.iter().copied() {
+        let child_rows = rr.clone();
+        let child_objects = all_objects.clone();
+        let this_layer_cache = Python::with_gil(|py| new_layer_cache.clone_ref(py));
+        let fut = async move {
+            let children = returned_values_into_stream(
+                child_rows,
+                new_lookahead,
+                child,
+                child_objects,
+                aggro_context,
+                this_layer_cache,
+            )
+            .await;
+            (child, children)
+        };
+        to_compute.push(fut)
+    }
+    let children_results = join_all(to_compute).await;
+    for (child, children) in children_results {
+        for (obj, new_value) in objs.iter_mut().zip(children?) {
+            if new_value == GqlValue::Null && !child.return_type.optional {
+                bail!(
+                    "Missing value in return for field {} which is not optional.",
+                    child.name
+                );
+            } else if let Some(o) = obj {
+                o.insert(async_graphql::Name::new(child.name.as_str()), new_value);
+            }
+        }
+    }
+
+    let cor_vals: Vec<Vec<GqlValue>> = rr
+        .extract_values(cor)?
+        .into_iter()
+        .flatten()
+        .collect();
+    let cor_len = cor.len();
+    if is_list {
+        let mut hm = BTreeMap::new();
+        for (obj, row_cor) in objs.into_iter().zip(cor_vals) {
+            let mut row_cor_iter = row_cor.into_iter();
+            let key = key_from_extracted(&mut row_cor_iter, cor_len);
+            hm.entry(key)
+                .or_insert_with(Vec::new)
+                .push(match obj {
+                    Some(o) => GqlValue::Object(o),
+                    None => GqlValue::Null,
+                });
+        }
+        Ok(hm
+            .into_iter()
+            .map(|(k, v)| (k, GqlValue::List(v)))
+            .collect())
     } else {
-        Ok(Terminal(args))
+        Ok(objs
+            .into_iter()
+            .zip(cor_vals)
+            .map(|(val, row_cor)| {
+                let mut row_cor_iter = row_cor.into_iter();
+                let cor_val = key_from_extracted(&mut row_cor_iter, cor_len);
+                let ag_val = match val {
+                    Some(o) => GqlValue::Object(o),
+                    None => GqlValue::Null,
+                };
+                (cor_val, ag_val)
+            })
+            .collect())
     }
 }
 
-fn collect_arguments_for_python(
-    py: Python,
-    all_inputs: &Arc<BTreeMap<Text, AggroObject>>,
-    field: &AggroField,
-    args: &[LookAheadArgument<AggroScalarValue>],
-) -> PuffResult<BTreeMap<Text, PyObject>> {
-    let mut ret = BTreeMap::new();
-    for c in args {
-        let key = c.name().to_text();
-        if let Some(arg) = field.arguments.get(&key) {
-            ret.insert(
-                key,
-                input_to_python(py, &arg.param_type, all_inputs, c.value())?,
-            );
+async fn build_child_objects_from_rows(
+    rows: Arc<dyn ExtractValues + Send + Sync>,
+    child_fields: &[(&AggroField, &LookAheadFields)],
+    all_objects: &Arc<BTreeMap<Text, AggroObject>>,
+    aggro_context: &AggroContext,
+) -> PuffResult<Vec<GqlValue>> {
+    let mut objs: Vec<IndexMap<async_graphql::Name, GqlValue>> = Vec::with_capacity(rows.len());
+    for _x in 0..rows.len() {
+        objs.push(IndexMap::with_capacity(child_fields.len()));
+    }
+
+    let mut to_compute = Vec::with_capacity(child_fields.len());
+    let new_layer_cache: Py<PyDict> = Python::with_gil(|py| PyDict::new(py).unbind());
+    for (child, new_lookahead) in child_fields.iter().copied() {
+        let child_rows = rows.clone();
+        let child_objects = all_objects.clone();
+        let this_layer_cache = Python::with_gil(|py| new_layer_cache.clone_ref(py));
+        let fut = async move {
+            let children = returned_values_into_stream(
+                child_rows,
+                new_lookahead,
+                child,
+                child_objects,
+                aggro_context,
+                this_layer_cache,
+            )
+            .await;
+            (child, children)
+        };
+        to_compute.push(fut)
+    }
+    let children_results = join_all(to_compute).await;
+    for (child, children) in children_results {
+        for (obj, new_value) in objs.iter_mut().zip(children?) {
+            if new_value == GqlValue::Null && !child.return_type.optional {
+                bail!(
+                    "Missing value in return for field {} which is not optional.",
+                    child.name
+                );
+            } else {
+                obj.insert(async_graphql::Name::new(child.name.as_str()), new_value);
+            }
         }
     }
-    Ok(ret)
+
+    Ok(objs.into_iter().map(GqlValue::Object).collect())
 }
+
+// ---------------------------------------------------------------------------
+// SubscriptionSender
+// ---------------------------------------------------------------------------
 
 #[pyclass]
 pub struct SubscriptionSender {
     gql_config: PuffGraphqlConfig,
-    sender: UnboundedSender<Result<Value<AggroScalarValue>, ExecutionError<AggroScalarValue>>>,
+    sender: UnboundedSender<GqlValue>,
     look_ahead: Arc<LookAheadFields>,
     field: AggroField,
     all_objs: Arc<BTreeMap<Text, AggroObject>>,
@@ -1156,7 +1304,7 @@ pub struct SubscriptionSender {
 
 impl SubscriptionSender {
     pub fn new(
-        sender: UnboundedSender<Result<Value<AggroScalarValue>, ExecutionError<AggroScalarValue>>>,
+        sender: UnboundedSender<GqlValue>,
         look_ahead: LookAheadFields,
         field: AggroField,
         all_objs: Arc<BTreeMap<Text, AggroObject>>,
@@ -1180,7 +1328,7 @@ impl SubscriptionSender {
 impl SubscriptionSender {
     fn __call__(&self, py: Python, ret_func: PyObject, new_function: PyObject) {
         let this_lookahead = Arc::clone(&self.look_ahead);
-        let this_field = self.field.clone(); // GIL held via py param
+        let this_field = self.field.clone();
         let all_objects = self.all_objs.clone();
         let auth = self.auth.as_ref().map(|o| o.clone_ref(py));
         let this_sender = self.sender.clone();
@@ -1203,7 +1351,7 @@ impl SubscriptionSender {
             )
             .await?;
             for r in res {
-                if this_sender.send(Ok(r)).is_err() {
+                if this_sender.send(r).is_err() {
                     return Ok(false);
                 }
             }

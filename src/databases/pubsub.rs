@@ -18,7 +18,7 @@ use std::time::Duration;
 use tracing::{error, info, warn};
 
 use futures_util::FutureExt;
-use juniper::BoxFuture;
+use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Sender, UnboundedReceiver, UnboundedSender};
@@ -111,17 +111,18 @@ async fn handle_event(
                     }
                 }
             };
-            if let Some(chan) = maybe_sub { pubsub.subscribe(chan).await? }
+            if let Some(chan) = maybe_sub {
+                pubsub.subscribe(chan).await?
+            }
         }
         PubSubEvent::Drop(conn) => {
             let unsubscribed = {
                 let mut mutex_guard = client.channels.lock().unwrap();
                 let mut unsubscribed = Vec::new();
                 for (chan, v) in mutex_guard.iter_mut() {
-                    if v.remove(&conn).is_some()
-                        && v.is_empty() {
-                            unsubscribed.push(chan.clone());
-                        }
+                    if v.remove(&conn).is_some() && v.is_empty() {
+                        unsubscribed.push(chan.clone());
+                    }
                 }
                 for chan in &unsubscribed {
                     mutex_guard.remove(chan);
@@ -147,7 +148,9 @@ async fn handle_event(
                     None
                 }
             };
-            if let Some(chan) = maybe_unsub { pubsub.unsubscribe(chan).await? }
+            if let Some(chan) = maybe_unsub {
+                pubsub.unsubscribe(chan).await?
+            }
         }
     }
     Ok(())

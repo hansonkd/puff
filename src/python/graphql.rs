@@ -1,25 +1,17 @@
 //! Call Graphql from Python
 use crate::context::with_puff_context;
-use crate::errors::{to_py_error, PuffResult};
-use crate::graphql::scalar::AggroScalarValue;
-use crate::graphql::{convert_pyany_to_input, juniper_value_to_python, PuffGraphqlConfig};
+use crate::errors::PuffResult;
+use crate::graphql::PuffGraphqlConfig;
 use crate::prelude::ToText;
 use crate::python::async_python::run_python_async;
 use crate::python::postgres::Connection;
 use crate::types::Text;
-use anyhow::bail;
-use juniper::executor::{get_operation, resolve_validated_subscription};
-use juniper::parser::parse_document_source;
-use juniper::validation::{validate_input_values, visit_all_rules, ValidatorContext};
-use juniper::{execute, ExecutionError, GraphQLError, Value};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use pyo3::{PyObject, PyResult, Python};
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc::{channel, Receiver};
 use tokio::sync::Mutex;
-use tokio_stream::{StreamExt, StreamMap};
 
 /// Access the Global graphql context
 #[pyclass]
@@ -94,26 +86,38 @@ impl PythonGraphql {
         conn: Option<&Connection>,
         auth: Option<PyObject>,
     ) -> PyResult<()> {
-        let mut hm = HashMap::with_capacity(variables.len());
-        for (k, v) in variables.iter() {
-            let variables = to_py_error("GQL Inputs", convert_pyany_to_input(&v))?;
-            hm.insert(k.to_string(), variables);
-        }
-        let this_root = self.0.root();
+        // Convert Python dict to serde_json::Value for variables
+        let vars_json = Python::with_gil(|_py| -> PyResult<serde_json::Value> {
+            let mut map = serde_json::Map::new();
+            for (k, v) in variables.iter() {
+                let key = k.to_string();
+                let json_val = pythonize::depythonize(&v).unwrap_or(serde_json::Value::Null);
+                map.insert(key, json_val);
+            }
+            Ok(serde_json::Value::Object(map))
+        })?;
+
+        let schema = self.0.schema();
         let context = if let Some(c) = conn {
             self.0.new_context_with_connection(auth, Some(c.clone()))
         } else {
             self.0.new_context(auth)
         };
-        run_python_async(return_fun, async move {
-            let (value, errors) = execute(query.as_str(), None, &this_root, &hm, &context).await?;
+        let ctx_arc = Arc::new(context);
 
-            convert_execution_response(&value, errors)
+        run_python_async(return_fun, async move {
+            let mut request = async_graphql::Request::new(&query);
+            let vars = async_graphql::Variables::from_json(vars_json);
+            request = request.variables(vars);
+            let request = request.data(ctx_arc);
+            let response = schema.execute(request).await;
+
+            convert_response_to_python(&response)
         });
         Ok(())
     }
 
-    /// Query the GraphQL result Asynchronously
+    /// Subscribe to GraphQL (streaming)
     pub fn subscribe(
         &self,
         return_fun: PyObject,
@@ -122,81 +126,49 @@ impl PythonGraphql {
         conn: Option<&Connection>,
         auth: Option<PyObject>,
     ) -> PyResult<()> {
-        let mut hm = HashMap::with_capacity(variables.len());
-        for (k, v) in variables.iter() {
-            let variables = to_py_error("GQL Inputs", convert_pyany_to_input(&v))?;
-            hm.insert(k.to_string(), variables);
-        }
-        let this_root = self.0.root();
+        let vars_json = Python::with_gil(|_py| -> PyResult<serde_json::Value> {
+            let mut map = serde_json::Map::new();
+            for (k, v) in variables.iter() {
+                let key = k.to_string();
+                let json_val = pythonize::depythonize(&v).unwrap_or(serde_json::Value::Null);
+                map.insert(key, json_val);
+            }
+            Ok(serde_json::Value::Object(map))
+        })?;
 
+        let schema = self.0.schema();
         let context = if let Some(c) = conn {
             self.0.new_context_with_connection(auth, Some(c.clone()))
         } else {
             self.0.new_context(auth)
         };
+        let ctx_arc = Arc::new(context);
+
         run_python_async(return_fun, async move {
             let (sender, rec) = channel(1);
             let this_sender = sender.clone();
             let fut = async move {
-                let document = parse_document_source(query.as_str(), &this_root.schema)?;
+                let mut request = async_graphql::Request::new(&query);
+                let vars = async_graphql::Variables::from_json(vars_json);
+                request = request.variables(vars);
+                let request = request.data(ctx_arc);
 
-                {
-                    let mut ctx = ValidatorContext::new(&this_root.schema, &document);
-                    visit_all_rules(&mut ctx, &document);
+                use futures_util::StreamExt;
+                let mut stream = schema.execute_stream(request);
 
-                    let errors = ctx.into_errors();
-                    if !errors.is_empty() {
-                        Err(GraphQLError::ValidationError(errors))?;
-                    }
-                }
+                while let Some(response) = stream.next().await {
+                    let py_val = convert_response_to_python(&response)?;
 
-                let operation = get_operation(&document, None)?;
-
-                {
-                    let errors = validate_input_values(&hm, operation, &this_root.schema);
-
-                    if !errors.is_empty() {
-                        Err(GraphQLError::ValidationError(errors))?;
-                    }
-                }
-
-                let (value, errors) =
-                    resolve_validated_subscription(&document, operation, &this_root, &hm, &context)
-                        .await?;
-
-                if !errors.is_empty() {
-                    let py_val = convert_execution_response(&Value::null(), errors)?;
-                    if sender.send(Ok((None, py_val))).await.is_err() {
-                        return Ok(());
-                    }
-                }
-
-                let response_returned_object = match value {
-                    Value::Object(o) => o,
-                    _ => bail!("Expected object from subscription."),
-                };
-
-                let fields = response_returned_object.into_iter();
-
-                let mut stream_map = StreamMap::new();
-
-                for (name, stream_val) in fields {
-                    // since macro returns Value::Scalar(iterator) every time,
-                    // other variants may be skipped
-                    match stream_val {
-                        Value::Scalar(stream) => {
-                            stream_map.insert(name.to_text(), stream);
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-
-                while let Some((name, nv)) = stream_map.next().await {
-                    let py_val = match nv {
-                        Ok(v) => convert_execution_response(&v, vec![])?,
-                        Err(e) => convert_execution_response(&Value::null(), vec![e])?,
+                    // Extract field name from response data
+                    let field_name = if let serde_json::Value::Object(ref data) =
+                        serde_json::to_value(&response.data).unwrap_or(serde_json::Value::Null)
+                    {
+                        data.keys().next().map(|k| k.to_text())
+                    } else {
+                        None
                     };
-                    if sender.send(Ok((Some(name), py_val))).await.is_err() {
+
+                    if sender.send(Ok((field_name, py_val))).await.is_err() {
                         break;
                     }
                 }
@@ -217,27 +189,66 @@ impl PythonGraphql {
     }
 }
 
-fn convert_execution_response(
-    value: &Value<AggroScalarValue>,
-    errors: Vec<ExecutionError<AggroScalarValue>>,
-) -> PuffResult<PyObject> {
+fn convert_response_to_python(response: &async_graphql::Response) -> PuffResult<PyObject> {
     Python::with_gil(|py| {
         let pydict = PyDict::new(py);
-        let data = juniper_value_to_python(py, value)?;
-        if !errors.is_empty() {
+
+        // Convert data
+        let data_json = serde_json::to_value(&response.data).unwrap_or(serde_json::Value::Null);
+        let data_py = json_to_python(py, &data_json)?;
+        pydict.set_item("data", data_py)?;
+
+        // Convert errors
+        if !response.errors.is_empty() {
             let py_errors = PyList::empty(py);
-            for error in errors {
-                let pydict = PyDict::new(py);
-                pydict.set_item("path", error.path())?;
-                pydict.set_item("error", format!("{:?}", error.error()))?;
-                pydict.set_item("location", format!("{:?}", error.location()))?;
-                py_errors.append(pydict)?;
+            for error in &response.errors {
+                let error_dict = PyDict::new(py);
+                error_dict.set_item("error", error.message.clone())?;
+                let path: Vec<String> = error.path.iter().map(|p| format!("{:?}", p)).collect();
+                error_dict.set_item("path", path)?;
+                let locations: Vec<String> = error
+                    .locations
+                    .iter()
+                    .map(|l| format!("{}:{}", l.line, l.column))
+                    .collect();
+                error_dict.set_item("location", format!("{:?}", locations))?;
+                py_errors.append(error_dict)?;
             }
             pydict.set_item("errors", py_errors)?;
         }
 
-        pydict.set_item("data", data)?;
         let r: PyObject = pydict.unbind().into();
         Ok(r)
     })
+}
+
+fn json_to_python(py: Python, v: &serde_json::Value) -> PuffResult<PyObject> {
+    match v {
+        serde_json::Value::Null => Ok(py.None()),
+        serde_json::Value::Bool(b) => Ok(b.into_py(py)),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(i.into_py(py))
+            } else if let Some(f) = n.as_f64() {
+                Ok(f.into_py(py))
+            } else {
+                Ok(py.None())
+            }
+        }
+        serde_json::Value::String(s) => Ok(s.clone().into_py(py)),
+        serde_json::Value::Array(arr) => {
+            let mut vec = Vec::with_capacity(arr.len());
+            for item in arr {
+                vec.push(json_to_python(py, item)?);
+            }
+            Ok(PyList::new(py, vec)?.into_py(py))
+        }
+        serde_json::Value::Object(obj) => {
+            let dict = PyDict::new(py);
+            for (k, v) in obj {
+                dict.set_item(k, json_to_python(py, v)?)?;
+            }
+            Ok(dict.into_py(py))
+        }
+    }
 }
