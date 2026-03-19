@@ -186,6 +186,9 @@ pub fn validate_graphql_query(
 // ---------------------------------------------------------------------------
 
 /// Execute a GraphQL query against Puff's built-in engine.
+///
+/// Uses the query cache when available so that repeated identical queries
+/// (common in agent loops) skip parsing and validation.
 pub async fn execute_graphql_query(
     query: &str,
     variables: Option<&serde_json::Value>,
@@ -208,7 +211,9 @@ pub async fn execute_graphql_query(
     }
 
     let request = request.data(ctx_arc);
-    let response = schema.execute(request).await;
+
+    // Use the query cache for agent queries.
+    let response = gql_config.query_cache.execute(&schema, request).await;
 
     let mut result = serde_json::Map::new();
     let data_json = serde_json::to_value(&response.data).unwrap_or(serde_json::Value::Null);

@@ -8,8 +8,10 @@ pub use handlers::{
     handle_graphql, handle_graphql_named, handle_subscriptions, handle_subscriptions_named,
     playground,
 };
+pub mod fast_serialize;
 pub mod handlers;
 pub(crate) mod puff_schema;
+pub mod query_cache;
 mod row_return;
 pub(crate) mod scalar;
 mod schema;
@@ -28,6 +30,8 @@ pub struct PuffGraphqlConfig {
     pub(crate) auth: Option<PyObject>,
     pub(crate) auth_async: bool,
     shared_connection: Option<Connection>,
+    /// Query cache shared across all requests for this schema.
+    pub query_cache: Arc<query_cache::QueryCache>,
 }
 
 impl Clone for PuffGraphqlConfig {
@@ -38,6 +42,7 @@ impl Clone for PuffGraphqlConfig {
             auth: self.auth.as_ref().map(|o| o.clone_ref(py)),
             auth_async: self.auth_async,
             shared_connection: self.shared_connection.clone(),
+            query_cache: self.query_cache.clone(),
         })
     }
 }
@@ -119,6 +124,7 @@ pub(crate) async fn load_schema(
         auth: Python::with_gil(|py| auth.as_ref().map(|o| o.clone_ref(py))),
         auth_async,
         shared_connection: shared_connection.clone(),
+        query_cache: Arc::new(query_cache::QueryCache::disabled()),
     };
 
     let dynamic_schema =
@@ -132,6 +138,7 @@ pub(crate) async fn load_schema(
         auth_async,
         db,
         shared_connection,
+        query_cache: Arc::new(query_cache::QueryCache::new(256)),
     })
 }
 

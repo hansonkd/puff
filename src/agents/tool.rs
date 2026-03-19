@@ -100,6 +100,24 @@ impl ToolRegistry {
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
     }
+
+    /// Check if all registered tools can execute without Python.
+    ///
+    /// When this returns `true` the agent loop can run entirely in Rust,
+    /// never touching the Python GIL.
+    pub fn all_native(&self) -> bool {
+        self.tools.values().all(|t| {
+            matches!(
+                t.executor,
+                ToolExecutor::Cli { .. }
+                    | ToolExecutor::Wasm { .. }
+                    | ToolExecutor::GraphQL { .. }
+                    | ToolExecutor::GraphQLSchema { .. }
+                    | ToolExecutor::GraphQLValidate { .. }
+                    | ToolExecutor::Noop
+            )
+        })
+    }
 }
 
 impl Default for ToolRegistry {

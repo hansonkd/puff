@@ -247,14 +247,108 @@ impl Agent {
         self.build_request_ref(conversation).to_owned()
     }
 
+    /// Check if this agent can run entirely in Rust (no Python tools).
+    ///
+    /// When all registered tools are built-in (GraphQL, CLI, WASM, Noop),
+    /// the agent loop can stay in Rust and never acquire the Python GIL.
+    pub fn can_run_native(&self) -> bool {
+        self.tools.all_native()
+    }
+
+    /// Run a complete agent turn in pure Rust — no Python, no GIL.
+    ///
+    /// Only works when all tools are built-in (GraphQL, CLI, WASM, Noop).
+    /// The caller should verify [`can_run_native`] before calling this.
+    async fn run_turn_native(
+        &self,
+        conversation: &mut Conversation,
+        llm_client: &LlmClient,
+    ) -> Result<LlmResponse, AgentError> {
+        for _round in 0..MAX_TOOL_ROUNDS {
+            self.compact_conversation(conversation);
+            self.budget.check_llm_budget()?;
+
+            let response = llm_client
+                .chat_ref(self.build_request_ref(conversation))
+                .await?;
+
+            self.budget.record_llm_usage(
+                response.input_tokens as u64,
+                response.output_tokens as u64,
+                memory::estimate_cost(
+                    &self.config.model,
+                    response.input_tokens,
+                    response.output_tokens,
+                ),
+            );
+
+            if response.tool_calls.is_empty() {
+                if !response.text.is_empty() {
+                    conversation.add_assistant_message(&response.text);
+                    self.compact_conversation(conversation);
+                }
+                return Ok(response);
+            }
+
+            // Build assistant message with tool-use blocks.
+            let mut blocks: Vec<ContentBlock> = Vec::new();
+            if !response.text.is_empty() {
+                blocks.push(ContentBlock::Text {
+                    text: response.text.clone(),
+                });
+            }
+            for tc in &response.tool_calls {
+                blocks.push(ContentBlock::ToolUse {
+                    id: tc.id.clone(),
+                    name: tc.name.clone(),
+                    input: tc.arguments.clone(),
+                });
+            }
+            conversation.add_message(Message {
+                role: Role::Assistant,
+                content: MessageContent::Blocks(blocks),
+                tool_call_id: None,
+            });
+            self.compact_conversation(conversation);
+
+            // Execute tools — ALL in Rust, no Python dispatch.
+            for tc in &response.tool_calls {
+                let outcome = self.execute_tool_call(tc).await;
+
+                conversation.add_message(Message {
+                    role: Role::User,
+                    content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                        tool_use_id: tc.id.clone(),
+                        content: outcome.content,
+                        is_error: outcome.is_error,
+                    }]),
+                    tool_call_id: Some(tc.id.clone()),
+                });
+                self.compact_conversation(conversation);
+            }
+        }
+
+        Err(AgentError::OrchestrationError(format!(
+            "Agent '{}' exceeded maximum tool rounds ({}) [native]",
+            self.config.name, MAX_TOOL_ROUNDS
+        )))
+    }
+
     /// Run a single agent turn: call the LLM, execute any tool calls, and
     /// loop until the LLM produces a final response (no tool calls) or the
     /// maximum number of rounds is exceeded.
+    ///
+    /// When all tools are built-in (no Python), automatically uses the
+    /// native Rust loop which avoids the Python GIL entirely.
     pub async fn run_turn(
         &self,
         conversation: &mut Conversation,
         llm_client: &LlmClient,
     ) -> Result<LlmResponse, AgentError> {
+        if self.can_run_native() {
+            return self.run_turn_native(conversation, llm_client).await;
+        }
+
         for _round in 0..MAX_TOOL_ROUNDS {
             self.compact_conversation(conversation);
 

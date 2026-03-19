@@ -7,7 +7,6 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
 
 use anyhow::Error;
-use async_graphql_axum::GraphQLResponse;
 use std::future;
 use std::sync::Arc;
 
@@ -155,6 +154,10 @@ impl<S: Send + Sync> FromRequest<S> for PuffGraphqlRequest {
 }
 
 /// Execute a GraphQL request using the async-graphql schema.
+///
+/// Uses the query cache to skip repeated parse/validate/execute work and the
+/// fast serialization path to write JSON bytes directly into the response body
+/// (avoiding axum's `Json` wrapper and its double-serialization).
 async fn execute_gql_request(
     config: &PuffGraphqlConfig,
     auth_obj: PyObject,
@@ -164,9 +167,12 @@ async fn execute_gql_request(
     let ctx_arc = Arc::new(context);
 
     let request = request.data(ctx_arc.clone());
-    let response = config.schema().execute(request).await;
 
-    // Close non-shared connections
+    // Use query cache + fast serialization path.
+    let schema = config.schema();
+    let (bytes, extra_headers) = config.query_cache.execute_to_bytes(&schema, request).await;
+
+    // Close non-shared connections.
     if let Some(conn_mutex) = ctx_arc.connection() {
         let conn = conn_mutex.lock().await;
         if !config.is_shared_connection(&conn) {
@@ -174,7 +180,7 @@ async fn execute_gql_request(
         }
     }
 
-    GraphQLResponse::from(response).into_response()
+    crate::graphql::fast_serialize::bytes_to_response(bytes, extra_headers)
 }
 
 pub fn handle_graphql(
