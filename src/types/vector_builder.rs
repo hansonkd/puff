@@ -22,6 +22,15 @@ use crate::types::{Puff, Vector};
 #[derive(Clone)]
 pub struct VectorBuilder<V>(Vec<V>);
 
+impl<T> Default for VectorBuilder<T>
+where
+    T: Puff,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> VectorBuilder<T>
 where
     T: Puff,
@@ -69,7 +78,7 @@ where
     /// assert_eq!(vector.is_empty(), false);
     /// ```
     #[inline]
-    pub fn push(&mut self, item: T) -> () {
+    pub fn push(&mut self, item: T) {
         self.0.push(item)
     }
 

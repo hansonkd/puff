@@ -16,8 +16,7 @@ impl EventHandler for EventSender {
                 let is_pycache = event
                     .paths
                     .iter()
-                    .find(|p| p.to_str().unwrap_or_default().contains("__pycache__"))
-                    .is_some();
+                    .any(|p| p.to_str().unwrap_or_default().contains("__pycache__"));
                 if !event.kind.is_access() && !is_pycache {
                     self.0.try_send(false).unwrap_or_default()
                 }
@@ -69,9 +68,8 @@ fn main() {
 
     let args = command.get_matches();
     let should_watch = args
-        .get_one::<bool>("watch")
-        .map(|f| f.clone())
-        .unwrap_or_else(|| true);
+        .get_one::<bool>("watch").copied()
+        .unwrap_or(true);
     let dir = args.get_one::<String>("dir").unwrap().clone();
     let num = args.get_one::<usize>("num").unwrap();
     let args = args.get_raw("args").unwrap();
@@ -95,7 +93,7 @@ fn main() {
         info!("Watching directory");
 
         let path = Path::new(dir.as_str());
-        watcher.watch(&path, RecursiveMode::Recursive).unwrap();
+        watcher.watch(path, RecursiveMode::Recursive).unwrap();
     }
 
     rt.block_on(async {

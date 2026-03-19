@@ -45,6 +45,16 @@ impl<'de, K: Deserialize<'de> + Clone + Eq + Hash + Puff, V: Deserialize<'de> + 
     }
 }
 
+impl<K, T> Default for Map<K, T>
+where
+    K: Puff + Hash + Eq,
+    T: Puff + Send + 'static,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K, T> Map<K, T>
 where
     K: Puff + Hash + Eq,

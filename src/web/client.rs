@@ -38,6 +38,7 @@ pub struct PyHttpClient {
 
 #[pymethods]
 impl PyHttpClient {
+    #[allow(clippy::too_many_arguments)]
     fn request(
         &self,
         ret_func: PyObject,
@@ -109,10 +110,8 @@ impl PyHttpClient {
                 }
             }
             rb = rb.multipart(mp)
-        } else {
-            if let Some(d) = data {
-                rb = rb.form(&d);
-            }
+        } else if let Some(d) = data {
+            rb = rb.form(&d);
         }
 
         let request = rb
@@ -137,6 +136,7 @@ impl PyHttpClient {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn request_json(
         &self,
         py: Python,

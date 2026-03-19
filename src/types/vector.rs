@@ -60,6 +60,15 @@ impl<T: PartialEq + Eq + Puff> PartialEq for Vector<T> {
     }
 }
 
+impl<T: Puff> Default for Vector<T>
+where
+    T: Clone,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: Puff> Vector<T>
 where
     T: Clone,

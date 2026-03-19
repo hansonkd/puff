@@ -17,11 +17,13 @@ use crate::types::Text;
 use tokio::sync::oneshot;
 
 #[pyclass]
+#[allow(clippy::type_complexity)]
 pub struct Sender {
     tx: Option<oneshot::Sender<(String, Vec<(String, String)>)>>,
 }
 
 impl Sender {
+    #[allow(clippy::type_complexity)]
     pub fn new() -> (Sender, oneshot::Receiver<(String, Vec<(String, String)>)>) {
         let (tx, rx) = oneshot::channel();
         (Sender { tx: Some(tx) }, rx)
@@ -81,12 +83,12 @@ impl<T: WsgiServerSpawner> ServerContext<T> {
                         let bytesio = py.import("io")?.getattr("BytesIO")?;
                         let app_clone = app.clone_ref(py);
                         let dispatcher_clone = self.python_dispatcher.clone();
-                        return PyResult::Ok((
+                        PyResult::Ok((
                             std_err.unbind(),
                             bytesio.unbind(),
                             app_clone,
                             dispatcher_clone,
-                        ));
+                        ))
                     })?;
                     let wsgi_handler = WsgiHandler::new(
                         app_clone,

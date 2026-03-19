@@ -19,6 +19,12 @@ use std::ops::Deref;
 #[derive(Clone, Debug)]
 pub struct TextBuilder(String);
 
+impl Default for TextBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TextBuilder {
     /// Creates a new empty `TextBuilder`.
     ///
@@ -81,7 +87,7 @@ impl TextBuilder {
     /// assert_eq!("foobar", s.as_str());
     /// ```
     #[inline]
-    pub fn push_str(&mut self, s: &str) -> () {
+    pub fn push_str(&mut self, s: &str) {
         self.0.push_str(s)
     }
 
@@ -100,7 +106,7 @@ impl TextBuilder {
     /// assert_eq!("foobar", s.as_str());
     /// ```
     #[inline]
-    pub fn push_text<T: Into<Text>>(&mut self, s: T) -> () {
+    pub fn push_text<T: Into<Text>>(&mut self, s: T) {
         self.0.push_str(s.into().as_str())
     }
 

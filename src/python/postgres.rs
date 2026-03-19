@@ -119,7 +119,7 @@ async fn conn_task(pool: Pool<PostgresConnectionManager<NoTls>>, mut rx: mpsc::R
         match op {
             DbOp::Query { sql, params, reply } => {
                 let result = do_query(
-                    &*client,
+                    &client,
                     &mut stmt_cache,
                     &sql,
                     &params,
@@ -135,7 +135,7 @@ async fn conn_task(pool: Pool<PostgresConnectionManager<NoTls>>, mut rx: mpsc::R
                 reply,
             } => {
                 let result = do_execute_many(
-                    &*client,
+                    &client,
                     &mut stmt_cache,
                     &sql,
                     &param_seq,
@@ -147,7 +147,7 @@ async fn conn_task(pool: Pool<PostgresConnectionManager<NoTls>>, mut rx: mpsc::R
             }
             DbOp::ExecuteRust { sql, params, reply } => {
                 let result = do_execute_rust(
-                    &*client,
+                    &client,
                     &mut stmt_cache,
                     &sql,
                     &params,
@@ -262,7 +262,7 @@ async fn do_query(
     if stmt.columns().is_empty() {
         // DML statement — use execute
         let affected = client
-            .execute_raw(&stmt, &params[..])
+            .execute_raw(&stmt, params)
             .await
             .map_err(postgres_to_python_exception)?;
         Ok(QueryResult {
@@ -273,7 +273,7 @@ async fn do_query(
     } else {
         // SELECT — fetch all rows
         let row_stream = client
-            .query_raw(&stmt, &params[..])
+            .query_raw(&stmt, params)
             .await
             .map_err(postgres_to_python_exception)?;
         let rows: Vec<Row> = row_stream
@@ -340,7 +340,7 @@ async fn do_execute_rust(
         Err(e) => return Err(anyhow!("{e}")),
     };
 
-    let row_stream = client.query_raw(&stmt, &params[..]).await?;
+    let row_stream = client.query_raw(&stmt, params).await?;
     let rows: Vec<Row> = row_stream.try_collect().await?;
     Ok((stmt, rows))
 }
@@ -936,40 +936,40 @@ impl ToSql for PythonSqlValue {
     where
         Self: Sized,
     {
-        match *ty {
+        matches!(
+            *ty,
             Type::JSON
-            | Type::JSONB
-            | Type::TIMESTAMP
-            | Type::TIMESTAMPTZ
-            | Type::BOOL
-            | Type::TEXT
-            | Type::VARCHAR
-            | Type::NAME
-            | Type::CHAR
-            | Type::UNKNOWN
-            | Type::INT2
-            | Type::INT4
-            | Type::INT8
-            | Type::FLOAT4
-            | Type::FLOAT8
-            | Type::OID
-            | Type::UUID
-            | Type::BYTEA
-            | Type::BOOL_ARRAY
-            | Type::TEXT_ARRAY
-            | Type::VARCHAR_ARRAY
-            | Type::NAME_ARRAY
-            | Type::CHAR_ARRAY
-            | Type::INT2_ARRAY
-            | Type::INT4_ARRAY
-            | Type::INT8_ARRAY
-            | Type::FLOAT4_ARRAY
-            | Type::FLOAT8_ARRAY
-            | Type::OID_ARRAY
-            | Type::UUID_ARRAY
-            | Type::BYTEA_ARRAY => true,
-            _ => false,
-        }
+                | Type::JSONB
+                | Type::TIMESTAMP
+                | Type::TIMESTAMPTZ
+                | Type::BOOL
+                | Type::TEXT
+                | Type::VARCHAR
+                | Type::NAME
+                | Type::CHAR
+                | Type::UNKNOWN
+                | Type::INT2
+                | Type::INT4
+                | Type::INT8
+                | Type::FLOAT4
+                | Type::FLOAT8
+                | Type::OID
+                | Type::UUID
+                | Type::BYTEA
+                | Type::BOOL_ARRAY
+                | Type::TEXT_ARRAY
+                | Type::VARCHAR_ARRAY
+                | Type::NAME_ARRAY
+                | Type::CHAR_ARRAY
+                | Type::INT2_ARRAY
+                | Type::INT4_ARRAY
+                | Type::INT8_ARRAY
+                | Type::FLOAT4_ARRAY
+                | Type::FLOAT8_ARRAY
+                | Type::OID_ARRAY
+                | Type::UUID_ARRAY
+                | Type::BYTEA_ARRAY
+        )
     }
 
     to_sql_checked!();

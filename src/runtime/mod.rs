@@ -146,6 +146,7 @@ impl HttpClientOpts {
 /// let config = RuntimeConfig::default();
 /// ```
 #[derive(Clone)]
+#[allow(clippy::type_complexity)]
 pub struct RuntimeConfig {
     max_blocking_threads: usize,
     tokio_worker_threads: usize,
@@ -232,7 +233,7 @@ impl RuntimeConfig {
         self.env_vars.clone()
     }
     /// Apply env vars to add to environment.
-    pub fn apply_env_vars(&self) -> () {
+    pub fn apply_env_vars(&self) {
         for (k, v) in &self.env_vars {
             std::env::set_var(k.as_str(), v.as_str())
         }

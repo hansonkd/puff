@@ -45,7 +45,7 @@ impl PuffGqlObject {
     }
 }
 
-impl<'s> GraphQLType<AggroScalarValue> for PuffGqlObject {
+impl GraphQLType<AggroScalarValue> for PuffGqlObject {
     fn name(info: &Self::TypeInfo) -> Option<&str> {
         if let Some(obj) = info.all_objs.get(&info.name) {
             if obj.fields.is_empty() {
@@ -73,7 +73,7 @@ impl<'s> GraphQLType<AggroScalarValue> for PuffGqlObject {
     {
         if let Some(obj) = info.all_objs.get(&info.name) {
             if obj.fields.is_empty() {
-                return registry.build_object_type::<Self>(&info, &[]).into_meta();
+                return registry.build_object_type::<Self>(info, &[]).into_meta();
             }
             let mut fields = Vec::new();
             for (k, v) in obj.fields.iter() {
@@ -415,7 +415,7 @@ fn build_field<'r>(
         .arguments
         .iter()
         .fold(juniper_field, |jp, (arg_name, arg)| {
-            jp.argument(build_argument(info, registry, arg_name.as_str(), &arg))
+            jp.argument(build_argument(info, registry, arg_name.as_str(), arg))
         })
 }
 
@@ -449,11 +449,11 @@ impl GraphQLValueAsync<AggroScalarValue> for PuffGqlObject {
                 let this_obj = info
                     .all_objs
                     .get(&info.name)
-                    .expect(format!("Could not find object {}", info.name).as_str());
+                    .unwrap_or_else(|| panic!("Could not find object {}", info.name));
                 let aggro_field = this_obj
                     .fields
                     .get(&field_name.to_text())
-                    .expect(format!("Could not find field {}", field_name).as_str());
+                    .unwrap_or_else(|| panic!("Could not find field {}", field_name));
                 // let ctx = executor.context();
                 let all_objects = info.all_objs.clone();
                 let input_objs = &info.input_objs;
@@ -488,7 +488,7 @@ impl GraphQLValueAsync<AggroScalarValue> for PuffGqlObject {
             };
             let result = log_puff_error("GQL", fut.await);
 
-            return Ok(result?);
+            Ok(result?)
         })
     }
 }
@@ -524,11 +524,11 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                 let this_obj = info
                     .all_objs
                     .get(&info.name)
-                    .expect(format!("Could not find object {}", info.name).as_str());
+                    .unwrap_or_else(|| panic!("Could not find object {}", info.name));
                 let field = this_obj
                     .fields
                     .get(&field_name.to_text())
-                    .expect(format!("Could not find subscription field {}", field_name).as_str());
+                    .unwrap_or_else(|| panic!("Could not find subscription field {}", field_name));
                 // let ctx = executor.context();
                 let (sender, ret) = unbounded_channel();
                 let all_objects = info.all_objs.clone();

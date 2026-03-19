@@ -79,6 +79,7 @@ impl PubSubMessage {
 /// PubSubConnections do not create new Redis connections instead share the same one and the
 /// client broadcasts new messages over unbounded channels.
 #[derive(Clone)]
+#[allow(clippy::type_complexity)]
 pub struct PubSubClient {
     client: Pool<RedisConnectionManager>,
     redis_client: RedisClient,
@@ -110,21 +111,17 @@ async fn handle_event(
                     }
                 }
             };
-            match maybe_sub {
-                Some(chan) => pubsub.subscribe(chan).await?,
-                None => (),
-            }
+            if let Some(chan) = maybe_sub { pubsub.subscribe(chan).await? }
         }
         PubSubEvent::Drop(conn) => {
             let unsubscribed = {
                 let mut mutex_guard = client.channels.lock().unwrap();
                 let mut unsubscribed = Vec::new();
                 for (chan, v) in mutex_guard.iter_mut() {
-                    if v.remove(&conn).is_some() {
-                        if v.is_empty() {
+                    if v.remove(&conn).is_some()
+                        && v.is_empty() {
                             unsubscribed.push(chan.clone());
                         }
-                    }
                 }
                 for chan in &unsubscribed {
                     mutex_guard.remove(chan);
@@ -150,10 +147,7 @@ async fn handle_event(
                     None
                 }
             };
-            match maybe_unsub {
-                Some(chan) => pubsub.unsubscribe(chan).await?,
-                None => (),
-            }
+            if let Some(chan) = maybe_unsub { pubsub.unsubscribe(chan).await? }
         }
     }
     Ok(())
@@ -175,7 +169,7 @@ impl PubSubClient {
                     {
                         let vec: Vec<Text> = {
                             let mutex_guard = inner_client.channels.lock().unwrap();
-                            mutex_guard.keys().map(|c| c.clone()).collect()
+                            mutex_guard.keys().cloned().collect()
                         };
 
                         for channel in vec {

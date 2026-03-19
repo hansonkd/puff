@@ -31,7 +31,7 @@ use tokio::sync::Mutex;
 use crate::graphql::PuffGraphqlConfig;
 use uuid::Uuid;
 
-static NUMBERS: &'static [&'static str] = &["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+static NUMBERS: &[&str] = &["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
 
 fn args_to_py_dict<'py>(
     py: Python<'py>,
@@ -214,6 +214,7 @@ fn decode_type(t: &Bound<'_, PyAny>) -> PyResult<DecodedType> {
     })
 }
 
+#[allow(clippy::type_complexity)]
 pub fn convert(
     py: Python,
     schema: &Bound<'_, PyAny>,
@@ -294,10 +295,10 @@ pub fn convert_obj(name: &str, desc: BTreeMap<String, Bound<'_, PyAny>>) -> PyRe
 
         object_fields.insert(k.into(), field);
     }
-    return Ok(AggroObject {
+    Ok(AggroObject {
         name: name.to_text(),
         fields: Arc::new(object_fields),
-    });
+    })
 }
 
 #[pyclass]
@@ -370,15 +371,12 @@ fn input_to_python(
     all_inputs: &Arc<BTreeMap<Text, AggroObject>>,
     v: &LookAheadValue<AggroScalarValue>,
 ) -> PuffResult<Py<PyAny>> {
-    match v {
-        LookAheadValue::Null => {
-            if t.optional {
-                return Ok(PyList::empty(py).into_py(py));
-            } else {
-                bail!("Null supplied to non-optional field");
-            }
+    if v == &LookAheadValue::Null {
+        if t.optional {
+            return Ok(PyList::empty(py).into_py(py));
+        } else {
+            bail!("Null supplied to non-optional field");
         }
-        _ => (),
     };
 
     match &t.type_info {
@@ -412,7 +410,7 @@ fn input_to_python(
                             ));
                         }
                     }
-                    if required.len() > 0 {
+                    if !required.is_empty() {
                         bail!("Missing required fields {:?}", required)
                     } else {
                         Ok(val_vec.into_py_dict(py)?.into_py(py))
@@ -573,9 +571,9 @@ pub async fn do_returned_values_into_stream(
             };
             let mut child_fields = Vec::with_capacity(children.len());
             if let Some(obj) = ret_type {
-                for (child, nested_lookahad) in children.into_iter() {
-                    if let Some(field) = obj.fields.get(&child) {
-                        child_fields.push((field.clone(), nested_lookahad))
+                for (child, nested_lookahad) in children.iter() {
+                    if let Some(field) = obj.fields.get(child) {
+                        child_fields.push((field, nested_lookahad))
                     } else {
                         bail!(
                             "Could not find child field {} type for {}",
@@ -594,7 +592,7 @@ pub async fn do_returned_values_into_stream(
 
     // Collect children database fields
     let mut child_depends_on_vec = HashSet::new();
-    for (f, _) in &child_fields {
+    for (f, _) in child_fields.iter().copied() {
         for x in &f.depends_on {
             child_depends_on_vec.insert(x.clone());
         }
@@ -705,24 +703,22 @@ pub async fn do_returned_values_into_stream(
                         PythonMethodResult::PythonList(py_list.unbind()),
                         Some((parent_cor, child_cor)),
                     ))
-                } else {
-                    if aggro_value_is_list {
-                        if let Ok(l) = py_res.downcast::<PyList>() {
-                            Ok((PythonMethodResult::PythonList(l.clone().unbind()), None))
-                        } else {
-                            bail!("Expected to return a list.")
-                        }
+                } else if aggro_value_is_list {
+                    if let Ok(l) = py_res.downcast::<PyList>() {
+                        Ok((PythonMethodResult::PythonList(l.clone().unbind()), None))
                     } else {
-                        let parent_len = rows.len();
-                        let mut new_v = Vec::with_capacity(parent_len);
-                        for _x in 0..parent_len {
-                            new_v.push(py_res.to_object(py));
-                        }
-                        Ok((
-                            PythonMethodResult::PythonList(PyList::new(py, new_v)?.unbind()),
-                            None,
-                        ))
+                        bail!("Expected to return a list.")
                     }
+                } else {
+                    let parent_len = rows.len();
+                    let mut new_v = Vec::with_capacity(parent_len);
+                    for _x in 0..parent_len {
+                        new_v.push(py_res.to_object(py));
+                    }
+                    Ok((
+                        PythonMethodResult::PythonList(PyList::new(py, new_v)?.unbind()),
+                        None,
+                    ))
                 }
             })?;
 
@@ -731,7 +727,7 @@ pub async fn do_returned_values_into_stream(
                 PythonMethodResult::SqlQuery(q, params) => {
                     let conn = aggro_context.connection().lock().await;
                     let (statement, rows) = execute_rust(&conn, q, params).await?;
-                    Arc::new(PostgresResultRows { statement, rows })
+                    Arc::new(PostgresResultRows::new(statement, rows))
                 }
             };
 
@@ -740,12 +736,11 @@ pub async fn do_returned_values_into_stream(
                     let parent_row_len = rows.len();
                     let children_vec = if child_fields.is_empty() {
                         if let Some(col) = aggro_field.value_from_column.as_ref() {
-                            let vals = rr.extract_values(&[col.clone()])?;
+                            let vals = rr.extract_values(std::slice::from_ref(col))?;
                             let mut ret_val = Vec::with_capacity(vals.len());
                             for val in vals {
                                 ret_val.push(
-                                    val.map(|v| v.into_iter().next())
-                                        .flatten()
+                                    val.and_then(|v| v.into_iter().next())
                                         .unwrap_or(AggroValue::Null),
                                 );
                             }
@@ -755,8 +750,8 @@ pub async fn do_returned_values_into_stream(
                         }
                     } else {
                         let mut objs = Vec::with_capacity(rr.len());
-                        for x in rr.extract_values(&[])? {
-                            if x.is_none() {
+                        for present in rr.row_presence() {
+                            if !present {
                                 objs.push(None)
                             } else {
                                 objs.push(Some(juniper::Object::<AggroScalarValue>::with_capacity(
@@ -770,15 +765,17 @@ pub async fn do_returned_values_into_stream(
                             let mut to_compute = Vec::with_capacity(child_fields.len());
                             let new_layer_cache: Py<PyDict> =
                                 Python::with_gil(|py| PyDict::new(py).unbind());
-                            for (child, new_lookahead) in child_fields {
+                            for (child, new_lookahead) in child_fields.iter().copied() {
+                                let child_rows = rr.clone();
+                                let child_objects = all_objects.clone();
                                 let this_layer_cache =
                                     Python::with_gil(|py| new_layer_cache.clone_ref(py));
-                                let fut = async {
+                                let fut = async move {
                                     let children = returned_values_into_stream(
-                                        rr.clone(),
+                                        child_rows,
                                         new_lookahead,
-                                        &child,
-                                        all_objects.clone(),
+                                        child,
+                                        child_objects,
                                         aggro_context,
                                         this_layer_cache,
                                     )
@@ -819,12 +816,10 @@ pub async fn do_returned_values_into_stream(
                         for _ in 0..parent_row_len {
                             if let Some(c) = child_iter.next() {
                                 final_vec.push(c)
+                            } else if aggro_value_optional {
+                                final_vec.push(AggroValue::Null)
                             } else {
-                                if aggro_value_optional {
-                                    final_vec.push(AggroValue::Null)
-                                } else {
-                                    bail!("Missing value in return for field {} which is not optional. Only received {} of {} children.", aggro_field.name, final_vec.len(), parent_row_len);
-                                }
+                                bail!("Missing value in return for field {} which is not optional. Only received {} of {} children.", aggro_field.name, final_vec.len(), parent_row_len);
                             }
                         }
                     }
@@ -868,8 +863,8 @@ pub async fn do_returned_values_into_stream(
                             return_vec
                         } else {
                             let mut objs = Vec::with_capacity(rr.len());
-                            for x in rr.extract_values(&[])? {
-                                if x.is_none() {
+                            for present in rr.row_presence() {
+                                if !present {
                                     objs.push(None);
                                 } else {
                                     objs.push(Some(
@@ -882,15 +877,17 @@ pub async fn do_returned_values_into_stream(
                             let mut to_compute = Vec::with_capacity(child_fields.len());
                             let new_layer_cache: Py<PyDict> =
                                 Python::with_gil(|py| PyDict::new(py).unbind());
-                            for (child, new_lookahead) in child_fields {
+                            for (child, new_lookahead) in child_fields.iter().copied() {
+                                let child_rows = rr.clone();
+                                let child_objects = all_objects.clone();
                                 let this_layer_cache =
                                     Python::with_gil(|py| new_layer_cache.clone_ref(py));
-                                let fut = async {
+                                let fut = async move {
                                     let children = returned_values_into_stream(
-                                        rr.clone(),
+                                        child_rows,
                                         new_lookahead,
-                                        &child,
-                                        all_objects.clone(),
+                                        child,
+                                        child_objects,
                                         aggro_context,
                                         this_layer_cache,
                                     )
@@ -953,16 +950,14 @@ pub async fn do_returned_values_into_stream(
                                 let row_cor_len = p.len();
                                 let mut row_cor_iter = p.into_iter();
                                 let key = key_from_extracted(&mut row_cor_iter, row_cor_len);
-                                let r = mapped_children.get(&key).map(|f| f.clone());
+                                let r = mapped_children.get(&key).cloned();
 
                                 let val = if aggro_value_is_list {
                                     r.unwrap_or_else(|| AggroValue::List(vec![]))
+                                } else if aggro_value_optional {
+                                    r.unwrap_or(AggroValue::Null)
                                 } else {
-                                    if aggro_value_optional {
-                                        r.unwrap_or(AggroValue::Null)
-                                    } else {
-                                        r.ok_or(anyhow!("Missing value in return for field {} which is not optional.", aggro_field.name))?
-                                    }
+                                    r.ok_or(anyhow!("Missing value in return for field {} which is not optional.", aggro_field.name))?
                                 };
                                 final_vec.push(val)
                             } else {
@@ -977,10 +972,9 @@ pub async fn do_returned_values_into_stream(
         None => {
             if child_fields.is_empty() {
                 let vals = if let Some(col) = aggro_field.value_from_column.as_ref() {
-                    let vals = rows.extract_values(&[col.clone()])?;
+                    let vals = rows.extract_values(std::slice::from_ref(col))?;
                     let mut ret_val = Vec::with_capacity(vals.len());
-                    let mut pos = 0;
-                    for val in vals {
+                    for (pos, val) in vals.into_iter().enumerate() {
                         if let Some(v) = val {
                             if let Some(s) = v.into_iter().next() {
                                 ret_val.push(s);
@@ -992,7 +986,6 @@ pub async fn do_returned_values_into_stream(
                         } else {
                             ret_val.push(AggroValue::Null)
                         }
-                        pos += 1;
                     }
                     ret_val
                 } else {
@@ -1010,14 +1003,16 @@ pub async fn do_returned_values_into_stream(
 
                 let mut to_compute = Vec::with_capacity(child_fields.len());
                 let new_layer_cache: Py<PyDict> = Python::with_gil(|py| PyDict::new(py).unbind());
-                for (child, new_lookahead) in child_fields {
+                for (child, new_lookahead) in child_fields.iter().copied() {
+                    let child_rows = rows.clone();
+                    let child_objects = all_objects.clone();
                     let this_layer_cache = Python::with_gil(|py| new_layer_cache.clone_ref(py));
-                    let fut = async {
+                    let fut = async move {
                         let children = returned_values_into_stream(
-                            rows.clone(),
+                            child_rows,
                             new_lookahead,
-                            &child,
-                            all_objects.clone(),
+                            child,
+                            child_objects,
                             aggro_context,
                             this_layer_cache,
                         )
@@ -1042,7 +1037,7 @@ pub async fn do_returned_values_into_stream(
 
                 Ok(objs
                     .into_iter()
-                    .map(|f| AggroValue::Object(f))
+                    .map(AggroValue::Object)
                     .collect::<Vec<_>>())
             }
         }
@@ -1150,7 +1145,7 @@ fn collect_arguments_for_python(
 pub struct SubscriptionSender {
     gql_config: PuffGraphqlConfig,
     sender: UnboundedSender<Result<Value<AggroScalarValue>, ExecutionError<AggroScalarValue>>>,
-    look_ahead: LookAheadFields,
+    look_ahead: Arc<LookAheadFields>,
     field: AggroField,
     all_objs: Arc<BTreeMap<Text, AggroObject>>,
     auth: Option<PyObject>,
@@ -1169,7 +1164,7 @@ impl SubscriptionSender {
     ) -> Self {
         Self {
             sender,
-            look_ahead,
+            look_ahead: Arc::new(look_ahead),
             field,
             all_objs,
             auth,
@@ -1182,7 +1177,7 @@ impl SubscriptionSender {
 #[pymethods]
 impl SubscriptionSender {
     fn __call__(&self, py: Python, ret_func: PyObject, new_function: PyObject) {
-        let this_lookahead = self.look_ahead.clone(); // GIL held via py param
+        let this_lookahead = Arc::clone(&self.look_ahead);
         let this_field = self.field.clone(); // GIL held via py param
         let all_objects = self.all_objs.clone();
         let auth = self.auth.as_ref().map(|o| o.clone_ref(py));
@@ -1198,7 +1193,7 @@ impl SubscriptionSender {
 
             let res = returned_values_into_stream(
                 rows,
-                &this_lookahead,
+                this_lookahead.as_ref(),
                 &my_field,
                 all_objects,
                 &context,
@@ -1206,7 +1201,7 @@ impl SubscriptionSender {
             )
             .await?;
             for r in res {
-                if !this_sender.send(Ok(r)).is_ok() {
+                if this_sender.send(Ok(r)).is_err() {
                     return Ok(false);
                 }
             }

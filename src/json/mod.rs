@@ -71,6 +71,7 @@ pub fn load(py: Python, fp: PyObject, kwargs: Option<Bound<'_, PyDict>>) -> PyRe
 // because we have none of these types under our control.
 // Note: Encoding param is deprecated and ignored.
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub fn loads(
     py: Python,
     s: PyObject,
@@ -120,6 +121,7 @@ pub fn loads(
 // because we have none of these types under our control.
 // Note: Encoding param is deprecated and ignored.
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub fn loadb(
     py: Python,
     s: Bound<'_, PyBytes>,
@@ -136,6 +138,7 @@ pub fn loadb(
 #[pyfunction]
 // ensure_ascii, check_circular, allow_nan, cls, indent, separators, default, sort_keys, kwargs = "**")]
 #[allow(unused_variables)]
+#[allow(clippy::too_many_arguments)]
 pub fn dumps(
     py: Python,
     obj: PyObject,
@@ -158,6 +161,7 @@ pub fn dumps(
 #[pyfunction]
 // ensure_ascii, check_circular, allow_nan, cls, indent, separators, default, sort_keys, kwargs = "**")]
 #[allow(unused_variables)]
+#[allow(clippy::too_many_arguments)]
 pub fn dumpb(
     py: Python,
     obj: PyObject,
@@ -230,6 +234,7 @@ pub fn dump_string(
 }
 
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub fn dump(
     py: Python,
     obj: PyObject,
@@ -299,20 +304,20 @@ pub fn run_loads(
             Ok(py_object)
         }
         Err(e) => {
-            return convert_special_floats(py, &string.as_bytes(), &parse_int).or_else(|err| {
+            convert_special_floats(py, string.as_bytes(), &parse_int).map_err(|err| {
                 if e.is_syntax() {
-                    return Err(JSONDecodeError::new_err((
+                    JSONDecodeError::new_err((
                         format!("Value: {:?}, Error: {:?}", string, err),
                         string.clone(),
                         0,
-                    )));
+                    ))
                 } else {
-                    return Err(PyValueError::new_err(format!(
+                    PyValueError::new_err(format!(
                         "Value: {:?}, Error: {:?}",
                         string, e
-                    )));
+                    ))
                 }
-            });
+            })
         }
     }
 }
@@ -333,24 +338,25 @@ pub fn run_load_bytes(
             Ok(py_object)
         }
         Err(e) => {
-            return convert_special_floats(py, string, &parse_int).or_else(|err| {
+            convert_special_floats(py, string, &parse_int).map_err(|err| {
                 if e.is_syntax() {
-                    return Err(JSONDecodeError::new_err((
+                    JSONDecodeError::new_err((
                         format!("Value: {:?}, Error: {:?}", string, err),
                         string.to_vec(),
                         0,
-                    )));
+                    ))
                 } else {
-                    return Err(PyValueError::new_err(format!(
+                    PyValueError::new_err(format!(
                         "Value: {:?}, Error: {:?}",
                         string, e
-                    )));
+                    ))
                 }
-            });
+            })
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn loads_impl(
     py: Python,
     s: PyObject,
@@ -365,12 +371,10 @@ pub fn loads_impl(
     match string_result {
         Ok(string) => run_loads(py, string, parse_float, parse_int),
         _ => {
-            let bytes: Vec<u8> = s.extract(py).or_else(|e| {
-                Err(PyTypeError::new_err(format!(
+            let bytes: Vec<u8> = s.extract(py).map_err(|e| PyTypeError::new_err(format!(
                     "the JSON object must be str, bytes or bytearray, got: {:?}",
                     e
-                )))
-            })?;
+                )))?;
             let mut deserializer = serde_json::Deserializer::from_slice(&bytes);
             let seed = HyperJsonValue::new(py, &parse_float, &parse_int);
             match seed.deserialize(&mut deserializer) {
@@ -381,10 +385,10 @@ pub fn loads_impl(
                     Ok(py_object)
                 }
                 Err(e) => {
-                    return Err(PyTypeError::new_err(format!(
+                    Err(PyTypeError::new_err(format!(
                         "the JSON object must be str, bytes or bytearray, got: {:?}",
                         e
-                    )));
+                    )))
                 }
             }
         }
@@ -514,9 +518,9 @@ fn convert_special_floats(
     match s {
         // TODO: If `allow_nan` is false (default: True), then this should be a ValueError
         // https://docs.python.org/3/library/json.html
-        b"NaN" => Ok(std::f64::NAN.to_object(py)),
-        b"Infinity" => Ok(std::f64::INFINITY.to_object(py)),
-        b"-Infinity" => Ok(std::f64::NEG_INFINITY.to_object(py)),
+        b"NaN" => Ok(f64::NAN.to_object(py)),
+        b"Infinity" => Ok(f64::INFINITY.to_object(py)),
+        b"-Infinity" => Ok(f64::NEG_INFINITY.to_object(py)),
         _ => Err(PyValueError::new_err(format!("Value: {:?}", s))),
     }
 }

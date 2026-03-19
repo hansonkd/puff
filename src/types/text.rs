@@ -50,7 +50,7 @@ impl Display for Text {
 
 impl PartialOrd for Text {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.0.as_str().partial_cmp(other.0.as_str())
+        Some(self.cmp(other))
     }
 }
 
@@ -60,17 +60,23 @@ impl Ord for Text {
     }
 }
 
+impl Default for Text {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Text {
     pub fn new() -> Text {
         Text(CompactString::from(""))
     }
 
     pub fn from_utf8(s: &[u8]) -> Option<Text> {
-        from_utf8(s).ok().map(|f| Text::from(f))
+        from_utf8(s).ok().map(Text::from)
     }
 
     pub fn into_string(self) -> String {
-        return self.0.into();
+        self.0.into()
     }
 
     pub fn as_str(&self) -> &str {

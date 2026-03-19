@@ -36,7 +36,7 @@ impl Receiver {
 
 #[pymethods]
 impl Receiver {
-    fn __call__(&mut self, return_func: PyObject) -> () {
+    fn __call__(&mut self, return_func: PyObject) {
         let rx = self.rx.clone();
         run_python_async(return_func, async move {
             let next = rx
@@ -96,7 +96,7 @@ pub struct ServerContext<T: AsyncFn> {
 }
 
 impl<T: AsyncFn> ServerContext<T> {
-    pub fn shutdown(&mut self, return_func: PyObject) -> () {
+    pub fn shutdown(&mut self, return_func: PyObject) {
         if let (Some(tx), Some(rx)) = (
             self.trigger_shutdown_tx.take(),
             self.wait_shutdown_rx.take(),

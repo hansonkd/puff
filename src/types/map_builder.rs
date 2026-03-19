@@ -24,6 +24,16 @@ use std::hash::Hash;
 #[derive(Clone)]
 pub struct MapBuilder<K, V>(HashMap<K, V>);
 
+impl<K, T> Default for MapBuilder<K, T>
+where
+    K: Puff + Hash + Eq,
+    T: Puff,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K, T> MapBuilder<K, T>
 where
     K: Puff + Hash + Eq,
@@ -98,7 +108,7 @@ where
     /// ```
     #[inline]
     pub fn get(&self, index: K) -> Option<T> {
-        self.0.get(&index).map(|v| v.clone())
+        self.0.get(&index).cloned()
     }
 
     /// Returns true if the map contains no elements.
@@ -146,14 +156,14 @@ impl<T: Into<MapBuilder<K, V>>, K: Puff + Hash + Eq, V: Puff> IntoMapBuilder<K, 
     }
 }
 
-impl<K: Puff + Hash + Eq, V: Puff> Into<MapBuilder<K, V>> for HashMap<K, V> {
-    fn into(self) -> MapBuilder<K, V> {
-        MapBuilder(self)
+impl<K: Puff + Hash + Eq, V: Puff> From<HashMap<K, V>> for MapBuilder<K, V> {
+    fn from(val: HashMap<K, V>) -> Self {
+        MapBuilder(val)
     }
 }
 
-impl<K: Puff + Hash + Eq, V: Puff> Into<MapBuilder<K, V>> for Vec<(K, V)> {
-    fn into(self) -> MapBuilder<K, V> {
-        MapBuilder(self.into_iter().collect())
+impl<K: Puff + Hash + Eq, V: Puff> From<Vec<(K, V)>> for MapBuilder<K, V> {
+    fn from(val: Vec<(K, V)>) -> Self {
+        MapBuilder(val.into_iter().collect())
     }
 }

@@ -44,6 +44,7 @@ impl GlobalGraphQL {
 
 #[pyclass]
 #[derive(Clone)]
+#[allow(clippy::type_complexity)]
 pub struct StreamReceiver(Arc<Mutex<Receiver<PuffResult<(Option<Text>, PyObject)>>>>);
 
 impl ToPyObject for StreamReceiver {
@@ -165,7 +166,7 @@ impl PythonGraphql {
 
                 if !errors.is_empty() {
                     let py_val = convert_execution_response(&Value::null(), errors)?;
-                    if let Err(_) = sender.send(Ok((None, py_val))).await {
+                    if sender.send(Ok((None, py_val))).await.is_err() {
                         return Ok(());
                     }
                 }
@@ -195,7 +196,7 @@ impl PythonGraphql {
                         Ok(v) => convert_execution_response(&v, vec![])?,
                         Err(e) => convert_execution_response(&Value::null(), vec![e])?,
                     };
-                    if let Err(_) = sender.send(Ok((Some(name), py_val))).await {
+                    if sender.send(Ok((Some(name), py_val))).await.is_err() {
                         break;
                     }
                 }
@@ -222,7 +223,7 @@ fn convert_execution_response(
 ) -> PuffResult<PyObject> {
     Python::with_gil(|py| {
         let pydict = PyDict::new(py);
-        let data = juniper_value_to_python(py, &value)?;
+        let data = juniper_value_to_python(py, value)?;
         if !errors.is_empty() {
             let py_errors = PyList::empty(py);
             for error in errors {

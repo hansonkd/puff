@@ -19,6 +19,12 @@
 pub struct BytesBuilder(Vec<u8>);
 use crate::types::Bytes;
 
+impl Default for BytesBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BytesBuilder {
     /// Creates an empty `BytesBuilder`.
     ///

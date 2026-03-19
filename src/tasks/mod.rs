@@ -49,6 +49,7 @@ pub struct TaskQueue {
 
 #[pymethods]
 impl TaskQueue {
+    #[allow(clippy::too_many_arguments)]
     fn add_task(
         &self,
         py: Python,
@@ -145,6 +146,7 @@ pub struct TaskResult {
     finished_at_unix_ms: u128,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn add_task<T: Into<Text>>(
     task_queue: TaskQueue,
     func_path: T,
@@ -216,7 +218,7 @@ pub async fn finish_task(
 ) -> PuffResult<()> {
     let item_key_complete = item_key_complete(task_queue, item);
     let task_hmap_key = task_hmap_key(task_queue);
-    let task_queue_key = task_queue_key(&task_queue);
+    let task_queue_key = task_queue_key(task_queue);
 
     let mut r = task_queue.pool.get().await?;
     let finished_at_unix_ms = SystemTime::now()
@@ -244,7 +246,7 @@ pub async fn finish_task(
         .arg("NX")
         .arg("PX")
         .arg(keep_results_for_ms);
-    let res = Pipeline::new()
+    Pipeline::new()
         .atomic()
         .hdel(task_hmap_key.as_slice(), item)
         .ignore()
@@ -252,9 +254,9 @@ pub async fn finish_task(
         .ignore()
         .add_command(cmd)
         .ignore()
-        .query_async(&mut *r)
+        .query_async::<()>(&mut *r)
         .await?;
-    Ok(res)
+    Ok(())
 }
 
 pub async fn task_result(task_queue: TaskQueue, item: Vec<u8>) -> PuffResult<Option<PyObject>> {
@@ -300,21 +302,18 @@ pub async fn wait_for_result(
     loop {
         let mut r = task_queue.pool.get().await?;
         let result: Option<Vec<u8>> = Cmd::get(&item_key_complete).query_async(&mut *r).await?;
-        match result {
-            Some(v) => {
-                let task = serde_json::de::from_slice::<TaskResult>(&v)?;
-                if let Some(e) = task.exception {
-                    error!("Reading task result, but task resulted in an error {}", &e);
-                    Err(PyRuntimeError::new_err(
-                        "Task resulted in an error, see logs for details.",
-                    ))?
-                } else {
-                    return Ok(Some(Python::with_gil(|py| {
-                        pythonize::pythonize(py, &task.result).map(|v| v.unbind())
-                    })?));
-                }
+        if let Some(v) = result {
+            let task = serde_json::de::from_slice::<TaskResult>(&v)?;
+            if let Some(e) = task.exception {
+                error!("Reading task result, but task resulted in an error {}", &e);
+                Err(PyRuntimeError::new_err(
+                    "Task resulted in an error, see logs for details.",
+                ))?
+            } else {
+                return Ok(Some(Python::with_gil(|py| {
+                    pythonize::pythonize(py, &task.result).map(|v| v.unbind())
+                })?));
             }
-            None => (),
         };
 
         if SystemTime::now().duration_since(start_time)?.as_millis() < timeout_ms {
@@ -333,7 +332,7 @@ pub async fn next_task(
     let mut r = task_queue.pool.get().await?;
     let task_hmap_key = task_hmap_key(task_queue);
     let task_queue_key = task_queue_key(task_queue);
-    let queue_wait_key = queue_wait_key(&task_queue);
+    let queue_wait_key = queue_wait_key(task_queue);
     let wait_duration_secs =
         wait_duration.as_secs() as f64 + wait_duration.subsec_nanos() as f64 * 1e-9;
 
@@ -381,7 +380,7 @@ pub async fn next_task(
                             Ok(t) => t,
                             Err(e) => {
                                 finish_task(
-                                    &task_queue,
+                                    task_queue,
                                     item.as_slice(),
                                     Err(format!("Could not deserialize {}", e).into()),
                                     30 * 1000,
@@ -478,7 +477,7 @@ pub fn loop_tasks(
     num_workers: usize,
     handle: Handle,
     dispatcher: PythonDispatcher,
-) -> () {
+) {
     let tasks_per_loop = num_workers as isize;
     let startup_wait_duration = Duration::from_millis(10);
     let wait_duration = Duration::from_millis(1000);

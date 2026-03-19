@@ -139,19 +139,11 @@ impl<'de> Deserialize<'de> for AggroScalarValue {
             }
 
             fn visit_u8<E: de::Error>(self, n: u8) -> Result<Self::Value, E> {
-                if n <= u8::MAX as u8 {
-                    self.visit_i8(n.try_into().unwrap())
-                } else {
-                    self.visit_u16(n.into())
-                }
+                self.visit_u16(n.into())
             }
 
             fn visit_u16<E: de::Error>(self, n: u16) -> Result<Self::Value, E> {
-                if n <= u16::MAX as u16 {
-                    self.visit_i16(n.try_into().unwrap())
-                } else {
-                    self.visit_u32(n.into())
-                }
+                self.visit_u32(n.into())
             }
 
             fn visit_u32<E: de::Error>(self, n: u32) -> Result<Self::Value, E> {
@@ -230,7 +222,7 @@ impl ToSql for AggroSqlValue {
                 }
                 scalar_vec.to_sql(ty, out)
             }
-            JuniperValue::Object(_i) => return Err(anyhow!("Can't convert objects to sql").into()),
+            JuniperValue::Object(_i) => Err(anyhow!("Can't convert objects to sql").into()),
             JuniperValue::Scalar(i) => i.to_sql(ty, out),
             JuniperValue::Null => (None as Option<i32>).to_sql(ty, out),
         }
@@ -239,25 +231,25 @@ impl ToSql for AggroSqlValue {
     where
         Self: Sized,
     {
-        match *ty {
+        matches!(
+            *ty,
             Type::FLOAT8
-            | Type::FLOAT4
-            | Type::INT4
-            | Type::INT2
-            | Type::INT8
-            | Type::TEXT
-            | Type::VARCHAR
-            | Type::BOOL => true,
-            Type::FLOAT8_ARRAY
-            | Type::FLOAT4_ARRAY
-            | Type::INT4_ARRAY
-            | Type::INT2_ARRAY
-            | Type::INT8_ARRAY
-            | Type::TEXT_ARRAY
-            | Type::VARCHAR_ARRAY
-            | Type::BOOL_ARRAY => true,
-            _ => false,
-        }
+                | Type::FLOAT4
+                | Type::INT4
+                | Type::INT2
+                | Type::INT8
+                | Type::TEXT
+                | Type::VARCHAR
+                | Type::BOOL
+                | Type::FLOAT8_ARRAY
+                | Type::FLOAT4_ARRAY
+                | Type::INT4_ARRAY
+                | Type::INT2_ARRAY
+                | Type::INT8_ARRAY
+                | Type::TEXT_ARRAY
+                | Type::VARCHAR_ARRAY
+                | Type::BOOL_ARRAY
+        )
     }
 
     to_sql_checked!();
@@ -284,18 +276,18 @@ impl ToSql for AggroScalarValue {
     where
         Self: Sized,
     {
-        match *ty {
+        matches!(
+            *ty,
             Type::FLOAT8
-            | Type::FLOAT4
-            | Type::INT4
-            | Type::INT2
-            | Type::INT8
-            | Type::BYTEA
-            | Type::TEXT
-            | Type::VARCHAR
-            | Type::BOOL => true,
-            _ => false,
-        }
+                | Type::FLOAT4
+                | Type::INT4
+                | Type::INT2
+                | Type::INT8
+                | Type::BYTEA
+                | Type::TEXT
+                | Type::VARCHAR
+                | Type::BOOL
+        )
     }
 
     to_sql_checked!();

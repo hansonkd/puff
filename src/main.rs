@@ -193,9 +193,9 @@ enum AnyOrCorsOrigins {
     Vec(Vec<CorsOrigin>),
 }
 
-impl Into<AllowOrigin> for AnyOrCorsOrigins {
-    fn into(self) -> AllowOrigin {
-        match self {
+impl From<AnyOrCorsOrigins> for AllowOrigin {
+    fn from(val: AnyOrCorsOrigins) -> Self {
+        match val {
             AnyOrCorsOrigins::Any(_) => AllowOrigin::any(),
             AnyOrCorsOrigins::Vec(v) => AllowOrigin::list(v.into_iter().map(|c| c.0)),
         }
@@ -209,9 +209,9 @@ enum AnyOrHeaderNames {
     Vec(Vec<HeaderName>),
 }
 
-impl Into<AllowHeaders> for AnyOrHeaderNames {
-    fn into(self) -> AllowHeaders {
-        match self {
+impl From<AnyOrHeaderNames> for AllowHeaders {
+    fn from(val: AnyOrHeaderNames) -> Self {
+        match val {
             AnyOrHeaderNames::Any(_) => AllowHeaders::any(),
             AnyOrHeaderNames::Vec(v) => AllowHeaders::list(v.into_iter().map(|c| c.0)),
         }
@@ -225,9 +225,9 @@ enum AnyOrHttpMethods {
     Vec(Vec<HttpMethod>),
 }
 
-impl Into<AllowMethods> for AnyOrHttpMethods {
-    fn into(self) -> AllowMethods {
-        match self {
+impl From<AnyOrHttpMethods> for AllowMethods {
+    fn from(val: AnyOrHttpMethods) -> Self {
+        match val {
             AnyOrHttpMethods::Any(_) => AllowMethods::any(),
             AnyOrHttpMethods::Vec(v) => AllowMethods::list(v.into_iter().map(|c| c.0)),
         }
@@ -269,7 +269,7 @@ impl<'de> Deserialize<'de> for MatchAny {
                     return Ok(MatchAny);
                 }
 
-                return Err(E::invalid_value(Unexpected::Str(v), &self));
+                Err(E::invalid_value(Unexpected::Str(v), &self))
             }
         }
         deserializer.deserialize_str(MatchAnyVisitor)
@@ -564,10 +564,8 @@ fn main() -> ExitCode {
     let puff_config_path = std::env::var("PUFF_CONFIG").unwrap_or("puff.toml".to_owned());
 
     let config: Config = if let Ok(contents) = fs::read_to_string(&puff_config_path) {
-        let c = toml::from_str(&contents).expect(&format!(
-            "Could not parse Puff TOML config file {}",
-            &puff_config_path
-        ));
+        let c = toml::from_str(&contents).unwrap_or_else(|_| panic!("Could not parse Puff TOML config file {}",
+            &puff_config_path));
         info!("Loaded {}.", &puff_config_path);
         c
     } else {
@@ -582,10 +580,8 @@ fn main() -> ExitCode {
         if let Some(p) = config.dotenv_path.as_ref() {
             from_path(p).unwrap();
             info!("Loaded dotenv {}", &p);
-        } else {
-            if let Ok(p) = dotenv() {
-                info!("Loaded dotenv {}", p.to_string_lossy());
-            }
+        } else if let Ok(p) = dotenv() {
+            info!("Loaded dotenv {}", p.to_string_lossy());
         }
     }
 
@@ -650,10 +646,11 @@ fn main() -> ExitCode {
         if !c.enable {
             continue;
         }
-        let mut opts = HttpClientOpts::default();
-        opts.max_idle_connections = c.max_idle_connections;
-        opts.http2_prior_knowledge = c.http2_prior_knowledge;
-        opts.user_agent = c.user_agent.as_ref().map(|f| f.0.clone());
+        let opts = HttpClientOpts {
+            max_idle_connections: c.max_idle_connections,
+            http2_prior_knowledge: c.http2_prior_knowledge,
+            user_agent: c.user_agent.as_ref().map(|f| f.0.clone()),
+        };
         rc = rc.add_named_http_client(&c.name, opts)
     }
 
@@ -681,7 +678,7 @@ fn main() -> ExitCode {
     } else if let Some(asgi_app) = config.asgi.as_ref() {
         let router = build_service_layer(&config);
         program = program.command(ASGIServerCommand::new_with_router(asgi_app, router))
-    } else if config.graphql.iter().find(|x| x.url.is_some()).is_some() {
+    } else if config.graphql.iter().any(|x| x.url.is_some()) {
         let router = build_service_layer(&config);
         program = program.command(ServerCommand::new(router))
     }
@@ -752,7 +749,7 @@ fn build_service_layer(config: &Config) -> Router {
         }
     }
 
-    if config.compression_middleware.clone().unwrap_or(false) {
+    if config.compression_middleware.unwrap_or(false) {
         if let Some(cm) = config.cors.clone() {
             let cl = make_cors_layer(cm);
             router.layer(

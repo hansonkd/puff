@@ -42,8 +42,8 @@ pub struct RealPuffContext {
 // and set PUFF_CONTEXT for the thread. This allows us to lazily set the context while avoiding
 // a mutex lock every time trying to access it.
 thread_local! {
-    pub static PUFF_CONTEXT_WAITING: RefCell<Option<Arc<Mutex<Option<PuffContext>>>>> = RefCell::new(None);
-    pub static PUFF_CONTEXT: RefCell<Option<PuffContext >> = RefCell::new(None);
+    pub static PUFF_CONTEXT_WAITING: RefCell<Option<Arc<Mutex<Option<PuffContext>>>>> = const { RefCell::new(None) };
+    pub static PUFF_CONTEXT: RefCell<Option<PuffContext >> = const { RefCell::new(None) };
 }
 
 pub fn set_puff_context(context: PuffContext) {
@@ -119,6 +119,7 @@ impl RealPuffContext {
 
     /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`. This function will start
     /// the number of `coroutine_threads` specified in your config. Includes options.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_options(
         handle: Handle,
         redis: HashMap<String, RedisClient>,
@@ -203,10 +204,8 @@ impl RealPuffContext {
     pub fn redis_named(&self, key: &str) -> RedisClient {
         self.redis
             .get(key)
-            .expect(&format!(
-                "Redis named {} is not configured for this runtime.",
-                key
-            ))
+            .unwrap_or_else(|| panic!("Redis named {} is not configured for this runtime.",
+                key))
             .clone()
     }
 
@@ -224,16 +223,14 @@ impl RealPuffContext {
     pub fn postgres_named(&self, key: &str) -> PostgresClient {
         self.postgres
             .get(key)
-            .expect(&format!(
-                "Postgres named {} is not configured for this runtime.",
-                key
-            ))
+            .unwrap_or_else(|| panic!("Postgres named {} is not configured for this runtime.",
+                key))
             .clone()
     }
 
     /// The configured postgres client.
     pub fn postgres_safe_named(&self, key: &str) -> Option<PostgresClient> {
-        self.postgres.get(key).map(|c| c.clone())
+        self.postgres.get(key).cloned()
     }
 
     /// The configured graphql root node. Panics if not enabled.
@@ -245,10 +242,8 @@ impl RealPuffContext {
     pub fn gql_named(&self, key: &str) -> PuffGraphqlConfig {
         self.gql_roots
             .get(key)
-            .expect(&format!(
-                "Graphql named {} is not configured for this runtime.",
-                key
-            ))
+            .unwrap_or_else(|| panic!("Graphql named {} is not configured for this runtime.",
+                key))
             .clone()
     }
 }

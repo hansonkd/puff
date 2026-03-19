@@ -169,6 +169,7 @@ pub async fn save_memory(
 }
 
 /// Record LLM usage to Postgres.
+#[allow(clippy::too_many_arguments)]
 pub async fn record_llm_usage(
     client: &tokio_postgres::Client,
     agent: &str,
