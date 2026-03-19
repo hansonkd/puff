@@ -69,7 +69,7 @@ impl PubSubMessage {
 
     /// What PubSubConnection sent the message.
     pub fn from(&self) -> ConnectionId {
-        self.from.clone()
+        self.from
     }
 }
 
@@ -183,7 +183,7 @@ impl PubSubClient {
                         }
                     }
 
-                    let (events, mut new_events) = mpsc::channel(1);
+                    let (events, mut new_events) = mpsc::channel(64);
 
                     {
                         let mut s_mutex = inner_client.events_sender.lock().unwrap();
@@ -221,10 +221,31 @@ impl PubSubClient {
     fn handle_msg(&self, msg: Msg) {
         match bincode::deserialize::<PubSubMessage>(msg.get_payload_bytes()) {
             Ok(pubsub_msg) => {
-                let mut hm = self.channels.lock().unwrap();
-                if let Some(new_hm) = hm.get_mut(&pubsub_msg.channel) {
-                    new_hm.retain(|_conn, sender| sender.send(pubsub_msg.puff()).is_ok())
+                // Clone senders under lock, then release lock before sending
+                let senders: Vec<(ConnectionId, UnboundedSender<PubSubMessage>)> = {
+                    let hm = self.channels.lock().unwrap();
+                    if let Some(subscribers) = hm.get(&pubsub_msg.channel) {
+                        subscribers.iter().map(|(k, v)| (*k, v.clone())).collect()
+                    } else {
+                        return;
+                    }
                 };
+                // Send without holding the lock
+                let mut failed: Vec<ConnectionId> = Vec::new();
+                for (conn_id, sender) in &senders {
+                    if sender.send(pubsub_msg.clone()).is_err() {
+                        failed.push(*conn_id);
+                    }
+                }
+                // Clean up failed senders under lock
+                if !failed.is_empty() {
+                    let mut hm = self.channels.lock().unwrap();
+                    if let Some(subscribers) = hm.get_mut(&pubsub_msg.channel) {
+                        for conn_id in failed {
+                            subscribers.remove(&conn_id);
+                        }
+                    }
+                }
             }
             Err(_e) => {
                 error!("Got an unexpected error deserializing pubsub message {_e}")
@@ -294,32 +315,31 @@ pub struct PubSubConnection {
 
 impl Drop for PubSubConnection {
     fn drop(&mut self) {
-        let event = PubSubEvent::Drop(self.instance_id.clone());
+        let event = PubSubEvent::Drop(self.instance_id);
         let inner_sender = self.events_sender.clone();
-        with_puff_context(move |ctx| {
-            ctx.handle().spawn(async move {
-                let maybe_s = {
-                    let m = inner_sender.lock().unwrap();
-                    (*m).clone()
-                };
-                if let Some(s) = maybe_s {
-                    s.send(event).await.unwrap_or_default();
-                }
-            });
-        })
+        // Best-effort: send the drop event if the runtime is still alive.
+        // During shutdown, the context may be gone — don't panic.
+        let maybe_sender = {
+            let m = inner_sender.lock().unwrap();
+            (*m).clone()
+        };
+        if let Some(s) = maybe_sender {
+            // Use try_send to avoid blocking in Drop
+            let _ = s.try_send(event);
+        }
     }
 }
 
 impl PubSubConnection {
     /// Get the ConnectionId, useful for filtering messages from yourself.
     pub fn who_am_i(&self) -> ConnectionId {
-        self.connection_id.clone()
+        self.connection_id
     }
 
     /// Subscribe to the channel. Queues the command even if you don't await the handle.
     pub fn subscribe<T: Into<Text>>(&self, channel: T) -> BoxFuture<'_, bool> {
         let new_sender = self.sender.clone();
-        let event = PubSubEvent::Sub(channel.into(), self.instance_id.clone(), new_sender);
+        let event = PubSubEvent::Sub(channel.into(), self.instance_id, new_sender);
         let inner_sender = self.events_sender.clone();
         let fut = async move {
             let s = {
@@ -334,7 +354,7 @@ impl PubSubConnection {
 
     /// Unsubscribe from the channel. Queues the command even if you don't await the handle.
     pub fn unsubscribe<T: Into<Text>>(&self, channel: T) -> BoxFuture<'_, bool> {
-        let event = PubSubEvent::UnSub(channel.into(), self.instance_id.clone());
+        let event = PubSubEvent::UnSub(channel.into(), self.instance_id);
         let inner_sender = self.events_sender.clone();
         let fut = async move {
             let s = {
@@ -357,7 +377,7 @@ impl PubSubConnection {
         let channel_text = channel.into();
         let message = PubSubMessage::new(
             channel_text.clone(),
-            self.connection_id.clone(),
+            self.connection_id,
             body.into(),
         );
 
