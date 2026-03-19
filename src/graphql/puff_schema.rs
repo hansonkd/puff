@@ -337,8 +337,8 @@ impl PyContext {
         Ok(rows)
     }
 
-    fn auth(&self) -> Option<PyObject> {
-        self.auth.clone()
+    fn auth(&self, py: Python) -> Option<PyObject> {
+        self.auth.as_ref().map(|o| o.clone_ref(py))
     }
 
     fn layer_cache<'a>(&'a self, py: Python<'a>) -> Bound<'a, PyDict> {
@@ -346,7 +346,7 @@ impl PyContext {
     }
 
     fn connection(&self, py: Python) -> Option<PyObject> {
-        self.conn.clone().map(|f| f.into_py(py))
+        self.conn.clone().map(|c| c.into_py(py))
     }
 
     fn required_columns(&self, py: Python) -> PyResult<PyObject> {
