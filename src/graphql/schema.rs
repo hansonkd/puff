@@ -1,7 +1,10 @@
 //! Schema builder: builds an async_graphql::dynamic::Schema from AggroObjects.
 
+use anyhow::anyhow;
+
 use crate::errors::PuffResult;
 use crate::graphql::puff_schema::*;
+use crate::graphql::row_return::convert_pyany_to_value;
 use crate::graphql::row_return::ExtractorRootNode;
 use crate::graphql::scalar::register_scalars;
 use crate::types::text::ToText;
@@ -17,6 +20,16 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use crate::errors::log_puff_error;
+
+/// Extract the parent GqlValue from a resolver context's parent_value.
+///
+/// async-graphql stores the parent's FieldValue in `ctx.parent_value`.
+/// When the parent resolver returned `FieldValue::value(GqlValue::Object({...}))`
+/// we retrieve it via `try_to_value()`.  This is the standard representation
+/// used by the layer engine for object types.
+fn extract_parent_gql_value<'a>(ctx: &'a ResolverContext<'_>) -> Option<&'a GqlValue> {
+    ctx.parent_value.try_to_value().ok()
+}
 
 fn decoded_type_to_type_ref(dt: &DecodedType) -> TypeRef {
     let inner = type_info_to_type_ref(&dt.type_info);
@@ -72,11 +85,66 @@ fn type_info_to_type_ref_input(ti: &AggroTypeInfo) -> TypeRef {
     }
 }
 
+fn can_use_root_scalar_fast_path(
+    field: &AggroField,
+    is_root: bool,
+    ctx: &ResolverContext<'_>,
+) -> bool {
+    is_root
+        && !field.is_async
+        && field.safe_without_context
+        && field.producer_method.is_some()
+        && field.value_from_column.is_none()
+        && ctx.ctx.field().selection_set().count() == 0
+        && supports_direct_value_fast_path(&field.return_type.type_info)
+}
+
+fn resolve_root_scalar_fast_path(
+    field: &AggroField,
+    inputs: &Arc<BTreeMap<Text, AggroObject>>,
+    aggro_ctx: &AggroContext,
+    args: &ObjectAccessor<'_>,
+) -> PuffResult<GqlValue> {
+    let auth = aggro_ctx.auth();
+    let producer = Python::with_gil(|py| field.producer_method.as_ref().map(|o| o.clone_ref(py)))
+        .ok_or_else(|| anyhow!("Field {} is missing a producer", field.name))?;
+
+    Python::with_gil(|py| {
+        let py_args = collect_arguments_for_python(py, inputs, field, args)?;
+        let arg_dict = args_to_py_dict(py, &py_args)?;
+        let py_extractor = PyContext::new(
+            Arc::new(ExtractorRootNode),
+            auth,
+            None,
+            PyDict::new(py).unbind(),
+            Vec::new(),
+        );
+        let result = producer.call_bound(py, (py_extractor,), Some(&arg_dict))?;
+        convert_pyany_to_value(result.bind(py))
+    })
+}
+
+/// Convert a resolved GqlValue into a FieldValue suitable for async-graphql.
+///
+/// Returns `None` for null values (which async-graphql treats as absent/null).
+/// For all other values, wraps them with `FieldValue::value()`. async-graphql
+/// handles object and list-of-object resolution automatically: when the schema
+/// type is an Object, it calls `resolve_container` which invokes child field
+/// resolvers with the parent FieldValue. Child resolvers then use
+/// `extract_parent_gql_value` to read from the parent object's data.
+fn gql_to_field_value(val: GqlValue) -> Option<FieldValue<'static>> {
+    if val == GqlValue::Null {
+        None
+    } else {
+        Some(FieldValue::value(val))
+    }
+}
+
 fn build_object_type(
     obj: &AggroObject,
     all_objects: &Arc<BTreeMap<Text, AggroObject>>,
     input_objs: &Arc<BTreeMap<Text, AggroObject>>,
-    _is_root: bool,
+    is_root: bool,
     _commit: bool,
 ) -> Object {
     let mut gql_obj = Object::new(obj.name.as_str());
@@ -86,20 +154,58 @@ fn build_object_type(
         let field_arc = Arc::new(field.clone());
         let objects = all_objects.clone();
         let inputs = input_objs.clone();
+        let field_name_owned = field_name.clone();
 
         let mut gql_field = Field::new(field_name.as_str(), type_ref, move |ctx| {
             let field = field_arc.clone();
             let objects = objects.clone();
             let inputs = inputs.clone();
+            let field_name_owned = field_name_owned.clone();
             FieldFuture::new(async move {
-                let aggro_ctx = ctx
-                    .ctx
-                    .data::<Arc<AggroContext>>()
-                    .map_err(|e| async_graphql::Error::new(format!("Missing AggroContext: {:?}", e)))?;
+                let aggro_ctx = ctx.ctx.data::<Arc<AggroContext>>().map_err(|e| {
+                    async_graphql::Error::new(format!("Missing AggroContext: {:?}", e))
+                })?;
+
+                // ---------------------------------------------------------
+                // CHILD FIELD path: extract value from parent object data
+                // ---------------------------------------------------------
+                if !is_root {
+                    // The parent resolver returned FieldValue::value(GqlValue::Object({...})).
+                    // async-graphql passes it as parent_value. Extract the underlying
+                    // GqlValue::Object and read this field's column from it.
+                    if let Some(GqlValue::Object(parent_obj)) = extract_parent_gql_value(&ctx) {
+                        let col = field
+                            .value_from_column
+                            .as_ref()
+                            .unwrap_or(&field_name_owned);
+
+                        let val = parent_obj
+                            .get(col.as_str())
+                            .cloned()
+                            .unwrap_or(GqlValue::Null);
+
+                        return Ok(gql_to_field_value(val));
+                    }
+                    // If we could not extract from parent, fall through to
+                    // layer engine (should not normally happen for well-formed
+                    // schemas, but keeps backward compat).
+                }
+
+                if can_use_root_scalar_fast_path(&field, is_root, &ctx) {
+                    let result = log_puff_error(
+                        "GQL",
+                        resolve_root_scalar_fast_path(&field, &inputs, aggro_ctx, &ctx.args),
+                    );
+                    return match result {
+                        Ok(val) => Ok(gql_to_field_value(val)),
+                        Err(e) => Err(async_graphql::Error::new(format!("{}", e))),
+                    };
+                }
 
                 let (look_ahead, layer_cache) = Python::with_gil(|py| {
-                    let look_ahead =
-                        build_look_ahead_from_ctx(py, &field, ctx.ctx, &inputs, &objects, &ctx.args)?;
+                    let look_ahead = build_look_ahead_from_ctx(
+                        py, &field, ctx.ctx, &inputs, &objects, &ctx.args,
+                    )?;
                     let d = PyDict::new(py).unbind();
                     PuffResult::Ok((look_ahead, d))
                 })
@@ -126,13 +232,7 @@ fn build_object_type(
 
                 let result = log_puff_error("GQL", fut.await);
                 match result {
-                    Ok(val) => {
-                        if val == GqlValue::Null {
-                            Ok(None)
-                        } else {
-                            Ok(Some(FieldValue::value(val)))
-                        }
-                    }
+                    Ok(val) => Ok(gql_to_field_value(val)),
                     Err(e) => Err(async_graphql::Error::new(format!("{}", e))),
                 }
             })
@@ -175,90 +275,81 @@ fn build_subscription_type(
         let inputs = input_objs.clone();
         let config = config_for_sub.clone();
 
-        let mut sub_field =
-            SubscriptionField::new(field_name.as_str(), type_ref, move |ctx| {
-                let field = field_arc.clone();
-                let objects = objects.clone();
-                let inputs = inputs.clone();
-                let config = config.clone();
-                SubscriptionFieldFuture::new(async move {
-                    let aggro_ctx = ctx
-                        .ctx
-                        .data::<Arc<AggroContext>>()
-                        .map_err(|e| {
-                            async_graphql::Error::new(format!("Missing AggroContext: {:?}", e))
+        let mut sub_field = SubscriptionField::new(field_name.as_str(), type_ref, move |ctx| {
+            let field = field_arc.clone();
+            let objects = objects.clone();
+            let inputs = inputs.clone();
+            let config = config.clone();
+            SubscriptionFieldFuture::new(async move {
+                let aggro_ctx = ctx.ctx.data::<Arc<AggroContext>>().map_err(|e| {
+                    async_graphql::Error::new(format!("Missing AggroContext: {:?}", e))
+                })?;
+
+                let (look_ahead_fields, py_args, layer_cache) = Python::with_gil(|py| {
+                    let laf = build_look_ahead_from_ctx(
+                        py, &field, ctx.ctx, &inputs, &objects, &ctx.args,
+                    )?;
+                    let args_dict = PyDict::new(py);
+                    for (k, v) in laf.arguments().iter() {
+                        args_dict.set_item(k.as_str(), v)?;
+                    }
+                    let args: PyObject = args_dict.into_py(py);
+                    PuffResult::Ok((laf, args, PyDict::new(py).unbind()))
+                })
+                .map_err(|e| async_graphql::Error::new(format!("{}", e)))?;
+
+                let parents = Arc::new(ExtractorRootNode);
+
+                let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+                let ss = SubscriptionSender::new(
+                    sender,
+                    look_ahead_fields,
+                    (*field).clone(),
+                    objects,
+                    aggro_ctx.auth(),
+                    parents.clone(),
+                    config,
+                );
+
+                let py_dispatcher =
+                    crate::context::with_puff_context(|ctx| ctx.python_dispatcher());
+
+                let python_context = PyContext::new(
+                    parents,
+                    aggro_ctx.auth(),
+                    None,
+                    layer_cache,
+                    field.depends_on.clone(),
+                );
+
+                let acceptor_method =
+                    Python::with_gil(|py| field.acceptor_method.as_ref().map(|o| o.clone_ref(py)))
+                        .ok_or_else(|| {
+                            async_graphql::Error::new(format!(
+                                "Subscription field '{}' needs an acceptor",
+                                field.name
+                            ))
                         })?;
 
-                    let (look_ahead_fields, py_args, layer_cache) = Python::with_gil(|py| {
-                        let laf = build_look_ahead_from_ctx(
-                            py, &field, ctx.ctx, &inputs, &objects, &ctx.args,
-                        )?;
-                        let args_dict = PyDict::new(py);
-                        for (k, v) in laf.arguments().iter() {
-                            args_dict.set_item(k.as_str(), v)?;
-                        }
-                        let args: PyObject = args_dict.into_py(py);
-                        PuffResult::Ok((laf, args, PyDict::new(py).unbind()))
-                    })
-                    .map_err(|e| async_graphql::Error::new(format!("{}", e)))?;
+                if field.is_async {
+                    py_dispatcher
+                        .dispatch_asyncio(acceptor_method, (ss, python_context, py_args), None)
+                        .map_err(|e| async_graphql::Error::new(format!("{}", e)))?;
+                } else {
+                    py_dispatcher
+                        .dispatch(acceptor_method, (ss, python_context, py_args), None)
+                        .map_err(|e| async_graphql::Error::new(format!("{}", e)))?;
+                }
 
-                    let parents = Arc::new(ExtractorRootNode);
-
-                    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-                    let ss = SubscriptionSender::new(
-                        sender,
-                        look_ahead_fields,
-                        (*field).clone(),
-                        objects,
-                        aggro_ctx.auth(),
-                        parents.clone(),
-                        config,
-                    );
-
-                    let py_dispatcher =
-                        crate::context::with_puff_context(|ctx| ctx.python_dispatcher());
-
-                    let python_context = PyContext::new(
-                        parents,
-                        aggro_ctx.auth(),
-                        None,
-                        layer_cache,
-                        field.depends_on.clone(),
-                    );
-
-                    let acceptor_method = Python::with_gil(|py| {
-                        field.acceptor_method.as_ref().map(|o| o.clone_ref(py))
-                    })
-                    .ok_or_else(|| {
-                        async_graphql::Error::new(format!(
-                            "Subscription field '{}' needs an acceptor",
-                            field.name
-                        ))
-                    })?;
-
-                    if field.is_async {
-                        py_dispatcher
-                            .dispatch_asyncio(
-                                acceptor_method,
-                                (ss, python_context, py_args),
-                                None,
-                            )
-                            .map_err(|e| async_graphql::Error::new(format!("{}", e)))?;
-                    } else {
-                        py_dispatcher
-                            .dispatch(acceptor_method, (ss, python_context, py_args), None)
-                            .map_err(|e| async_graphql::Error::new(format!("{}", e)))?;
+                let stream = async_stream::stream! {
+                    while let Some(val) = receiver.recv().await {
+                        yield Ok(FieldValue::value(val));
                     }
+                };
 
-                    let stream = async_stream::stream! {
-                        while let Some(val) = receiver.recv().await {
-                            yield Ok(FieldValue::value(val));
-                        }
-                    };
-
-                    Ok(stream)
-                })
-            });
+                Ok(stream)
+            })
+        });
 
         for (arg_name, arg) in &field.arguments {
             let arg_type = decoded_type_to_type_ref_input(&arg.param_type);
