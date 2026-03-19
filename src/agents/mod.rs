@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod budget;
 pub mod capabilities;
 pub mod conversation;
 pub mod error;
@@ -18,11 +19,13 @@ pub mod trace;
 pub mod wasm;
 
 pub use agent::{Agent, AgentConfig};
+pub use budget::AgentBudgetTracker;
 pub use capabilities::AgentCapabilities;
 pub use conversation::Conversation;
 pub use error::AgentError;
 pub use llm::{LlmClient, LlmConfig, LlmRequest, LlmResponse, Message, Role};
 pub use memory::MemoryConfig;
+pub use quota::ConnectionQuota;
 pub use skill::Skill;
 pub use tool::ToolRegistry;
 

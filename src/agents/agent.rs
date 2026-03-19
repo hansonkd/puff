@@ -1,12 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use crate::agents::budget::AgentBudgetTracker;
+use crate::agents::capabilities::AgentCapabilities;
 use crate::agents::conversation::Conversation;
 use crate::agents::error::AgentError;
 use crate::agents::llm::{
     ContentBlock, LlmClient, LlmRequest, LlmResponse, Message, MessageContent, Role,
 };
-use crate::agents::memory::MemoryConfig;
+use crate::agents::memory::{self, MemoryConfig};
 use crate::agents::tool::ToolRegistry;
 
 // ---------------------------------------------------------------------------
@@ -27,6 +29,8 @@ pub struct AgentConfig {
     pub memory: Option<MemoryConfig>,
     #[serde(default)]
     pub permissions: Option<AgentPermissions>,
+    #[serde(default)]
+    pub capabilities: Option<AgentCapabilities>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -46,15 +50,21 @@ pub struct Agent {
     pub config: AgentConfig,
     pub tools: Arc<ToolRegistry>,
     pub context_snippets: Vec<String>,
+    pub capabilities: AgentCapabilities,
+    pub budget: Arc<AgentBudgetTracker>,
 }
 
 impl Agent {
     /// Create a new agent with empty tools and no context snippets.
     pub fn new(config: AgentConfig) -> Self {
+        let capabilities = config.capabilities.clone().unwrap_or_default();
+        let budget = Arc::new(AgentBudgetTracker::new(capabilities.budget.clone()));
         Self {
             config,
             tools: Arc::new(ToolRegistry::new()),
             context_snippets: Vec::new(),
+            capabilities,
+            budget,
         }
     }
 
@@ -123,8 +133,22 @@ impl Agent {
         llm_client: &LlmClient,
     ) -> Result<LlmResponse, AgentError> {
         for _round in 0..MAX_TOOL_ROUNDS {
+            // Check LLM budget before making the call.
+            self.budget.check_llm_budget()?;
+
             let request = self.build_request(conversation);
             let response = llm_client.chat(request).await?;
+
+            // Record token/cost usage from the response.
+            self.budget.record_llm_usage(
+                response.input_tokens as u64,
+                response.output_tokens as u64,
+                memory::estimate_cost(
+                    &self.config.model,
+                    response.input_tokens,
+                    response.output_tokens,
+                ),
+            );
 
             if response.tool_calls.is_empty() {
                 // No tool calls — final response. Add assistant message and return.
@@ -160,7 +184,36 @@ impl Agent {
 
             // Execute each tool call and add tool result messages.
             for tc in &response.tool_calls {
+                // Check tool capability before execution.
+                if let Err(e) = self.capabilities.check_tool(&tc.name) {
+                    conversation.add_message(Message {
+                        role: Role::User,
+                        content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                            tool_use_id: tc.id.clone(),
+                            content: format!("{e}"),
+                            is_error: Some(true),
+                        }]),
+                        tool_call_id: Some(tc.id.clone()),
+                    });
+                    continue;
+                }
+
+                // Check tool budget before execution.
+                if let Err(e) = self.budget.check_tool_budget() {
+                    conversation.add_message(Message {
+                        role: Role::User,
+                        content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                            tool_use_id: tc.id.clone(),
+                            content: format!("{e}"),
+                            is_error: Some(true),
+                        }]),
+                        tool_call_id: Some(tc.id.clone()),
+                    });
+                    continue;
+                }
+
                 let (content, is_error) = if self.tools.get(&tc.name).is_some() {
+                    self.budget.record_tool_call();
                     (
                         format!("Tool '{}' executed (stub)", tc.name),
                         None,
@@ -210,6 +263,7 @@ mod tests {
             tools_module: None,
             memory: None,
             permissions: None,
+            capabilities: None,
         }
     }
 

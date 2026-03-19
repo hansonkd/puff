@@ -178,6 +178,7 @@ impl Parallel {
                     tools_module: None,
                     memory: None,
                     permissions: None,
+                    capabilities: None,
                 };
                 let task_agent = Agent::new(config).with_tools_arc(tools);
                 let mut conv = Conversation::new(&agent_name);
@@ -420,6 +421,7 @@ mod tests {
             tools_module: None,
             memory: None,
             permissions: None,
+            capabilities: None,
         })
     }
 

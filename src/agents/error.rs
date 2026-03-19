@@ -46,6 +46,12 @@ pub enum AgentError {
     ConfigError(String),
     /// An error originating from Python interop.
     PythonError(String),
+    /// A budget limit was exceeded.
+    BudgetExceeded {
+        resource: String,
+        limit: u64,
+        used: u64,
+    },
 }
 
 impl fmt::Display for AgentError {
@@ -90,6 +96,16 @@ impl fmt::Display for AgentError {
             }
             AgentError::ConfigError(msg) => write!(f, "Config error: {msg}"),
             AgentError::PythonError(msg) => write!(f, "Python error: {msg}"),
+            AgentError::BudgetExceeded {
+                resource,
+                limit,
+                used,
+            } => {
+                write!(
+                    f,
+                    "Budget exceeded for {resource}: limit={limit}, used={used}"
+                )
+            }
         }
     }
 }

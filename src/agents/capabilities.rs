@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::agents::error::AgentError;
 
@@ -9,7 +9,7 @@ use crate::agents::error::AgentError;
 // AgentCapabilities
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentCapabilities {
     #[serde(default = "default_sql")]
     pub sql: SqlCapability,
@@ -75,6 +75,16 @@ impl Default for SqlCapability {
     }
 }
 
+impl Serialize for SqlCapability {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            SqlCapability::None => s.serialize_str("none"),
+            SqlCapability::ReadOnly => s.serialize_str("read_only"),
+            SqlCapability::ReadWrite => s.serialize_str("read_write"),
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for SqlCapability {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let value = serde_json::Value::deserialize(d)?;
@@ -103,6 +113,16 @@ pub enum HttpCapability {
 impl Default for HttpCapability {
     fn default() -> Self {
         HttpCapability::Any
+    }
+}
+
+impl Serialize for HttpCapability {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            HttpCapability::None => s.serialize_str("none"),
+            HttpCapability::Any => s.serialize_str("any"),
+            HttpCapability::Allowlist(v) => v.serialize(s),
+        }
     }
 }
 
@@ -140,6 +160,26 @@ pub enum FsCapability {
 impl Default for FsCapability {
     fn default() -> Self {
         FsCapability::None
+    }
+}
+
+impl Serialize for FsCapability {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            FsCapability::None => s.serialize_str("none"),
+            FsCapability::ReadOnly { read_only } => {
+                use serde::ser::SerializeMap;
+                let mut map = s.serialize_map(Some(1))?;
+                map.serialize_entry("read_only", read_only)?;
+                map.end()
+            }
+            FsCapability::ReadWrite { read_write } => {
+                use serde::ser::SerializeMap;
+                let mut map = s.serialize_map(Some(1))?;
+                map.serialize_entry("read_write", read_write)?;
+                map.end()
+            }
+        }
     }
 }
 
@@ -192,6 +232,16 @@ impl Default for ToolCapability {
     }
 }
 
+impl Serialize for ToolCapability {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            ToolCapability::None => s.serialize_str("none"),
+            ToolCapability::All => s.serialize_str("all"),
+            ToolCapability::Specific(v) => v.serialize(s),
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for ToolCapability {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let value = serde_json::Value::deserialize(d)?;
@@ -229,6 +279,16 @@ impl Default for AgentCapability {
     }
 }
 
+impl Serialize for AgentCapability {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            AgentCapability::None => s.serialize_str("none"),
+            AgentCapability::All => s.serialize_str("all"),
+            AgentCapability::Specific(v) => v.serialize(s),
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for AgentCapability {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let value = serde_json::Value::deserialize(d)?;
@@ -253,7 +313,7 @@ impl<'de> Deserialize<'de> for AgentCapability {
 // BudgetCapability
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BudgetCapability {
     pub max_input_tokens: Option<u64>,
     pub max_output_tokens: Option<u64>,
