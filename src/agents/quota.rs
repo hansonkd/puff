@@ -1,6 +1,8 @@
-use std::sync::Arc;
-use tokio::sync::{Semaphore, OwnedSemaphorePermit};
+//! Per-agent connection quotas.
+
 use crate::agents::error::AgentError;
+use std::sync::Arc;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// Per-agent connection quota manager.
 /// Limits how many simultaneous connections each agent can hold.
@@ -21,20 +23,24 @@ impl ConnectionQuota {
     /// Returns a permit that must be held while the connection is in use.
     /// When the permit is dropped, the slot is released.
     pub async fn acquire(&self, agent_name: &str) -> Result<OwnedSemaphorePermit, AgentError> {
-        let semaphore = self.semaphores
+        let semaphore = self
+            .semaphores
             .entry(agent_name.to_string())
             .or_insert_with(|| Arc::new(Semaphore::new(self.max_per_agent)))
             .clone();
 
-        semaphore.acquire_owned().await
-            .map_err(|_| AgentError::ConfigError(
-                format!("Connection quota for agent '{}' closed", agent_name)
+        semaphore.acquire_owned().await.map_err(|_| {
+            AgentError::ConfigError(format!(
+                "Connection quota for agent '{}' closed",
+                agent_name
             ))
+        })
     }
 
     /// Try to acquire without waiting. Returns None if quota is full.
     pub fn try_acquire(&self, agent_name: &str) -> Option<OwnedSemaphorePermit> {
-        let semaphore = self.semaphores
+        let semaphore = self
+            .semaphores
             .entry(agent_name.to_string())
             .or_insert_with(|| Arc::new(Semaphore::new(self.max_per_agent)))
             .clone();

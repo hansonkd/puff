@@ -1,3 +1,5 @@
+//! Multi-agent orchestration patterns.
+
 use std::sync::Arc;
 
 use crate::agents::agent::{Agent, AgentConfig};
@@ -24,11 +26,7 @@ impl Router {
     /// The LLM is given a compact listing of available agents and asked to
     /// return only the integer index. The response is parsed and bounds-checked
     /// before being returned.
-    pub async fn route(
-        &self,
-        message: &str,
-        llm_client: &LlmClient,
-    ) -> Result<usize, AgentError> {
+    pub async fn route(&self, message: &str, llm_client: &LlmClient) -> Result<usize, AgentError> {
         // Build a system prompt that lists all agents.
         let mut agent_listing = String::new();
         for (i, agent) in self.agents.iter().enumerate() {
@@ -37,10 +35,7 @@ impl Router {
                 .system_prompt
                 .as_deref()
                 .unwrap_or("(no description)");
-            agent_listing.push_str(&format!(
-                "{i}: {} — {}\n",
-                agent.config.name, description
-            ));
+            agent_listing.push_str(&format!("{i}: {} — {}\n", agent.config.name, description));
         }
 
         let system = format!(
@@ -99,11 +94,7 @@ impl Chain {
     /// Execute the chain. The first agent receives `input`; every subsequent
     /// agent receives the previous agent's text output. Returns the final
     /// agent's output.
-    pub async fn run(
-        &self,
-        input: &str,
-        llm_client: &LlmClient,
-    ) -> Result<String, AgentError> {
+    pub async fn run(&self, input: &str, llm_client: &LlmClient) -> Result<String, AgentError> {
         if self.agents.is_empty() {
             return Err(AgentError::OrchestrationError(format!(
                 "Chain '{}' has no agents",
@@ -147,11 +138,7 @@ impl Parallel {
     /// `merge_prompt` is set, a final LLM call is made to synthesise the
     /// results into a single response; otherwise the formatted results are
     /// concatenated with newlines.
-    pub async fn run(
-        &self,
-        input: &str,
-        llm_client: Arc<LlmClient>,
-    ) -> Result<String, AgentError> {
+    pub async fn run(&self, input: &str, llm_client: Arc<LlmClient>) -> Result<String, AgentError> {
         if self.agents.is_empty() {
             return Err(AgentError::OrchestrationError(format!(
                 "Parallel '{}' has no agents",
@@ -165,7 +152,7 @@ impl Parallel {
             let input_owned = input.to_string();
             let agent_name = agent.config.name.clone();
             let agent_model = agent.config.model.clone();
-            let system_prompt = agent.build_system_prompt();
+            let system_prompt = agent.build_system_prompt().to_owned();
             let tools = Arc::clone(&agent.tools);
             let client = Arc::clone(&llm_client);
 
@@ -173,7 +160,7 @@ impl Parallel {
                 let config = AgentConfig {
                     name: agent_name.clone(),
                     model: agent_model,
-                    system_prompt: Some(system_prompt),
+                    system_prompt: (!system_prompt.is_empty()).then_some(system_prompt),
                     skills: vec![],
                     tools_module: None,
                     memory: None,
@@ -246,11 +233,7 @@ impl Supervisor {
     /// named worker is run with the provided task and its output is returned as
     /// the tool result. The loop continues until the supervisor produces a plain
     /// text response (no tool calls) or the maximum number of rounds is reached.
-    pub async fn run(
-        &self,
-        input: &str,
-        llm_client: &LlmClient,
-    ) -> Result<String, AgentError> {
+    pub async fn run(&self, input: &str, llm_client: &LlmClient) -> Result<String, AgentError> {
         // 1. Build a delegate tool definition for the supervisor.
         let delegate_tool = ToolDefinition {
             name: "delegate".to_string(),
@@ -288,7 +271,7 @@ impl Supervisor {
             let mut request =
                 LlmRequest::new(self.supervisor.config.model.clone(), conv.messages.clone());
             if !system_prompt.is_empty() {
-                request = request.with_system(system_prompt.clone());
+                request = request.with_system(system_prompt.to_owned());
             }
             request = request.with_tools(tools.clone());
 
@@ -386,12 +369,7 @@ impl Supervisor {
 /// system-level message is appended to the conversation so that the receiving
 /// agent is aware of the context transfer. The conversation's `agent_name` is
 /// updated to the new agent.
-pub fn handoff(
-    conversation: &mut Conversation,
-    from_agent: &str,
-    to_agent: &str,
-    reason: &str,
-) {
+pub fn handoff(conversation: &mut Conversation, from_agent: &str, to_agent: &str, reason: &str) {
     conversation.add_message(Message {
         role: Role::User,
         content: MessageContent::Text(format!(
@@ -504,7 +482,12 @@ mod tests {
         assert_eq!(conv.agent_name, "agent-alpha");
         assert_eq!(conv.messages.len(), 1);
 
-        handoff(&mut conv, "agent-alpha", "agent-beta", "user requested escalation");
+        handoff(
+            &mut conv,
+            "agent-alpha",
+            "agent-beta",
+            "user requested escalation",
+        );
 
         // agent_name is updated to the receiving agent.
         assert_eq!(conv.agent_name, "agent-beta");

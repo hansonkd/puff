@@ -1,3 +1,5 @@
+//! SSE stream parser for LLM provider responses.
+
 #[derive(Debug, Clone)]
 pub struct SseEvent {
     pub event_type: Option<String>,

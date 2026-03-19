@@ -1,3 +1,5 @@
+//! Atomic budget tracking and enforcement.
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::agents::capabilities::BudgetCapability;
@@ -17,6 +19,7 @@ pub struct AgentBudgetTracker {
 }
 
 impl AgentBudgetTracker {
+    /// Create a new budget tracker with the given limits.
     pub fn new(limits: BudgetCapability) -> Self {
         Self {
             limits,

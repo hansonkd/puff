@@ -1,3 +1,5 @@
+//! Structured observability traces for agent execution.
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -34,7 +36,10 @@ pub enum TraceEvent {
         error: Option<String>,
     },
     #[serde(rename = "memory_recall")]
-    MemoryRecall { memories_found: u32, latency_ms: u64 },
+    MemoryRecall {
+        memories_found: u32,
+        latency_ms: u64,
+    },
     #[serde(rename = "handoff")]
     Handoff { from: String, to: String },
 }
@@ -82,10 +87,7 @@ impl Trace {
 }
 
 /// Save a trace to Postgres.
-pub async fn save_trace(
-    client: &tokio_postgres::Client,
-    trace: &Trace,
-) -> Result<(), AgentError> {
+pub async fn save_trace(client: &tokio_postgres::Client, trace: &Trace) -> Result<(), AgentError> {
     let trace_json = serde_json::to_value(&trace.events)
         .map_err(|e| AgentError::MemoryError(format!("Failed to serialize trace: {}", e)))?;
 

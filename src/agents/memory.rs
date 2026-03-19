@@ -1,4 +1,7 @@
+//! Three-tier memory system with pgvector support.
+
 use serde::{Deserialize, Serialize};
+use std::fmt::Write;
 
 use crate::agents::error::AgentError;
 
@@ -114,6 +117,19 @@ pub struct MemoryRecord {
     pub similarity: f64,
 }
 
+fn vector_to_pgvector(values: &[f32]) -> String {
+    let mut out = String::with_capacity(values.len().saturating_mul(12).saturating_add(2));
+    out.push('[');
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        let _ = write!(&mut out, "{value}");
+    }
+    out.push(']');
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Memory functions
 // ---------------------------------------------------------------------------
@@ -127,10 +143,7 @@ pub async fn save_memory(
     content: &str,
     embedding: Option<&[f32]>,
 ) -> Result<(), AgentError> {
-    let embedding_str: Option<String> = embedding.map(|e| {
-        let inner: Vec<String> = e.iter().map(|v| v.to_string()).collect();
-        format!("[{}]", inner.join(","))
-    });
+    let embedding_str: Option<String> = embedding.map(vector_to_pgvector);
 
     let sql = if embedding_str.is_some() {
         "INSERT INTO puff_memories (agent, scope, scope_id, content, embedding) \
@@ -195,7 +208,7 @@ pub async fn record_llm_usage(
 /// Prices are approximate and should be updated periodically.
 pub fn estimate_cost(model: &str, input_tokens: u32, output_tokens: u32) -> f64 {
     let (input_price, output_price) = match model {
-        m if m.starts_with("claude-opus") => (15.0, 75.0),   // per 1M tokens
+        m if m.starts_with("claude-opus") => (15.0, 75.0), // per 1M tokens
         m if m.starts_with("claude-sonnet") => (3.0, 15.0),
         m if m.starts_with("claude-haiku") => (0.25, 1.25),
         m if m.starts_with("gpt-4o") => (2.5, 10.0),
@@ -214,8 +227,7 @@ pub async fn recall_memories(
     scope: Option<&str>,
     scope_id: Option<&str>,
 ) -> Result<Vec<MemoryRecord>, AgentError> {
-    let inner: Vec<String> = query_embedding.iter().map(|v| v.to_string()).collect();
-    let embedding_str = format!("[{}]", inner.join(","));
+    let embedding_str = vector_to_pgvector(query_embedding);
 
     let rows = match (scope, scope_id) {
         (Some(sc), Some(sid)) => {

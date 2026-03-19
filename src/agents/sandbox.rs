@@ -1,3 +1,5 @@
+//! Bubblewrap CLI sandboxing for tool execution.
+
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -5,6 +7,7 @@ use tokio::process::Command;
 
 use crate::agents::capabilities::{AgentCapabilities, FsCapability, HttpCapability};
 use crate::agents::error::AgentError;
+use crate::agents::tool::split_command;
 
 // ---------------------------------------------------------------------------
 // SandboxConfig
@@ -65,9 +68,28 @@ pub async fn execute_sandboxed_tool(
     timeout_ms: u64,
     sandbox_config: &SandboxConfig,
 ) -> Result<String, AgentError> {
+    let (program, mut command_args) = split_command(command)?;
+    command_args.extend(args.iter().cloned());
+    execute_sandboxed_argv(
+        &program,
+        &command_args,
+        capabilities,
+        timeout_ms,
+        sandbox_config,
+    )
+    .await
+}
+
+pub async fn execute_sandboxed_argv(
+    program: &str,
+    args: &[String],
+    capabilities: &AgentCapabilities,
+    timeout_ms: u64,
+    sandbox_config: &SandboxConfig,
+) -> Result<String, AgentError> {
     // 1. Sandboxing disabled — delegate directly.
     if !sandbox_config.enabled {
-        return crate::agents::tool::execute_cli_tool(command, args, timeout_ms).await;
+        return crate::agents::tool::execute_cli_argv(program, args, timeout_ms).await;
     }
 
     // 2. Check whether bwrap exists.
@@ -80,11 +102,11 @@ pub async fn execute_sandboxed_tool(
                 bwrap_path = %sandbox_config.bwrap_path,
                 "bubblewrap not found — falling back to unsandboxed execution"
             );
-            return crate::agents::tool::execute_cli_tool(command, args, timeout_ms).await;
+            return crate::agents::tool::execute_cli_argv(program, args, timeout_ms).await;
         } else {
             // 4. Hard failure.
             return Err(AgentError::ToolExecutionError {
-                tool: command.to_string(),
+                tool: program.to_string(),
                 message: format!(
                     "bubblewrap not found at '{}' and fallback_unsandboxed is disabled",
                     sandbox_config.bwrap_path
@@ -141,12 +163,7 @@ pub async fn execute_sandboxed_tool(
     cmd.arg("--");
 
     // 6. Append the actual command and its arguments.
-    let mut parts = command.split_whitespace();
-    let program = parts.next().unwrap_or(command);
-    let base_args: Vec<&str> = parts.collect();
-
     cmd.arg(program);
-    cmd.args(&base_args);
     cmd.args(args);
 
     // 7. Apply timeout.
@@ -154,11 +171,11 @@ pub async fn execute_sandboxed_tool(
     let output = tokio::time::timeout(Duration::from_millis(timeout_ms), future)
         .await
         .map_err(|_| AgentError::ToolTimeout {
-            tool: command.to_string(),
+            tool: program.to_string(),
             timeout_ms,
         })?
         .map_err(|e| AgentError::ToolExecutionError {
-            tool: command.to_string(),
+            tool: program.to_string(),
             message: format!("failed to spawn sandboxed process: {e}"),
         })?;
 
@@ -168,7 +185,7 @@ pub async fn execute_sandboxed_tool(
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
         Err(AgentError::ToolExecutionError {
-            tool: command.to_string(),
+            tool: program.to_string(),
             message: stderr,
         })
     }

@@ -1,3 +1,5 @@
+//! Agent error types.
+
 use std::fmt;
 
 /// Errors that can occur within the agent runtime.
@@ -15,22 +17,13 @@ pub enum AgentError {
     /// The LLM stream was interrupted before completion.
     LlmStreamInterrupted(String),
     /// A tool failed during execution.
-    ToolExecutionError {
-        tool: String,
-        message: String,
-    },
+    ToolExecutionError { tool: String, message: String },
     /// The requested tool was not found.
     ToolNotFound(String),
     /// Permission denied for tool execution.
-    ToolPermissionDenied {
-        tool: String,
-        reason: String,
-    },
+    ToolPermissionDenied { tool: String, reason: String },
     /// A tool exceeded its execution timeout.
-    ToolTimeout {
-        tool: String,
-        timeout_ms: u64,
-    },
+    ToolTimeout { tool: String, timeout_ms: u64 },
     /// An error related to memory/context management.
     MemoryError(String),
     /// The requested conversation was not found.
@@ -38,10 +31,7 @@ pub enum AgentError {
     /// An error in the orchestration layer.
     OrchestrationError(String),
     /// Failed to load a skill.
-    SkillLoadError {
-        skill: String,
-        message: String,
-    },
+    SkillLoadError { skill: String, message: String },
     /// A configuration error.
     ConfigError(String),
     /// An error originating from Python interop.

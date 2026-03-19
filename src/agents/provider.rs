@@ -1,6 +1,8 @@
+//! LLM provider implementations (Anthropic, OpenAI, Ollama).
+
 use crate::agents::error::AgentError;
 use crate::agents::llm::{
-    ContentBlock, LlmRequest, Message, MessageContent, Role, StopReason, StreamChunk,
+    ContentBlock, LlmRequestRef, Message, MessageContent, Role, StopReason, StreamChunk,
     ToolDefinition,
 };
 use crate::agents::streaming::SseEvent;
@@ -18,7 +20,7 @@ pub trait Provider: Send + Sync {
     fn name(&self) -> &str;
 
     /// Build the JSON request body for this provider's API.
-    fn build_request_body(&self, request: &LlmRequest) -> serde_json::Value;
+    fn build_request_body(&self, request: LlmRequestRef<'_>) -> serde_json::Value;
 
     /// The full URL to POST streaming chat requests to.
     fn endpoint_url(&self) -> &str;
@@ -147,15 +149,15 @@ impl Provider for AnthropicProvider {
         "anthropic"
     }
 
-    fn build_request_body(&self, request: &LlmRequest) -> serde_json::Value {
+    fn build_request_body(&self, request: LlmRequestRef<'_>) -> serde_json::Value {
         let mut body = json!({
-            "model": request.model,
+            "model": request.model.as_ref(),
             "max_tokens": request.max_tokens,
             "stream": true,
-            "messages": Self::convert_messages(&request.messages),
+            "messages": Self::convert_messages(request.messages),
         });
 
-        if let Some(ref system) = request.system {
+        if let Some(system) = request.system.as_deref() {
             body["system"] = json!(system);
         }
 
@@ -164,7 +166,7 @@ impl Provider for AnthropicProvider {
         }
 
         if !request.tools.is_empty() {
-            body["tools"] = json!(Self::convert_tools(&request.tools));
+            body["tools"] = json!(Self::convert_tools(request.tools));
         }
 
         body
@@ -244,9 +246,7 @@ impl Provider for AnthropicProvider {
             "content_block_stop" => {
                 // Signal that the current content block (possibly a tool call) has ended.
                 // id is not provided in this event; the caller tracks it.
-                vec![StreamChunk::ToolCallEnd {
-                    id: String::new(),
-                }]
+                vec![StreamChunk::ToolCallEnd { id: String::new() }]
             }
             "message_delta" => {
                 let Ok(val) = serde_json::from_str::<serde_json::Value>(&event.data) else {
@@ -338,15 +338,15 @@ impl OpenAIProvider {
         }
     }
 
-    fn convert_messages(request: &LlmRequest) -> Vec<serde_json::Value> {
+    fn convert_messages(request: LlmRequestRef<'_>) -> Vec<serde_json::Value> {
         let mut msgs: Vec<serde_json::Value> = Vec::new();
 
         // Inject system prompt as the first message.
-        if let Some(ref system) = request.system {
+        if let Some(system) = request.system.as_deref() {
             msgs.push(json!({"role": "system", "content": system}));
         }
 
-        for m in &request.messages {
+        for m in request.messages {
             match m.role {
                 Role::System => {
                     if let MessageContent::Text(ref t) = m.content {
@@ -467,11 +467,11 @@ impl Provider for OpenAIProvider {
         ))
     }
 
-    fn build_request_body(&self, request: &LlmRequest) -> serde_json::Value {
+    fn build_request_body(&self, request: LlmRequestRef<'_>) -> serde_json::Value {
         let mut body = json!({
-            "model": request.model,
+            "model": request.model.as_ref(),
             "stream": true,
-            "messages": Self::convert_messages(request),
+            "messages": Self::convert_messages(request.clone()),
         });
 
         if let Some(temp) = request.temperature {
@@ -483,7 +483,7 @@ impl Provider for OpenAIProvider {
         body["max_tokens"] = json!(request.max_tokens);
 
         if !request.tools.is_empty() {
-            body["tools"] = json!(Self::convert_tools(&request.tools));
+            body["tools"] = json!(Self::convert_tools(request.tools));
         }
 
         // Request streaming usage info when supported.
@@ -498,10 +498,7 @@ impl Provider for OpenAIProvider {
 
     fn auth_headers(&self) -> Vec<(String, String)> {
         match &self.api_key {
-            Some(key) => vec![(
-                "Authorization".to_string(),
-                format!("Bearer {}", key),
-            )],
+            Some(key) => vec![("Authorization".to_string(), format!("Bearer {}", key))],
             None => vec![],
         }
     }
@@ -688,10 +685,7 @@ pub fn create_provider(
 
 /// Resolve an API key from the config or from an environment variable.
 fn resolve_api_key(config: &ProviderConfig, default_env: &str) -> Result<String, AgentError> {
-    let env_var = config
-        .api_key_env
-        .as_deref()
-        .unwrap_or(default_env);
+    let env_var = config.api_key_env.as_deref().unwrap_or(default_env);
 
     std::env::var(env_var).map_err(|_| {
         AgentError::ConfigError(format!(
@@ -704,6 +698,7 @@ fn resolve_api_key(config: &ProviderConfig, default_env: &str) -> Result<String,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::llm::LlmRequest;
 
     #[test]
     fn test_resolve_provider_for_model() {
@@ -730,7 +725,7 @@ mod tests {
         )
         .with_system("You are helpful.");
 
-        let body = provider.build_request_body(&request);
+        let body = provider.build_request_body(request.borrowed());
         assert_eq!(body["model"], "claude-sonnet-4-6");
         assert_eq!(body["system"], "You are helpful.");
         assert_eq!(body["stream"], true);
@@ -750,7 +745,7 @@ mod tests {
         )
         .with_system("You are helpful.");
 
-        let body = provider.build_request_body(&request);
+        let body = provider.build_request_body(request.borrowed());
         assert_eq!(body["model"], "gpt-4");
         assert_eq!(body["stream"], true);
         // System should be first message
@@ -765,7 +760,10 @@ mod tests {
         let provider = AnthropicProvider::new("sk-test-123".to_string(), None);
         let headers = provider.auth_headers();
         assert_eq!(headers.len(), 2);
-        assert_eq!(headers[0], ("x-api-key".to_string(), "sk-test-123".to_string()));
+        assert_eq!(
+            headers[0],
+            ("x-api-key".to_string(), "sk-test-123".to_string())
+        );
         assert_eq!(
             headers[1],
             ("anthropic-version".to_string(), "2023-06-01".to_string())
@@ -779,7 +777,10 @@ mod tests {
         assert_eq!(headers.len(), 1);
         assert_eq!(
             headers[0],
-            ("Authorization".to_string(), "Bearer sk-test-456".to_string())
+            (
+                "Authorization".to_string(),
+                "Bearer sk-test-456".to_string()
+            )
         );
     }
 
@@ -811,7 +812,9 @@ mod tests {
         };
         let chunks = provider.parse_sse_event(&event);
         assert_eq!(chunks.len(), 1);
-        assert!(matches!(&chunks[0], StreamChunk::ToolCallStart { id, name } if id == "toolu_123" && name == "get_weather"));
+        assert!(
+            matches!(&chunks[0], StreamChunk::ToolCallStart { id, name } if id == "toolu_123" && name == "get_weather")
+        );
     }
 
     #[test]

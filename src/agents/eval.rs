@@ -1,3 +1,5 @@
+//! Agent evaluation framework with assertion-based testing.
+
 use serde::Serialize;
 use std::time::Instant;
 
@@ -76,8 +78,11 @@ impl EvalSuite {
 
             let (response_text, tool_calls_made, cost_usd) = match run_result {
                 Ok(response) => {
-                    let tool_names: Vec<String> =
-                        response.tool_calls.iter().map(|tc| tc.name.clone()).collect();
+                    let tool_names: Vec<String> = response
+                        .tool_calls
+                        .iter()
+                        .map(|tc| tc.name.clone())
+                        .collect();
                     // Cost is estimated from token counts; no pricing table here,
                     // so we record 0.0 (will be enriched by trace when available).
                     let cost_usd = 0.0_f64;
@@ -247,10 +252,7 @@ impl EvalSuite {
             "\nResults: {}/{} passed ({:.1}%)\n",
             summary.passed, summary.total, pct
         ));
-        out.push_str(&format!(
-            "Total cost: ${:.4}\n",
-            summary.total_cost_usd
-        ));
+        out.push_str(&format!("Total cost: ${:.4}\n", summary.total_cost_usd));
 
         out
     }
@@ -393,7 +395,11 @@ mod tests {
         };
         // "Hello World" contains "hello" (case-insensitive) → no failures.
         let failures = check_contains("hello", "Hello World");
-        assert!(failures.is_empty(), "expected no failures, got: {:?}", failures);
+        assert!(
+            failures.is_empty(),
+            "expected no failures, got: {:?}",
+            failures
+        );
     }
 
     #[test]
@@ -427,9 +433,7 @@ mod tests {
     fn test_not_contains_passes_when_absent() {
         let response = "The weather is sunny today.";
         let needle = "refund";
-        let is_present = response
-            .to_lowercase()
-            .contains(&needle.to_lowercase());
+        let is_present = response.to_lowercase().contains(&needle.to_lowercase());
         assert!(!is_present, "should pass when needle is absent");
     }
 
@@ -437,9 +441,7 @@ mod tests {
     fn test_not_contains_fails_when_present() {
         let response = "We can process a refund for you.";
         let needle = "refund";
-        let is_present = response
-            .to_lowercase()
-            .contains(&needle.to_lowercase());
+        let is_present = response.to_lowercase().contains(&needle.to_lowercase());
         assert!(is_present, "should fail when needle is present");
     }
 
@@ -484,10 +486,7 @@ mod tests {
         );
 
         let failures_lower = check_regex("hello", "hello world");
-        assert!(
-            failures_lower.is_empty(),
-            "should match when case matches"
-        );
+        assert!(failures_lower.is_empty(), "should match when case matches");
     }
 
     // -----------------------------------------------------------------------

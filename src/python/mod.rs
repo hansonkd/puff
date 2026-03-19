@@ -1,3 +1,9 @@
+// Python-facing class naming convention:
+//   GlobalXxx  — Python global accessor (e.g., puff.redis(), puff.postgres())
+//   PythonXxx  — Python wrapper for a Rust service (PythonRedis, PythonGraphql)
+//   PyXxx      — PyO3 response/value types (PyHttpClient, PyHttpResponse)
+//   Xxx        — DB-API 2.0 standard names (Connection, Cursor)
+
 use crate::errors::PuffResult;
 use crate::python::redis::RedisGlobal;
 
@@ -239,7 +245,8 @@ pub fn error_on_minusone(py: Python<'_>, result: c_int) -> PyResult<()> {
     if result != -1 {
         Ok(())
     } else {
-        Err(PyErr::take(py).unwrap_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Unknown error")))
+        Err(PyErr::take(py)
+            .unwrap_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Unknown error")))
     }
 }
 
@@ -353,8 +360,7 @@ impl PythonDispatcher {
         kwargs: Option<Py<PyDict>>,
     ) -> PyResult<oneshot::Receiver<PyResult<PyObject>>> {
         Python::with_gil(|py| {
-            let kwargs: Py<PyDict> = kwargs
-                .unwrap_or_else(|| PyDict::new(py).unbind());
+            let kwargs: Py<PyDict> = kwargs.unwrap_or_else(|| PyDict::new(py).unbind());
             self.dispatch_blocking(py, function, args, kwargs)
         })
     }
@@ -378,7 +384,9 @@ impl PythonDispatcher {
                     (
                         function,
                         args.into_py(py).into_any(),
-                        kwargs.unwrap_or_else(|| PyDict::new(py).unbind()).into_any(),
+                        kwargs
+                            .unwrap_or_else(|| PyDict::new(py).unbind())
+                            .into_any(),
                         returner,
                     ),
                 )?;

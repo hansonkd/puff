@@ -1,11 +1,11 @@
-/// WASM Tool Runtime — Layer 5 of Puff agent sandboxing.
-///
-/// When the `wasm-tools` feature is enabled, WASM modules are executed via
-/// wasmtime using WASIp1.  Input JSON is passed on stdin; the module writes its
-/// JSON result to stdout.
-///
-/// When the feature is **not** enabled, `execute_wasm_tool` returns a clear
-/// error telling the caller how to opt in.
+//! WASM tool runtime via wasmtime.
+//!
+//! When the `wasm-tools` feature is enabled, WASM modules are executed via
+//! wasmtime using WASIp1.  Input JSON is passed on stdin; the module writes its
+//! JSON result to stdout.
+//!
+//! When the feature is **not** enabled, `execute_wasm_tool` returns a clear
+//! error telling the caller how to opt in.
 
 // ---------------------------------------------------------------------------
 // Feature-gated implementation
@@ -18,9 +18,9 @@ mod wasm_impl {
     use std::path::Path;
     use std::sync::Mutex;
     use wasmtime::{Engine, Linker, Module, Store};
-    use wasmtime_wasi::WasiCtxBuilder;
     use wasmtime_wasi::p1::{self, WasiP1Ctx};
     use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
+    use wasmtime_wasi::WasiCtxBuilder;
 
     // -----------------------------------------------------------------------
     // Module cache
@@ -68,10 +68,7 @@ mod wasm_impl {
                 }
             })?;
 
-            self.modules
-                .lock()
-                .unwrap()
-                .insert(key, module.clone());
+            self.modules.lock().unwrap().insert(key, module.clone());
 
             Ok(module)
         }
@@ -98,7 +95,7 @@ mod wasm_impl {
     /// The module is expected to follow the WASIp1 "command" convention:
     /// export a `_start` function, read its input from stdin, and write its
     /// result to stdout.
-    pub fn execute_wasm_tool(
+    pub fn execute_wasm_tool_with_cache(
         cache: &WasmModuleCache,
         module_path: &Path,
         input_json: &str,
@@ -131,12 +128,12 @@ mod wasm_impl {
             }
         })?;
 
-        let instance = linker
-            .instantiate(&mut store, &module)
-            .map_err(|e| AgentError::ToolExecutionError {
+        let instance = linker.instantiate(&mut store, &module).map_err(|e| {
+            AgentError::ToolExecutionError {
                 tool: tool_name.clone(),
                 message: format!("Failed to instantiate WASM module: {e}"),
-            })?;
+            }
+        })?;
 
         let start_fn = instance
             .get_typed_func::<(), ()>(&mut store, "_start")
@@ -188,7 +185,21 @@ mod wasm_impl {
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "wasm-tools")]
-pub use wasm_impl::{WasmModuleCache, execute_wasm_tool};
+pub use wasm_impl::WasmModuleCache;
+
+/// Execute a WASM tool module using a process-wide compiled-module cache.
+#[cfg(feature = "wasm-tools")]
+pub fn execute_wasm_tool(
+    module_path: &std::path::Path,
+    input_json: &str,
+    timeout_ms: u64,
+) -> Result<String, crate::agents::error::AgentError> {
+    lazy_static::lazy_static! {
+        static ref CACHE: WasmModuleCache = WasmModuleCache::default();
+    }
+
+    wasm_impl::execute_wasm_tool_with_cache(&CACHE, module_path, input_json, timeout_ms)
+}
 
 // ---------------------------------------------------------------------------
 // Stub — feature not enabled
@@ -221,11 +232,7 @@ mod tests {
         use super::execute_wasm_tool;
         use crate::agents::error::AgentError;
 
-        let result = execute_wasm_tool(
-            std::path::Path::new("/nonexistent/tool.wasm"),
-            "{}",
-            5000,
-        );
+        let result = execute_wasm_tool(std::path::Path::new("/nonexistent/tool.wasm"), "{}", 5000);
 
         match result {
             Err(AgentError::ToolExecutionError { message, .. }) => {

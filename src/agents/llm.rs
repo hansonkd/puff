@@ -1,4 +1,7 @@
+//! LLM gateway — multi-provider, streaming, retry, embeddings.
+
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -88,9 +91,17 @@ pub enum StopReason {
 #[derive(Debug, Clone)]
 pub enum StreamChunk {
     TextDelta(String),
-    ToolCallStart { id: String, name: String },
-    ToolCallDelta { id: String, input_json: String },
-    ToolCallEnd { id: String },
+    ToolCallStart {
+        id: String,
+        name: String,
+    },
+    ToolCallDelta {
+        id: String,
+        input_json: String,
+    },
+    ToolCallEnd {
+        id: String,
+    },
     Done {
         input_tokens: u32,
         output_tokens: u32,
@@ -134,6 +145,66 @@ impl LlmRequest {
     pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
         self.max_tokens = max_tokens;
         self
+    }
+
+    pub fn borrowed(&self) -> LlmRequestRef<'_> {
+        LlmRequestRef {
+            model: Cow::Borrowed(self.model.as_str()),
+            messages: &self.messages,
+            tools: &self.tools,
+            max_tokens: self.max_tokens,
+            temperature: self.temperature,
+            system: self.system.as_deref().map(Cow::Borrowed),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LlmRequestRef<'a> {
+    pub model: Cow<'a, str>,
+    pub messages: &'a [Message],
+    pub tools: &'a [ToolDefinition],
+    pub max_tokens: u32,
+    pub temperature: Option<f32>,
+    pub system: Option<Cow<'a, str>>,
+}
+
+impl<'a> LlmRequestRef<'a> {
+    pub fn new(model: impl Into<Cow<'a, str>>, messages: &'a [Message]) -> Self {
+        Self {
+            model: model.into(),
+            messages,
+            tools: &[],
+            max_tokens: 4096,
+            temperature: None,
+            system: None,
+        }
+    }
+
+    pub fn with_tools(mut self, tools: &'a [ToolDefinition]) -> Self {
+        self.tools = tools;
+        self
+    }
+
+    pub fn with_system(mut self, system: impl Into<Cow<'a, str>>) -> Self {
+        self.system = Some(system.into());
+        self
+    }
+
+    pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
+        self.max_tokens = max_tokens;
+        self
+    }
+
+    pub fn to_owned(&self) -> LlmRequest {
+        LlmRequest {
+            model: self.model.to_string(),
+            messages: self.messages.to_vec(),
+            tools: self.tools.to_vec(),
+            max_tokens: self.max_tokens,
+            temperature: self.temperature,
+            system: self.system.as_ref().map(|s| s.to_string()),
+        }
     }
 }
 
@@ -237,15 +308,15 @@ impl LlmClient {
         }
 
         // Attempt to create the provider on the fly using defaults.
-        let default_config = self
-            .config
-            .providers
-            .get(provider_name)
-            .cloned()
-            .unwrap_or(ProviderConfig {
-                api_key_env: None,
-                base_url: None,
-            });
+        let default_config =
+            self.config
+                .providers
+                .get(provider_name)
+                .cloned()
+                .unwrap_or(ProviderConfig {
+                    api_key_env: None,
+                    base_url: None,
+                });
 
         let provider = create_provider(provider_name, &default_config)?;
         Ok(Arc::from(provider))
@@ -265,17 +336,27 @@ impl LlmClient {
         &self,
         request: LlmRequest,
     ) -> Result<mpsc::Receiver<StreamChunk>, AgentError> {
+        self.stream_ref(request.borrowed()).await
+    }
+
+    pub async fn stream_ref(
+        &self,
+        request: LlmRequestRef<'_>,
+    ) -> Result<mpsc::Receiver<StreamChunk>, AgentError> {
         // Try primary model with up to 3 retries.
         match self
-            .stream_with_retries(&request, &request.model.clone(), 3)
+            .stream_with_retries(request.clone(), request.model.as_ref(), 3)
             .await
         {
-            Ok(rx) => return Ok(rx),
+            Ok(rx) => Ok(rx),
             Err(primary_err) => {
                 // Attempt each fallback model in order.
-                if let Some(fallbacks) = self.config.fallback.get(&request.model) {
+                if let Some(fallbacks) = self.config.fallback.get(request.model.as_ref()) {
                     for fallback_model in fallbacks {
-                        match self.stream_with_retries(&request, fallback_model, 1).await {
+                        match self
+                            .stream_with_retries(request.clone(), fallback_model, 1)
+                            .await
+                        {
                             Ok(rx) => {
                                 tracing::warn!(
                                     primary = %request.model,
@@ -300,7 +381,7 @@ impl LlmClient {
     /// errors are returned immediately without further attempts.
     async fn stream_with_retries(
         &self,
-        request: &LlmRequest,
+        request: LlmRequestRef<'_>,
         model: &str,
         max_retries: u32,
     ) -> Result<mpsc::Receiver<StreamChunk>, AgentError> {
@@ -319,7 +400,7 @@ impl LlmClient {
                 tokio::time::sleep(delay).await;
             }
 
-            match self.stream_single_attempt(request, model).await {
+            match self.stream_single_attempt(request.clone(), model).await {
                 Ok(rx) => return Ok(rx),
                 Err(e) => match &e {
                     AgentError::LlmRateLimited { .. } => {
@@ -359,24 +440,20 @@ impl LlmClient {
     /// the provider receives the correct model identifier.
     async fn stream_single_attempt(
         &self,
-        request: &LlmRequest,
+        request: LlmRequestRef<'_>,
         model: &str,
     ) -> Result<mpsc::Receiver<StreamChunk>, AgentError> {
         let provider = self.resolve_provider(model)?;
 
-        // If we're targeting a different model (fallback), create an adjusted
-        // request so the provider serialises the right model name.
-        let effective_request;
-        let req: &LlmRequest = if model != request.model {
-            effective_request = LlmRequest {
-                model: model.to_string(),
-                messages: request.messages.clone(),
-                tools: request.tools.clone(),
+        let req = if model != request.model {
+            LlmRequestRef {
+                model: Cow::Borrowed(model),
+                messages: request.messages,
+                tools: request.tools,
                 max_tokens: request.max_tokens,
                 temperature: request.temperature,
                 system: request.system.clone(),
-            };
-            &effective_request
+            }
         } else {
             request
         };
@@ -540,17 +617,13 @@ impl LlmClient {
             )));
         }
 
-        let json: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| AgentError::LlmError(format!("failed to parse embeddings response: {e}")))?;
+        let json: serde_json::Value = response.json().await.map_err(|e| {
+            AgentError::LlmError(format!("failed to parse embeddings response: {e}"))
+        })?;
 
-        let data = json
-            .get("data")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| {
-                AgentError::LlmError("embeddings response missing 'data' array".to_string())
-            })?;
+        let data = json.get("data").and_then(|v| v.as_array()).ok_or_else(|| {
+            AgentError::LlmError("embeddings response missing 'data' array".to_string())
+        })?;
 
         let embeddings = data
             .iter()
@@ -558,20 +631,16 @@ impl LlmClient {
                 item.get("embedding")
                     .and_then(|v| v.as_array())
                     .ok_or_else(|| {
-                        AgentError::LlmError(
-                            "embedding item missing 'embedding' field".to_string(),
-                        )
+                        AgentError::LlmError("embedding item missing 'embedding' field".to_string())
                     })
                     .and_then(|arr| {
                         arr.iter()
                             .map(|v| {
-                                v.as_f64()
-                                    .map(|f| f as f32)
-                                    .ok_or_else(|| {
-                                        AgentError::LlmError(
-                                            "embedding value is not a number".to_string(),
-                                        )
-                                    })
+                                v.as_f64().map(|f| f as f32).ok_or_else(|| {
+                                    AgentError::LlmError(
+                                        "embedding value is not a number".to_string(),
+                                    )
+                                })
                             })
                             .collect::<Result<Vec<f32>, AgentError>>()
                     })
@@ -595,8 +664,21 @@ impl LlmClient {
     /// response. Internally uses `stream()` and accumulates all chunks.
     pub async fn chat(&self, request: LlmRequest) -> Result<LlmResponse, AgentError> {
         let model = request.model.clone();
-        let mut rx = self.stream(request).await?;
+        let mut rx = self.stream_ref(request.borrowed()).await?;
+        self.collect_chat_response(model, &mut rx).await
+    }
 
+    pub async fn chat_ref(&self, request: LlmRequestRef<'_>) -> Result<LlmResponse, AgentError> {
+        let model = request.model.to_string();
+        let mut rx = self.stream_ref(request).await?;
+        self.collect_chat_response(model, &mut rx).await
+    }
+
+    async fn collect_chat_response(
+        &self,
+        model: String,
+        rx: &mut mpsc::Receiver<StreamChunk>,
+    ) -> Result<LlmResponse, AgentError> {
         let mut text = String::new();
         let mut input_tokens: u32 = 0;
         let mut output_tokens: u32 = 0;
@@ -798,7 +880,10 @@ mod tests {
             .embed_batch("claude-3-opus", &["hello world".to_string()])
             .await;
 
-        assert!(result.is_err(), "expected an error for Anthropic embeddings");
+        assert!(
+            result.is_err(),
+            "expected an error for Anthropic embeddings"
+        );
         match result.unwrap_err() {
             AgentError::LlmError(msg) => {
                 assert!(

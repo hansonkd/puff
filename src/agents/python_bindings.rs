@@ -1,5 +1,15 @@
 use pyo3::prelude::*;
 
+/// An AI agent with tools, memory, and orchestration capabilities.
+///
+/// Args:
+///     name: Agent name (required)
+///     model: LLM model to use (default: "claude-sonnet-4-6")
+///     system_prompt: System prompt for the agent
+///     skills: List of skill directory paths (not yet wired — use puff.toml)
+///     tools: List of tool objects (not yet wired — use puff.toml)
+///     memory: Memory configuration (not yet wired — use puff.toml)
+///     permissions: Permission configuration (not yet wired — use puff.toml)
 #[pyclass(name = "Agent")]
 pub struct PyAgent {
     pub name: String,
@@ -20,7 +30,12 @@ impl PyAgent {
         memory: Option<PyObject>,
         permissions: Option<PyObject>,
     ) -> Self {
-        let _ = (skills, tools, memory, permissions);
+        if skills.is_some() || tools.is_some() || memory.is_some() || permissions.is_some() {
+            tracing::warn!(
+                "Agent '{}': skills/tools/memory/permissions params not yet wired to Rust runtime. Use puff.toml configuration instead.",
+                name
+            );
+        }
         Self {
             name,
             model: model.to_string(),
@@ -44,6 +59,7 @@ impl PyAgent {
     }
 }
 
+/// A tool definition for use with Puff agents.
 #[pyclass(name = "ToolDef")]
 pub struct PyToolDef {
     pub name: String,

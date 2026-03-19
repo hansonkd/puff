@@ -1,3 +1,5 @@
+//! Agent HTTP server — REST and WebSocket endpoints.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -8,22 +10,37 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::agents::agent::Agent;
 use crate::agents::conversation::Conversation;
 use crate::agents::llm::{
-    ContentBlock, LlmClient, LlmRequest, Message, MessageContent, Role, StreamChunk, ToolCall,
+    ContentBlock, LlmClient, Message, MessageContent, Role, StreamChunk, ToolCall,
 };
+use crate::agents::memory;
 
 // ---------------------------------------------------------------------------
 // Shared state
 // ---------------------------------------------------------------------------
 
+pub(crate) struct SharedConversation {
+    turn_lock: Mutex<()>,
+    state: Mutex<Conversation>,
+}
+
+impl SharedConversation {
+    fn new(conversation: Conversation) -> Self {
+        Self {
+            turn_lock: Mutex::new(()),
+            state: Mutex::new(conversation),
+        }
+    }
+}
+
 pub struct AgentServerState {
-    pub agents: HashMap<String, Agent>,
-    pub conversations: RwLock<HashMap<String, Conversation>>,
-    pub llm_client: LlmClient,
+    pub(crate) agents: HashMap<String, Agent>,
+    pub(crate) conversations: RwLock<HashMap<String, Arc<SharedConversation>>>,
+    pub(crate) llm_client: LlmClient,
 }
 
 // ---------------------------------------------------------------------------
@@ -48,6 +65,8 @@ pub struct ConversationDetail {
     pub conversation_id: String,
     pub agent: String,
     pub message_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archived_context: Option<String>,
     pub messages: serde_json::Value,
 }
 
@@ -89,15 +108,12 @@ async fn start_conversation(
     State(state): State<Arc<AgentServerState>>,
     Json(req): Json<StartConversationRequest>,
 ) -> Result<Json<ConversationResponse>, (StatusCode, String)> {
-    let agent = state
-        .agents
-        .get(&req.agent)
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                format!("Agent '{}' not found", req.agent),
-            )
-        })?;
+    let agent = state.agents.get(&req.agent).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            format!("Agent '{}' not found", req.agent),
+        )
+    })?;
 
     let mut conversation = Conversation::new(&req.agent);
     conversation.add_user_message(&req.message);
@@ -110,11 +126,11 @@ async fn start_conversation(
     let conversation_id = conversation.id.clone();
     let agent_name = conversation.agent_name.clone();
 
-    state
-        .conversations
-        .write()
-        .await
-        .insert(conversation_id.clone(), conversation);
+    prune_stale_conversations(&state).await;
+    state.conversations.write().await.insert(
+        conversation_id.clone(),
+        Arc::new(SharedConversation::new(conversation)),
+    );
 
     Ok(Json(ConversationResponse {
         conversation_id,
@@ -128,10 +144,12 @@ async fn continue_conversation(
     Path(id): Path<String>,
     Json(req): Json<StartConversationRequest>,
 ) -> Result<Json<ConversationResponse>, (StatusCode, String)> {
-    let mut conversations = state.conversations.write().await;
-
-    let conversation = conversations
-        .get_mut(&id)
+    let conversation = state
+        .conversations
+        .read()
+        .await
+        .get(&id)
+        .cloned()
         .ok_or_else(|| {
             (
                 StatusCode::NOT_FOUND,
@@ -139,23 +157,23 @@ async fn continue_conversation(
             )
         })?;
 
-    let agent = state
-        .agents
-        .get(&conversation.agent_name)
-        .ok_or_else(|| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!(
-                    "Agent '{}' not found for conversation",
-                    conversation.agent_name
-                ),
-            )
-        })?;
+    let _turn_guard = conversation.turn_lock.lock().await;
+    let mut conversation = conversation.state.lock().await;
+
+    let agent = state.agents.get(&conversation.agent_name).ok_or_else(|| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "Agent '{}' not found for conversation",
+                conversation.agent_name
+            ),
+        )
+    })?;
 
     conversation.add_user_message(&req.message);
 
     let response = agent
-        .run_turn(conversation, &state.llm_client)
+        .run_turn(&mut conversation, &state.llm_client)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -170,16 +188,19 @@ async fn get_conversation(
     State(state): State<Arc<AgentServerState>>,
     Path(id): Path<String>,
 ) -> Result<Json<ConversationDetail>, (StatusCode, String)> {
-    let conversations = state.conversations.read().await;
-
-    let conversation = conversations
+    let conversation = state
+        .conversations
+        .read()
+        .await
         .get(&id)
+        .cloned()
         .ok_or_else(|| {
             (
                 StatusCode::NOT_FOUND,
                 format!("Conversation '{}' not found", id),
             )
         })?;
+    let conversation = conversation.state.lock().await;
 
     let messages = serde_json::to_value(&conversation.messages)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -188,29 +209,30 @@ async fn get_conversation(
         conversation_id: conversation.id.clone(),
         agent: conversation.agent_name.clone(),
         message_count: conversation.messages.len(),
+        archived_context: conversation.archived_context().map(str::to_owned),
         messages,
     }))
 }
 
-async fn list_agents(
-    State(state): State<Arc<AgentServerState>>,
-) -> Json<Vec<AgentInfo>> {
+async fn list_agents(State(state): State<Arc<AgentServerState>>) -> Json<Vec<AgentInfo>> {
     let agents: Vec<AgentInfo> = state
         .agents
         .iter()
         .map(|(name, agent)| AgentInfo {
             name: name.clone(),
             model: agent.config.model.clone(),
-            tools: agent.tools.names().into_iter().map(|s| s.to_string()).collect(),
+            tools: agent
+                .tool_definitions()
+                .iter()
+                .map(|tool| tool.name.clone())
+                .collect(),
         })
         .collect();
 
     Json(agents)
 }
 
-async fn health_check(
-    State(state): State<Arc<AgentServerState>>,
-) -> Json<HealthResponse> {
+async fn health_check(State(state): State<Arc<AgentServerState>>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok".to_string(),
         agents: state.agents.len(),
@@ -233,13 +255,24 @@ async fn ws_conversation(
 
 /// Human-in-the-loop approval timeout (seconds).
 const APPROVAL_TIMEOUT_SECS: u64 = 3600;
+const CONVERSATION_IDLE_TTL_HOURS: i64 = 24;
 
 /// Helper: send a JSON value over the WebSocket, ignoring send errors (the
 /// outer loop will notice the disconnect on the next recv).
 async fn ws_send_json(socket: &mut WebSocket, value: serde_json::Value) {
-    let _ = socket
-        .send(WsMessage::Text(value.to_string().into()))
-        .await;
+    let _ = socket.send(WsMessage::Text(value.to_string().into())).await;
+}
+
+async fn prune_stale_conversations(state: &AgentServerState) {
+    let cutoff = chrono::Utc::now() - chrono::Duration::hours(CONVERSATION_IDLE_TTL_HOURS);
+    let mut conversations = state.conversations.write().await;
+    conversations.retain(|_, conversation| {
+        conversation
+            .state
+            .try_lock()
+            .map(|guard| guard.updated_at >= cutoff)
+            .unwrap_or(true)
+    });
 }
 
 /// State for accumulating an in-flight tool call from streaming chunks.
@@ -257,7 +290,7 @@ struct PendingToolCall {
 /// 3. Builds an LLM request and calls `llm_client.stream()`.
 /// 4. Forwards every `StreamChunk` to the client immediately as a JSON
 ///    WebSocket message.
-/// 5. When the LLM requests tool calls, executes them (stub) and loops back
+/// 5. When the LLM requests tool calls, executes them and loops back
 ///    to call the LLM again with the results.
 /// 6. When a tool has `requires_approval = true`, sends a
 ///    `human_approval_needed` event and waits (up to 1 h) for the client's
@@ -294,31 +327,54 @@ async fn handle_ws(mut socket: WebSocket, conv_id: String, state: Arc<AgentServe
         let agent_name_opt = parsed["agent"].as_str().map(String::from);
 
         // --- Look up or create the conversation ------------------------------
-        let agent_name = {
-            // Try to get the agent name from the existing conversation first,
-            // falling back to the one supplied in the request payload.
+        let existing_conversation = {
             let convs = state.conversations.read().await;
-            if let Some(conv) = convs.get(&conv_id) {
-                conv.agent_name.clone()
-            } else {
-                match agent_name_opt {
-                    Some(n) => n,
-                    None => {
-                        ws_send_json(
-                            &mut socket,
-                            serde_json::json!({
-                                "type": "error",
-                                "message": "No conversation found and no 'agent' field provided"
-                            }),
-                        )
-                        .await;
-                        continue;
-                    }
-                }
-            }
+            convs.get(&conv_id).cloned()
         };
 
-        // Validate the agent exists before taking the write lock.
+        let (conversation, agent_name) = if let Some(conversation) = existing_conversation {
+            let agent_name = conversation.state.lock().await.agent_name.clone();
+            (conversation, agent_name)
+        } else {
+            let agent_name = match agent_name_opt {
+                Some(name) => name,
+                None => {
+                    ws_send_json(
+                        &mut socket,
+                        serde_json::json!({
+                            "type": "error",
+                            "message": "No conversation found and no 'agent' field provided"
+                        }),
+                    )
+                    .await;
+                    continue;
+                }
+            };
+
+            if !state.agents.contains_key(&agent_name) {
+                ws_send_json(
+                    &mut socket,
+                    serde_json::json!({
+                        "type": "error",
+                        "message": format!("Agent '{}' not found", agent_name)
+                    }),
+                )
+                .await;
+                continue;
+            }
+
+            let conversation = Arc::new(SharedConversation::new(
+                Conversation::new(&agent_name).with_id(conv_id.clone()),
+            ));
+            prune_stale_conversations(&state).await;
+            state
+                .conversations
+                .write()
+                .await
+                .insert(conv_id.clone(), Arc::clone(&conversation));
+            (conversation, agent_name)
+        };
+
         if !state.agents.contains_key(&agent_name) {
             ws_send_json(
                 &mut socket,
@@ -331,13 +387,12 @@ async fn handle_ws(mut socket: WebSocket, conv_id: String, state: Arc<AgentServe
             continue;
         }
 
-        // Insert or update the conversation (add the user message).
+        let agent = state.agents.get(&agent_name).unwrap();
+        let _turn_guard = conversation.turn_lock.lock().await;
         {
-            let mut convs = state.conversations.write().await;
-            let conv = convs
-                .entry(conv_id.clone())
-                .or_insert_with(|| Conversation::new(&agent_name).with_id(conv_id.clone()));
+            let mut conv = conversation.state.lock().await;
             conv.add_user_message(&user_message);
+            agent.compact_conversation(&mut conv);
         }
 
         // --- Streaming agent turn -------------------------------------------
@@ -346,32 +401,22 @@ async fn handle_ws(mut socket: WebSocket, conv_id: String, state: Arc<AgentServe
         let max_rounds: usize = 10;
 
         'agent_loop: for _round in 0..max_rounds {
-            // Snapshot the current messages for the LLM request.
-            let (model, messages, tool_defs, system_prompt) = {
-                let convs = state.conversations.read().await;
-                let conv = match convs.get(&conv_id) {
-                    Some(c) => c,
-                    None => break 'agent_loop,
-                };
-                let agent = state.agents.get(&agent_name).unwrap(); // validated above
-                (
-                    agent.config.model.clone(),
-                    conv.messages.clone(),
-                    agent.tools.definitions(),
-                    agent.build_system_prompt(),
+            if let Err(e) = agent.budget.check_llm_budget() {
+                ws_send_json(
+                    &mut socket,
+                    serde_json::json!({"type": "error", "message": e.to_string()}),
                 )
-            };
-
-            let mut llm_req = LlmRequest::new(model, messages);
-            if !system_prompt.is_empty() {
-                llm_req = llm_req.with_system(system_prompt);
-            }
-            if !tool_defs.is_empty() {
-                llm_req = llm_req.with_tools(tool_defs);
+                .await;
+                break 'agent_loop;
             }
 
             // Call the streaming API.
-            let mut rx = match state.llm_client.stream(llm_req).await {
+            let llm_request = {
+                let mut conv = conversation.state.lock().await;
+                agent.compact_conversation(&mut conv);
+                agent.build_request(&conv)
+            };
+            let mut rx = match state.llm_client.stream(llm_request).await {
                 Ok(r) => r,
                 Err(e) => {
                     ws_send_json(
@@ -386,6 +431,8 @@ async fn handle_ws(mut socket: WebSocket, conv_id: String, state: Arc<AgentServe
             // Accumulate the full response text and tool calls so we can
             // update the conversation history after the stream ends.
             let mut response_text = String::new();
+            let mut input_tokens: u32 = 0;
+            let mut output_tokens: u32 = 0;
             let mut pending_tool_calls: Vec<PendingToolCall> = Vec::new();
             let mut completed_tool_calls: Vec<ToolCall> = Vec::new();
             let mut current_tool_idx: Option<usize> = None;
@@ -442,9 +489,8 @@ async fn handle_ws(mut socket: WebSocket, conv_id: String, state: Arc<AgentServe
                         };
                         if let Some(idx) = target_idx {
                             let tc = pending_tool_calls.remove(idx);
-                            let arguments: serde_json::Value =
-                                serde_json::from_str(&tc.json_buf)
-                                    .unwrap_or(serde_json::Value::Null);
+                            let arguments: serde_json::Value = serde_json::from_str(&tc.json_buf)
+                                .unwrap_or(serde_json::Value::Null);
                             completed_tool_calls.push(ToolCall {
                                 id: tc.id,
                                 name: tc.name,
@@ -453,12 +499,18 @@ async fn handle_ws(mut socket: WebSocket, conv_id: String, state: Arc<AgentServe
                             current_tool_idx = None;
                         }
                     }
-                    StreamChunk::Done { .. } => {
+                    StreamChunk::Done {
+                        input_tokens: it,
+                        output_tokens: ot,
+                        ..
+                    } => {
+                        input_tokens = it;
+                        output_tokens = ot;
+
                         // Flush any remaining pending tool calls.
                         for tc in pending_tool_calls.drain(..) {
-                            let arguments: serde_json::Value =
-                                serde_json::from_str(&tc.json_buf)
-                                    .unwrap_or(serde_json::Value::Null);
+                            let arguments: serde_json::Value = serde_json::from_str(&tc.json_buf)
+                                .unwrap_or(serde_json::Value::Null);
                             completed_tool_calls.push(ToolCall {
                                 id: tc.id,
                                 name: tc.name,
@@ -477,14 +529,19 @@ async fn handle_ws(mut socket: WebSocket, conv_id: String, state: Arc<AgentServe
                 }
             }
 
+            agent.budget.record_llm_usage(
+                input_tokens as u64,
+                output_tokens as u64,
+                memory::estimate_cost(&agent.config.model, input_tokens, output_tokens),
+            );
+
             // --- Update conversation history ---------------------------------
             if !got_tool_use {
                 // Final text response — add assistant message and finish.
                 if !response_text.is_empty() {
-                    let mut convs = state.conversations.write().await;
-                    if let Some(conv) = convs.get_mut(&conv_id) {
-                        conv.add_assistant_message(&response_text);
-                    }
+                    let mut conv = conversation.state.lock().await;
+                    conv.add_assistant_message(&response_text);
+                    agent.compact_conversation(&mut conv);
                 }
                 ws_send_json(
                     &mut socket,
@@ -497,39 +554,60 @@ async fn handle_ws(mut socket: WebSocket, conv_id: String, state: Arc<AgentServe
             // The LLM made tool calls.  Add the assistant message with
             // ToolUse blocks and then process each tool call.
             {
-                let mut convs = state.conversations.write().await;
-                if let Some(conv) = convs.get_mut(&conv_id) {
-                    let mut blocks: Vec<ContentBlock> = Vec::new();
-                    if !response_text.is_empty() {
-                        blocks.push(ContentBlock::Text {
-                            text: response_text.clone(),
-                        });
-                    }
-                    for tc in &completed_tool_calls {
-                        blocks.push(ContentBlock::ToolUse {
-                            id: tc.id.clone(),
-                            name: tc.name.clone(),
-                            input: tc.arguments.clone(),
-                        });
-                    }
-                    conv.add_message(Message {
-                        role: Role::Assistant,
-                        content: MessageContent::Blocks(blocks),
-                        tool_call_id: None,
+                let mut conv = conversation.state.lock().await;
+                let mut blocks: Vec<ContentBlock> = Vec::new();
+                if !response_text.is_empty() {
+                    blocks.push(ContentBlock::Text {
+                        text: response_text.clone(),
                     });
                 }
+                for tc in &completed_tool_calls {
+                    blocks.push(ContentBlock::ToolUse {
+                        id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        input: tc.arguments.clone(),
+                    });
+                }
+                conv.add_message(Message {
+                    role: Role::Assistant,
+                    content: MessageContent::Blocks(blocks),
+                    tool_call_id: None,
+                });
+                agent.compact_conversation(&mut conv);
             }
 
             // Execute each tool call, handling human-in-the-loop when needed.
             for tc in &completed_tool_calls {
-                let requires_approval = state
-                    .agents
-                    .get(&agent_name)
-                    .and_then(|a| a.tools.get(&tc.name))
-                    .map(|t| t.requires_approval)
-                    .unwrap_or(false);
+                let prepared_tool = match agent.prepare_tool_call(&tc.name) {
+                    Ok(tool) => tool,
+                    Err(error) => {
+                        let result_content = error.to_string();
+                        ws_send_json(
+                            &mut socket,
+                            serde_json::json!({
+                                "type": "tool_result",
+                                "name": tc.name,
+                                "result": result_content.clone()
+                            }),
+                        )
+                        .await;
 
-                if requires_approval {
+                        let mut conv = conversation.state.lock().await;
+                        conv.add_message(Message {
+                            role: Role::User,
+                            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                                tool_use_id: tc.id.clone(),
+                                content: result_content,
+                                is_error: Some(true),
+                            }]),
+                            tool_call_id: Some(tc.id.clone()),
+                        });
+                        agent.compact_conversation(&mut conv);
+                        continue;
+                    }
+                };
+
+                if prepared_tool.requires_approval {
                     let request_id = uuid::Uuid::new_v4().to_string();
                     ws_send_json(
                         &mut socket,
@@ -575,9 +653,7 @@ async fn handle_ws(mut socket: WebSocket, conv_id: String, state: Arc<AgentServe
                                     serde_json::from_str(&t.to_string()).unwrap_or_default();
                                 if resp.get("type").and_then(|v| v.as_str())
                                     == Some("human_approval_response")
-                                    && resp
-                                        .get("request_id")
-                                        .and_then(|v| v.as_str())
+                                    && resp.get("request_id").and_then(|v| v.as_str())
                                         == Some(request_id.as_str())
                                 {
                                     break 'approval resp
@@ -597,20 +673,17 @@ async fn handle_ws(mut socket: WebSocket, conv_id: String, state: Arc<AgentServe
                         // Record a "skipped" tool result and continue with
                         // the next tool.
                         {
-                            let mut convs = state.conversations.write().await;
-                            if let Some(conv) = convs.get_mut(&conv_id) {
-                                conv.add_message(Message {
-                                    role: Role::User,
-                                    content: MessageContent::Blocks(vec![
-                                        ContentBlock::ToolResult {
-                                            tool_use_id: tc.id.clone(),
-                                            content: "Tool execution rejected by user".to_string(),
-                                            is_error: Some(true),
-                                        },
-                                    ]),
-                                    tool_call_id: Some(tc.id.clone()),
-                                });
-                            }
+                            let mut conv = conversation.state.lock().await;
+                            conv.add_message(Message {
+                                role: Role::User,
+                                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                                    tool_use_id: tc.id.clone(),
+                                    content: "Tool execution rejected by user".to_string(),
+                                    is_error: Some(true),
+                                }]),
+                                tool_call_id: Some(tc.id.clone()),
+                            });
+                            agent.compact_conversation(&mut conv);
                         }
                         ws_send_json(
                             &mut socket,
@@ -625,45 +698,35 @@ async fn handle_ws(mut socket: WebSocket, conv_id: String, state: Arc<AgentServe
                     }
                 }
 
-                // Execute the tool (stub).
-                let (result_content, is_error) = if state
-                    .agents
-                    .get(&agent_name)
-                    .and_then(|a| a.tools.get(&tc.name))
-                    .is_some()
-                {
-                    (format!("Tool '{}' executed (stub)", tc.name), None)
-                } else {
-                    (
-                        format!("Tool '{}' not found in registry", tc.name),
-                        Some(true),
-                    )
-                };
+                let (result_content, is_error) =
+                    match agent.execute_prepared_tool(&prepared_tool, tc).await {
+                        Ok(content) => (content, None),
+                        Err(error) => (error.to_string(), Some(true)),
+                    };
 
                 ws_send_json(
                     &mut socket,
                     serde_json::json!({
                         "type": "tool_result",
                         "name": tc.name,
-                        "result": result_content
+                        "result": result_content.clone()
                     }),
                 )
                 .await;
 
                 // Add the tool result to the conversation.
                 {
-                    let mut convs = state.conversations.write().await;
-                    if let Some(conv) = convs.get_mut(&conv_id) {
-                        conv.add_message(Message {
-                            role: Role::User,
-                            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
-                                tool_use_id: tc.id.clone(),
-                                content: result_content,
-                                is_error,
-                            }]),
-                            tool_call_id: Some(tc.id.clone()),
-                        });
-                    }
+                    let mut conv = conversation.state.lock().await;
+                    conv.add_message(Message {
+                        role: Role::User,
+                        content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                            tool_use_id: tc.id.clone(),
+                            content: result_content,
+                            is_error,
+                        }]),
+                        tool_call_id: Some(tc.id.clone()),
+                    });
+                    agent.compact_conversation(&mut conv);
                 }
             }
 

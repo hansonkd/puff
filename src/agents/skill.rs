@@ -1,3 +1,5 @@
+//! Skill loader — curated capability packages with CLI tools.
+
 use crate::agents::error::AgentError;
 use crate::agents::llm::ToolDefinition;
 use crate::agents::tool::{OutputFormat, RegisteredTool, ToolExecutor};
@@ -50,7 +52,8 @@ fn default_output() -> String {
 struct ArgDef {
     #[serde(rename = "type")]
     type_: String,
-    description: String,
+    #[serde(rename = "description")]
+    _description: String,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -129,9 +132,7 @@ impl Skill {
                     .collect::<HashMap<String, String>>();
 
                 // Resolve the WASM path relative to the skill's source directory.
-                let wasm_path = t
-                    .wasm
-                    .map(|w| source_path.join(w));
+                let wasm_path = t.wasm.map(|w| source_path.join(w));
 
                 SkillTool {
                     name: t.name,
@@ -177,11 +178,10 @@ impl Skill {
         // Optionally load context.md
         let context_path = dir.join("context.md");
         if context_path.exists() {
-            skill.context =
-                std::fs::read_to_string(&context_path)
-                    .ok()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty());
+            skill.context = std::fs::read_to_string(&context_path)
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
         }
 
         Ok(skill)
@@ -193,41 +193,36 @@ impl Skill {
     /// is blocked regardless of allow patterns. Then, if any allow patterns are
     /// defined, the command must match at least one of them.
     pub fn is_command_allowed(&self, command: &str) -> bool {
-        // Check deny patterns first.
-        for pattern in &self.permissions.deny {
-            if glob_matches(pattern, command) {
-                return false;
-            }
-        }
-
-        // If there are allow patterns, at least one must match.
-        if !self.permissions.allow.is_empty() {
-            return self
-                .permissions
-                .allow
-                .iter()
-                .any(|p| glob_matches(p, command));
-        }
-
-        // No allow patterns defined — allow everything not explicitly denied.
-        true
+        command_allowed(&self.permissions, command)
     }
 
     /// Convert this skill into a list of `RegisteredTool`s suitable for
     /// insertion into a `ToolRegistry`.
-    pub fn into_registered_tools(self) -> Vec<RegisteredTool> {
+    pub fn into_registered_tools(self) -> Result<Vec<RegisteredTool>, AgentError> {
+        let skill_name = self.name.clone();
+        let permissions = self.permissions.clone();
+
         self.tools
             .into_iter()
             .map(|t| {
+                if let Some(command) = t.command.as_deref() {
+                    if !command_allowed(&permissions, command) {
+                        return Err(AgentError::SkillLoadError {
+                            skill: skill_name.clone(),
+                            message: format!(
+                                "tool '{}' command '{}' is not allowed by skill permissions",
+                                t.name, command
+                            ),
+                        });
+                    }
+                }
+
                 // Build a JSON Schema for the tool's arguments.
                 let mut properties = serde_json::Map::new();
                 let mut required: Vec<serde_json::Value> = Vec::new();
 
                 for (arg_name, arg_type) in &t.args {
-                    properties.insert(
-                        arg_name.clone(),
-                        json!({ "type": arg_type }),
-                    );
+                    properties.insert(arg_name.clone(), json!({ "type": arg_type }));
                     required.push(json!(arg_name));
                 }
 
@@ -253,7 +248,7 @@ impl Skill {
                     ToolExecutor::Noop
                 };
 
-                RegisteredTool {
+                Ok(RegisteredTool {
                     definition: ToolDefinition {
                         name: t.name,
                         description: t.description,
@@ -262,7 +257,7 @@ impl Skill {
                     executor,
                     requires_approval,
                     timeout_ms: 30_000,
-                }
+                })
             })
             .collect()
     }
@@ -302,6 +297,23 @@ fn glob_matches(pattern: &str, value: &str) -> bool {
 
     // All segments consumed; `remaining` must be empty (no trailing wildcard).
     remaining.is_empty()
+}
+
+fn command_allowed(permissions: &SkillPermissions, command: &str) -> bool {
+    for pattern in &permissions.deny {
+        if glob_matches(pattern, command) {
+            return false;
+        }
+    }
+
+    if !permissions.allow.is_empty() {
+        return permissions
+            .allow
+            .iter()
+            .any(|pattern| glob_matches(pattern, command));
+    }
+
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -355,7 +367,11 @@ deny = ["gh pr close *"]
         assert!(!pr_list.requires_approval);
         assert!(pr_list.args.contains_key("repo"));
 
-        let pr_merge = skill.tools.iter().find(|t| t.name == "gh_pr_merge").unwrap();
+        let pr_merge = skill
+            .tools
+            .iter()
+            .find(|t| t.name == "gh_pr_merge")
+            .unwrap();
         assert!(pr_merge.requires_approval);
 
         assert_eq!(skill.permissions.allow.len(), 2);
@@ -379,5 +395,33 @@ deny = ["gh pr close *"]
         // Not in allow list at all
         assert!(!skill.is_command_allowed("rm -rf /"));
         assert!(!skill.is_command_allowed("git push --force"));
+    }
+
+    #[test]
+    fn test_into_registered_tools_rejects_disallowed_command() {
+        let bad_skill = Skill::from_toml(
+            r#"
+[skill]
+name = "danger"
+description = "Dangerous commands"
+version = "1.0.0"
+
+[[tools]]
+name = "delete-repo"
+description = "Delete a repo"
+command = "gh repo delete {name}"
+
+[permissions]
+allow = ["gh repo *"]
+deny = ["gh repo delete *"]
+"#,
+            "/tmp/danger-skill",
+        )
+        .unwrap();
+
+        let error = bad_skill.into_registered_tools().unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("not allowed by skill permissions"));
     }
 }

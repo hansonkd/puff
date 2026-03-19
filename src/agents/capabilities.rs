@@ -1,3 +1,5 @@
+//! Capability-based permission system for agents.
+
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -327,6 +329,7 @@ pub struct BudgetCapability {
 // ---------------------------------------------------------------------------
 
 impl AgentCapabilities {
+    /// Check if a SQL operation is allowed by this agent's capabilities.
     pub fn check_sql(&self, is_write: bool) -> Result<(), AgentError> {
         match &self.sql {
             SqlCapability::ReadWrite => Ok(()),
@@ -342,6 +345,7 @@ impl AgentCapabilities {
         }
     }
 
+    /// Check if an HTTP request to the given URL is allowed.
     pub fn check_http(&self, url: &str) -> Result<(), AgentError> {
         match &self.http {
             HttpCapability::Any => Ok(()),
@@ -362,6 +366,7 @@ impl AgentCapabilities {
         }
     }
 
+    /// Check if the named tool is allowed.
     pub fn check_tool(&self, tool_name: &str) -> Result<(), AgentError> {
         match &self.tools {
             ToolCapability::All => Ok(()),
@@ -382,6 +387,7 @@ impl AgentCapabilities {
         }
     }
 
+    /// Check if invoking the named agent is allowed.
     pub fn check_agent(&self, agent_name: &str) -> Result<(), AgentError> {
         match &self.agents {
             AgentCapability::All => Ok(()),
@@ -402,6 +408,7 @@ impl AgentCapabilities {
         }
     }
 
+    /// Check if filesystem access to the given path is allowed.
     pub fn check_filesystem(&self, path: &Path, write: bool) -> Result<(), AgentError> {
         match &self.filesystem {
             FsCapability::None => Err(AgentError::ToolPermissionDenied {
@@ -536,16 +543,10 @@ mod tests {
     #[test]
     fn test_check_http_allowlist_allows_listed_host() {
         let mut caps = AgentCapabilities::default();
-        caps.http = HttpCapability::Allowlist(vec![
-            "api.stripe.com".into(),
-            "api.github.com".into(),
-        ]);
-        assert!(caps
-            .check_http("https://api.stripe.com/v1/charges")
-            .is_ok());
-        assert!(caps
-            .check_http("https://api.github.com/repos")
-            .is_ok());
+        caps.http =
+            HttpCapability::Allowlist(vec!["api.stripe.com".into(), "api.github.com".into()]);
+        assert!(caps.check_http("https://api.stripe.com/v1/charges").is_ok());
+        assert!(caps.check_http("https://api.github.com/repos").is_ok());
     }
 
     #[test]
@@ -717,10 +718,7 @@ mod tests {
         assert_eq!(any, HttpCapability::Any);
         assert_eq!(
             list,
-            HttpCapability::Allowlist(vec![
-                "api.stripe.com".into(),
-                "api.github.com".into()
-            ])
+            HttpCapability::Allowlist(vec!["api.stripe.com".into(), "api.github.com".into()])
         );
     }
 
@@ -757,8 +755,7 @@ mod tests {
         let none: FsCapability = serde_json::from_str("\"none\"").unwrap();
         let ro: FsCapability =
             serde_json::from_str("{\"read_only\": [\"/data\", \"/tmp\"]}").unwrap();
-        let rw: FsCapability =
-            serde_json::from_str("{\"read_write\": [\"/workspace\"]}").unwrap();
+        let rw: FsCapability = serde_json::from_str("{\"read_write\": [\"/workspace\"]}").unwrap();
         assert_eq!(none, FsCapability::None);
         assert_eq!(
             ro,
