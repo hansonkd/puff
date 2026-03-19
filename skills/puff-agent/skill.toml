@@ -1,0 +1,28 @@
+[skill]
+name = "puff-agent"
+description = "Build and interact with Puff applications — GraphQL queries, database operations, agent orchestration, and tool development"
+version = "1.0.0"
+
+[[tools]]
+name = "graphql-schema"
+description = "Get the GraphQL schema in SDL format"
+command = "puff tool graphql_schema"
+output = "text"
+
+[[tools]]
+name = "graphql-query"
+description = "Execute a GraphQL query and return JSON results"
+command = "puff tool graphql_query"
+args = { query = { type = "str", description = "GraphQL query string" }, variables = { type = "str", description = "JSON variables object" } }
+output = "json"
+
+[[tools]]
+name = "graphql-validate"
+description = "Validate a GraphQL query without executing it"
+command = "puff tool graphql_validate"
+args = { query = { type = "str", description = "GraphQL query to validate" } }
+output = "text"
+
+[permissions]
+allow = ["puff tool *", "puff agent *", "puff skill *", "puff memory *"]
+deny = []
