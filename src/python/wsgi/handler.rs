@@ -264,16 +264,19 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                         return WsgiError::ExpectedResponseStart.into_response();
                     };
                     let (status_code_str, pyheaders) = responded;
-                    let status = status_code_str
-                        .split(" ")
-                        .next()
-                        .expect("Invalid wsgi status format");
-                    let status_code: u16 = status.parse().expect("Invalid wsgi status code format");
+                    let status = match status_code_str.split(' ').next() {
+                        Some(s) => s,
+                        None => return WsgiError::FailedToCreateResponse.into_response(),
+                    };
+                    let status_code: u16 = match status.parse() {
+                        Ok(c) => c,
+                        Err(_) => return WsgiError::FailedToCreateResponse.into_response(),
+                    };
                     let headers = response.headers_mut().unwrap();
                     let mut resp_content_len: Option<u64> = None;
                     for (name, value) in pyheaders {
                         if name.to_uppercase() == "CONTENT-LENGTH" {
-                            resp_content_len = Some(value.parse().expect("Invalid content-length"));
+                            resp_content_len = value.parse().ok();
                         }
                         let name = match HeaderName::from_bytes(name.as_bytes()) {
                             Ok(name) => name,

@@ -564,8 +564,13 @@ fn main() -> ExitCode {
     let puff_config_path = std::env::var("PUFF_CONFIG").unwrap_or("puff.toml".to_owned());
 
     let config: Config = if let Ok(contents) = fs::read_to_string(&puff_config_path) {
-        let c = toml::from_str(&contents).unwrap_or_else(|_| panic!("Could not parse Puff TOML config file {}",
-            &puff_config_path));
+        let c = match toml::from_str(&contents) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Error parsing {}: {}", &puff_config_path, e);
+                return ExitCode::FAILURE;
+            }
+        };
         info!("Loaded {}.", &puff_config_path);
         c
     } else {
@@ -573,13 +578,22 @@ fn main() -> ExitCode {
             "Could not read Puff TOML config file {}, using default config.",
             &puff_config_path
         );
-        toml::from_str("").expect("Couldn't parse default.")
+        match toml::from_str("") {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Error parsing default config: {}", e);
+                return ExitCode::FAILURE;
+            }
+        }
     };
 
     if config.dotenv.unwrap_or(true) {
         if let Some(p) = config.dotenv_path.as_ref() {
-            from_path(p).unwrap();
-            info!("Loaded dotenv {}", &p);
+            if let Err(e) = from_path(p) {
+                tracing::warn!("Could not load dotenv file '{}': {}", p, e);
+            } else {
+                info!("Loaded dotenv {}", &p);
+            }
         } else if let Ok(p) = dotenv() {
             info!("Loaded dotenv {}", p.to_string_lossy());
         }
@@ -738,14 +752,17 @@ fn build_service_layer(config: &Config) -> Router {
             router = router.get(url, handle_subscriptions_named(gql.name.clone()))
         }
         if let Some(url) = &gql.playground_url {
-            let gql_url = gql
-                .url
-                .as_ref()
-                .expect("can only use playground with graphql_url");
-            router = router.get(
-                url,
-                playground(gql_url.to_owned(), gql.subscription_url.clone()),
-            )
+            if let Some(gql_url) = gql.url.as_ref() {
+                router = router.get(
+                    url,
+                    playground(gql_url.to_owned(), gql.subscription_url.clone()),
+                )
+            } else {
+                tracing::warn!(
+                    "GraphQL '{}': playground_url requires a graphql url to be set; skipping playground",
+                    gql.name
+                );
+            }
         }
     }
 

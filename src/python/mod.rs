@@ -377,7 +377,9 @@ impl PythonDispatcher {
             let returner = AsyncReturn::new(Some(sender));
             self.asyncio_obj
                 .as_ref()
-                .expect("AsyncIO not enabled")
+                .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    "AsyncIO not enabled in Puff RuntimeConfig. Set asyncio=true in puff.toml."
+                ))?
                 .call_method1(
                     py,
                     "spawn",
@@ -404,7 +406,9 @@ impl PythonDispatcher {
         let returner = AsyncReturn::new(Some(sender));
         self.asyncio_obj
             .as_ref()
-            .expect("AsyncIO not enabled")
+            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "AsyncIO not enabled in Puff RuntimeConfig. Set asyncio=true in puff.toml."
+            ))?
             .call_method1(py, "spawn_coro", (function, returner))?;
         Ok(rec)
     }

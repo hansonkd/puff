@@ -208,7 +208,9 @@ impl PubSubClient {
                 fut.boxed()
             });
 
-            ready_r.blocking_recv().expect("Pub sub was not ready");
+            if ready_r.blocking_recv().is_none() {
+                tracing::warn!("PubSub listener failed to signal readiness");
+            }
         })
     }
 
@@ -338,7 +340,13 @@ impl PubSubConnection {
         let fut = async move {
             let s = {
                 let m = inner_sender.lock().unwrap();
-                (*m).clone().expect("Pub loop not started yet.")
+                match (*m).clone() {
+                    Some(s) => s,
+                    None => {
+                        tracing::warn!("PubSub listener not ready yet");
+                        return false;
+                    }
+                }
             };
             let r = s.send(event).await;
             r.is_ok()
@@ -353,7 +361,13 @@ impl PubSubConnection {
         let fut = async move {
             let s = {
                 let m = inner_sender.lock().unwrap();
-                (*m).clone().expect("Sub loop not started yet.")
+                match (*m).clone() {
+                    Some(s) => s,
+                    None => {
+                        tracing::warn!("PubSub listener not ready yet");
+                        return false;
+                    }
+                }
             };
 
             let r = s.send(event).await;

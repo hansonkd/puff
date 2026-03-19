@@ -136,16 +136,21 @@ impl SyncReceiver {
     fn __call__(&self) -> PyResult<PyObject> {
         let rx = self.rx.clone();
         let disconnected = self.disconnected.clone();
-        let handle = with_puff_context(|ctx| ctx.handle());
 
-        // Block this thread waiting for data from the Tokio body stream.
-        // Use allow_threads to release GIL while waiting.
-        let result = Python::with_gil(|py| {
+        // Spawn the async recv on Tokio, block this thread on oneshot.
+        // This avoids calling handle.block_on() inside the Tokio runtime,
+        // which would panic with "Cannot start a runtime from within a runtime".
+        let (tx, orx) = tokio::sync::oneshot::channel();
+        let handle = with_puff_context(|ctx| ctx.handle());
+        handle.spawn(async move {
+            let next = rx.lock().await.recv().await;
+            let _ = tx.send((next, disconnected.load(Ordering::SeqCst)));
+        });
+
+        let result: (Option<AxumBytes>, bool) = Python::with_gil(|py| {
             py.allow_threads(|| {
-                handle.block_on(async {
-                    let next = rx.lock().await.recv().await;
-                    Ok::<_, PyErr>((next, disconnected.load(Ordering::SeqCst)))
-                })
+                orx.blocking_recv().map_err(|_|
+                    pyo3::exceptions::PyRuntimeError::new_err("Receive cancelled"))
             })
         })?;
 
@@ -218,92 +223,101 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
         Box::pin(async move {
             let _disconnected = SetTrueOnDrop(disconnected);
 
-            // Build the ASGI scope and call the app — all in one with_gil block.
-            // Then run the coroutine on a BLOCKING THREAD with a per-thread asyncio runner.
-            // This is the key change: instead of dispatch_asyncio_coro (shared asyncio thread),
-            // each request gets its own thread with its own mini event loop.
-            let call_result: Result<(), AsgiError> = Python::with_gil(|py| {
-                let (app, asgi) = (self.app.clone_ref(py), self.asgi_spec.clone_ref(py));
+            // Build the ASGI scope and call the app on a blocking thread.
+            // Using spawn_blocking avoids blocking Tokio's async worker pool —
+            // Python's asyncio.run() drives a per-request event loop on the
+            // blocking thread pool instead.
+            let call_result = tokio::task::spawn_blocking(move || {
+                Python::with_gil(|py| {
+                    let (app, asgi) = (self.app.clone_ref(py), self.asgi_spec.clone_ref(py));
 
-                let scope = PyDict::new(py);
-                scope.set_item(get_cached_string(py, "type"), get_cached_string(py, "http"))?;
-                scope.set_item(get_cached_string(py, "asgi"), asgi)?;
-                scope.set_item(
-                    get_cached_string(py, "http_version"),
-                    match req.version {
-                        Version::HTTP_10 => get_cached_string(py, "1.0"),
-                        Version::HTTP_11 => get_cached_string(py, "1.1"),
-                        Version::HTTP_2 => get_cached_string(py, "2"),
-                        _ => return Err(AsgiError::InvalidHttpVersion),
-                    },
-                )?;
-                scope.set_item(get_cached_string(py, "method"), req.method.as_str())?;
-                scope.set_item(
-                    get_cached_string(py, "scheme"),
-                    req.uri.scheme_str().unwrap_or("http"),
-                )?;
-                if let Some(path_and_query) = req.uri.path_and_query() {
-                    let path = path_and_query.path();
-                    let raw_path = path.as_bytes();
-                    let path = percent_encoding::percent_decode(raw_path)
-                        .decode_utf8()
-                        .map_err(|_| AsgiError::InvalidUtf8InPath)?;
-                    scope.set_item(get_cached_string(py, "path"), path)?;
-                    let raw_path_bytes = PyBytes::new(py, path_and_query.path().as_bytes());
-                    scope.set_item(get_cached_string(py, "raw_path"), raw_path_bytes)?;
-                    if let Some(query) = path_and_query.query() {
-                        let qs_bytes = PyBytes::new(py, query.as_bytes());
-                        scope.set_item(get_cached_string(py, "query_string"), qs_bytes)?;
+                    let scope = PyDict::new(py);
+                    scope.set_item(get_cached_string(py, "type"), get_cached_string(py, "http"))?;
+                    scope.set_item(get_cached_string(py, "asgi"), asgi)?;
+                    scope.set_item(
+                        get_cached_string(py, "http_version"),
+                        match req.version {
+                            Version::HTTP_10 => get_cached_string(py, "1.0"),
+                            Version::HTTP_11 => get_cached_string(py, "1.1"),
+                            Version::HTTP_2 => get_cached_string(py, "2"),
+                            _ => return Err(AsgiError::InvalidHttpVersion),
+                        },
+                    )?;
+                    scope.set_item(get_cached_string(py, "method"), req.method.as_str())?;
+                    scope.set_item(
+                        get_cached_string(py, "scheme"),
+                        req.uri.scheme_str().unwrap_or("http"),
+                    )?;
+                    if let Some(path_and_query) = req.uri.path_and_query() {
+                        let path = path_and_query.path();
+                        let raw_path = path.as_bytes();
+                        let path = percent_encoding::percent_decode(raw_path)
+                            .decode_utf8()
+                            .map_err(|_| AsgiError::InvalidUtf8InPath)?;
+                        scope.set_item(get_cached_string(py, "path"), path)?;
+                        let raw_path_bytes = PyBytes::new(py, path_and_query.path().as_bytes());
+                        scope.set_item(get_cached_string(py, "raw_path"), raw_path_bytes)?;
+                        if let Some(query) = path_and_query.query() {
+                            let qs_bytes = PyBytes::new(py, query.as_bytes());
+                            scope.set_item(get_cached_string(py, "query_string"), qs_bytes)?;
+                        } else {
+                            let qs_bytes = PyBytes::new(py, "".as_bytes());
+                            scope.set_item(get_cached_string(py, "query_string"), qs_bytes)?;
+                        }
                     } else {
+                        scope.set_item("path", "")?;
+                        let raw_path_bytes = PyBytes::new(py, "".as_bytes());
+                        scope.set_item("raw_path", raw_path_bytes)?;
                         let qs_bytes = PyBytes::new(py, "".as_bytes());
-                        scope.set_item(get_cached_string(py, "query_string"), qs_bytes)?;
+                        scope.set_item("query_string", qs_bytes)?;
                     }
-                } else {
-                    scope.set_item("path", "")?;
-                    let raw_path_bytes = PyBytes::new(py, "".as_bytes());
-                    scope.set_item("raw_path", raw_path_bytes)?;
-                    let qs_bytes = PyBytes::new(py, "".as_bytes());
-                    scope.set_item("query_string", qs_bytes)?;
-                }
-                scope.set_item(
-                    get_cached_string(py, "root_path"),
-                    get_cached_string(py, ""),
-                )?;
+                    scope.set_item(
+                        get_cached_string(py, "root_path"),
+                        get_cached_string(py, ""),
+                    )?;
 
-                let headers_vec: Vec<Bound<'_, PyList>> = req
-                    .headers
-                    .iter()
-                    .map(|(name, value)| {
-                        let name_bytes = PyBytes::new(py, name.as_str().as_bytes());
-                        let value_bytes = PyBytes::new(py, value.as_bytes());
-                        let pair: [Bound<'_, PyAny>; 2] =
-                            [name_bytes.into_any(), value_bytes.into_any()];
-                        PyList::new(py, pair).unwrap()
-                    })
-                    .collect::<Vec<_>>();
-                let headers = PyList::new(py, headers_vec)?;
-                scope.set_item(get_cached_string(py, "headers"), headers)?;
+                    let headers_vec: Vec<Bound<'_, PyList>> = req
+                        .headers
+                        .iter()
+                        .map(|(name, value)| {
+                            let name_bytes = PyBytes::new(py, name.as_str().as_bytes());
+                            let value_bytes = PyBytes::new(py, value.as_bytes());
+                            let pair: [Bound<'_, PyAny>; 2] =
+                                [name_bytes.into_any(), value_bytes.into_any()];
+                            PyList::new(py, pair).unwrap()
+                        })
+                        .collect::<Vec<_>>();
+                    let headers = PyList::new(py, headers_vec)?;
+                    scope.set_item(get_cached_string(py, "headers"), headers)?;
 
-                let sender = Py::new(py, http_sender)?;
-                let receiver = Py::new(py, receiver)?;
+                    let sender = Py::new(py, http_sender)?;
+                    let receiver = Py::new(py, receiver)?;
 
-                // Call the ASGI app — returns a coroutine
-                let coro = app.call1(py, (scope, receiver, sender))?;
+                    // Call the ASGI app — returns a coroutine
+                    let coro = app.call1(py, (scope, receiver, sender))?;
 
-                // Run the coroutine using asyncio.run() on THIS thread.
-                // This is the key performance change: each request gets its own
-                // thread (from Tokio's blocking pool) and drives its own event loop.
-                // Under free-threaded Python, these threads run in true parallel.
-                let asyncio = py.import("asyncio")?;
-                let result = asyncio.call_method1("run", (coro,));
-                match result {
-                    Ok(_) => Ok(()),
-                    Err(e) => {
-                        tracing::error!("ASGI app error: {e}");
-                        Err(AsgiError::PyErr(e))
+                    // Run the coroutine using asyncio.run() on THIS thread.
+                    // Each request gets its own thread (from Tokio's blocking pool)
+                    // and drives its own event loop.
+                    let asyncio = py.import("asyncio")?;
+                    let result = asyncio.call_method1("run", (coro,));
+                    match result {
+                        Ok(_) => Ok(()),
+                        Err(e) => {
+                            tracing::error!("ASGI app error: {e}");
+                            Err(AsgiError::PyErr(e))
+                        }
                     }
-                }
-            });
+                })
+            }).await;
+
+            // Flatten: JoinError (panic/cancel) -> AsgiError, or inner error
+            let call_result: Result<(), AsgiError> = match call_result {
+                Ok(inner) => inner,
+                Err(e) => Err(AsgiError::PyErr(
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("ASGI task panicked: {}", e))
+                )),
+            };
 
             if let Err(e) = call_result {
                 return e.into_response();

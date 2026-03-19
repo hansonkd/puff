@@ -501,7 +501,9 @@ pub fn loop_tasks(
                 Ok(t) => t,
                 Err(e) => {
                     handle_puff_result("task-queue-next-task", Err(e));
-                    new_sender.send(()).expect("Could not trigger next task.");
+                    if new_sender.send(()).is_err() {
+                        tracing::warn!("Task queue channel closed during shutdown");
+                    }
                     continue;
                 }
             };
@@ -509,15 +511,18 @@ pub fn loop_tasks(
             inner_handle.spawn(async move {
                 let loop_result = do_loop_iteration(&new_tq, task, new_dispatcher).await;
                 handle_puff_result("task-queue-loop", loop_result);
-                new_sender.send(()).expect("Could not trigger next task.");
+                if new_sender.send(()).is_err() {
+                    tracing::warn!("Task queue channel closed during shutdown");
+                }
             });
         }
     });
     handle.spawn(async move {
         for _ in 0..num_workers {
-            first_sender
-                .send(())
-                .expect("Could not trigger task worker.");
+            if first_sender.send(()).is_err() {
+                tracing::warn!("Task queue channel closed during shutdown");
+                break;
+            }
         }
     });
 }
