@@ -1,4 +1,3 @@
-use anyhow::bail;
 use std::time::{Duration, SystemTime};
 
 use crate::context::is_puff_context_ready;
@@ -238,14 +237,13 @@ pub async fn finish_task(
     };
 
     let result_vec = serde_json::to_vec(&task_result)?;
-    let cmd = Cmd::new()
-        .arg("SET")
+    let mut cmd = Cmd::new();
+    cmd.arg("SET")
         .arg(item_key_complete)
         .arg(&result_vec)
         .arg("NX")
         .arg("PX")
-        .arg(keep_results_for_ms)
-        .clone();
+        .arg(keep_results_for_ms);
     let res = Pipeline::new()
         .atomic()
         .hdel(task_hmap_key.as_slice(), item)
@@ -434,15 +432,17 @@ pub async fn do_loop_iteration(
 ) -> PuffResult<()> {
     let func_and_payload_result: PyResult<_> = Python::with_gil(|py| {
         let cached_obj = get_cached_object(py, task.func_import_path.clone())?;
+        if !cached_obj.bind(py).hasattr("__is_puff_task")? {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "Task does not have __is_puff_task set.",
+            ));
+        }
         let py_params = pythonize::pythonize(py, &task.params)?.unbind();
         Ok((cached_obj, py_params))
     });
 
     let json_text_res = async {
         let (func, payload) = func_and_payload_result?;
-        if !Python::with_gil(|py| func.bind(py).hasattr("__is_puff_task"))? {
-            bail!("Task does not have __is_puff_task set.");
-        }
         let task_result = if task.async_fn {
             dispatcher
                 .dispatch_asyncio(func, (payload,), None)?
