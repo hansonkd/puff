@@ -38,7 +38,7 @@ pub fn convert_pyany_to_jupiter(attribute_val: &Bound<'_, PyAny>) -> Result<Aggr
     if let Ok(l) = attribute_val.downcast::<PyDict>() {
         let mut obj = Object::with_capacity(l.len());
         for (k, s) in l.iter() {
-            obj.add_field(&k.to_string(), convert_pyany_to_jupiter(&s)?);
+            obj.add_field(k.to_string(), convert_pyany_to_jupiter(&s)?);
         }
         return Ok(AggroValue::Object(obj));
     }
