@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::json::{dump_string, run_loads};
+use crate::json::{dump_vec, run_load_bytes};
 use crate::prelude::{run_python_async, with_puff_context, PuffResult};
 use crate::python::py_obj_to_bytes;
 use crate::runtime::HttpClientOpts;
@@ -155,7 +155,7 @@ impl PyHttpClient {
 
         rb = rb.header(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
-        let obj = dump_string(py, body.into_py(py), None, None)?;
+        let obj = dump_vec(py, body.into_py(py), None)?;
         rb = rb.body(obj);
 
         let request = rb
@@ -248,8 +248,8 @@ impl PyHttpResponse {
             .take()
             .ok_or(PyRuntimeError::new_err("Already consumed response"))?;
         run_python_async(return_func, async move {
-            let bs = r.text().await?;
-            let r = Python::with_gil(|py| run_loads(py, bs, None, None))?;
+            let bs = r.bytes().await?;
+            let r = Python::with_gil(|py| run_load_bytes(py, &bs, None, None))?;
             Ok(r)
         });
         Ok(())
