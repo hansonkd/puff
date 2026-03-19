@@ -8,6 +8,7 @@ use bb8_postgres::bb8::Pool;
 
 use bb8_postgres::PostgresConnectionManager;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use futures_util::future::try_join_all;
 use futures_util::TryStreamExt;
 use pyo3::create_exception;
 
@@ -305,15 +306,19 @@ async fn do_execute_many(
     }
 
     let stmt = get_or_prepare(client, stmt_cache, sql).await?;
-    let mut total_affected: u64 = 0;
 
-    for params in param_seq {
-        let affected = client
-            .execute_raw(&stmt, &params[..])
-            .await
-            .map_err(postgres_to_python_exception)?;
-        total_affected += affected;
-    }
+    // Pipeline all executes concurrently on the same connection.
+    // tokio-postgres supports pipelining: multiple queries are sent without
+    // waiting for each response, and the Postgres wire protocol handles them
+    // in order.
+    let futures: Vec<_> = param_seq
+        .iter()
+        .map(|params| client.execute_raw(&stmt, &params[..]))
+        .collect();
+    let results = try_join_all(futures)
+        .await
+        .map_err(postgres_to_python_exception)?;
+    let total_affected: u64 = results.iter().sum();
 
     Ok(QueryResult {
         rows: Vec::new(),
@@ -695,14 +700,28 @@ impl Cursor {
                 // that the Python wrapper can store on the cursor
                 Python::with_gil(|py| {
                     let py_rows = PyList::empty(py);
-                    for row in &result.rows {
-                        py_rows.append(row_to_python(py, row)?)?;
+                    let had_rows = !result.rows.is_empty();
+                    // Process rows in batches so each Rust batch is dropped
+                    // before the next is converted, reducing peak memory from
+                    // O(N) to O(batch_size).
+                    let mut rows = result.rows;
+                    const BATCH_SIZE: usize = 1000;
+                    while !rows.is_empty() {
+                        let batch: Vec<Row> = if rows.len() > BATCH_SIZE {
+                            rows.drain(..BATCH_SIZE).collect()
+                        } else {
+                            std::mem::take(&mut rows)
+                        };
+                        for row in &batch {
+                            py_rows.append(row_to_python(py, row)?)?;
+                        }
+                        // batch is dropped here, freeing Rust memory for those rows
                     }
                     let description = statement_to_description_py(py, &Some(result.statement))?;
-                    let rowcount = if result.rows.is_empty() {
-                        result.affected_rows as i64
-                    } else {
+                    let rowcount = if had_rows {
                         -1i64
+                    } else {
+                        result.affected_rows as i64
                     };
                     Ok(PyTuple::new(
                         py,
