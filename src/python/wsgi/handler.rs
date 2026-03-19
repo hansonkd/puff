@@ -133,10 +133,13 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
         let (req, body): (_, Body) = req.into_parts();
 
         let body_fut = async move {
-            let body_bytes = if let Ok(body_bytes) = axum::body::to_bytes(body, usize::MAX).await {
+            // Cap the request body at 10 MiB to prevent unbounded memory usage.
+            const MAX_BODY_SIZE: usize = 10 * 1024 * 1024;
+            let body_bytes = if let Ok(body_bytes) = axum::body::to_bytes(body, MAX_BODY_SIZE).await
+            {
                 body_bytes
             } else {
-                error!("Could not extract request body.");
+                error!("Could not extract request body (exceeds {} byte limit).", MAX_BODY_SIZE);
                 return WsgiError::ExpectedResponseBody.into_response();
             };
 

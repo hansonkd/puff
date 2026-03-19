@@ -436,6 +436,13 @@ impl Connection {
             closed: Arc::new(AtomicBool::new(false)),
         }
     }
+
+    /// Returns a pointer-based identity token for this connection.
+    /// Two clones of the same `Connection` share the same underlying sender
+    /// slot and will therefore return equal identity values.
+    pub fn identity(&self) -> usize {
+        Arc::as_ptr(&self.sender) as usize
+    }
 }
 
 /// Get or lazily create the background task sender.
@@ -475,6 +482,17 @@ pub async fn execute_rust(
         .await
         .map_err(|_| anyhow!("Connection task dropped"))?;
     rx.await.map_err(|_| anyhow!("Connection task dropped"))?
+}
+
+/// Public async helper: set autocommit mode on the background connection task.
+pub async fn set_autocommit(conn: &Connection, value: bool) {
+    let sender = ensure_sender(&conn.pool, &conn.sender).await;
+    let (tx, rx) = oneshot::channel();
+    let _ = sender
+        .send(DbOp::SetAutoCommit { value, reply: tx })
+        .await;
+    // Best-effort: ignore errors (e.g. task dropped)
+    let _ = rx.await;
 }
 
 /// Public async helper used by the GraphQL handler to clean up.

@@ -32,6 +32,11 @@ pub struct PuffGraphqlConfig {
     db: Option<Text>,
     auth: Option<PyObject>,
     auth_async: bool,
+    /// A long-lived connection whose background task retains the prepared-statement
+    /// cache across GraphQL requests. Created once at startup and reused for every
+    /// request that does **not** supply its own connection (e.g. Django's
+    /// `borrow_db_context`).
+    shared_connection: Option<Connection>,
 }
 
 impl Clone for PuffGraphqlConfig {
@@ -41,6 +46,7 @@ impl Clone for PuffGraphqlConfig {
             db: self.db.clone(),
             auth: self.auth.as_ref().map(|o| o.clone_ref(py)),
             auth_async: self.auth_async,
+            shared_connection: self.shared_connection.clone(),
         })
     }
 }
@@ -50,14 +56,10 @@ impl PuffGraphqlConfig {
         self.root.clone()
     }
     pub fn new_context(&self, auth: Option<PyObject>) -> AggroContext {
-        if let Some(db) = self.db.clone() {
-            let pg = with_puff_context(|ctx| ctx.postgres_named(db.as_str()));
-            let pool = pg.pool();
-            let conn = Some(Connection::new(pool));
-            AggroContext::new_with_connection(auth, conn, self.clone())
-        } else {
-            AggroContext::new(auth, self.clone())
-        }
+        // Reuse the shared connection (and its prepared-statement cache) when
+        // no explicit connection is provided.  The shared connection runs in
+        // autocommit mode so requests are isolated.
+        AggroContext::new_with_connection(auth, self.shared_connection.clone(), self.clone())
     }
 
     pub fn new_context_with_connection(
@@ -65,7 +67,19 @@ impl PuffGraphqlConfig {
         auth: Option<PyObject>,
         conn: Option<Connection>,
     ) -> AggroContext {
+        // Use the caller-supplied connection (e.g. Django's borrow_db_context)
+        // or fall back to the shared one.
+        let conn = conn.or_else(|| self.shared_connection.clone());
         AggroContext::new_with_connection(auth, conn, self.clone())
+    }
+
+    /// Returns `true` if the given connection is the shared, long-lived one
+    /// and must **not** be closed after a single request.
+    pub fn is_shared_connection(&self, conn: &Connection) -> bool {
+        match &self.shared_connection {
+            Some(shared) => shared.identity() == conn.identity(),
+            None => false,
+        }
     }
 }
 
@@ -123,11 +137,24 @@ pub(crate) async fn load_schema(
         subscription_info,
     );
 
+    // Create a shared connection whose background task (and its prepared-statement
+    // cache) persists across requests.  Autocommit is enabled so that each request's
+    // queries are independent — no transaction bleeds across requests.
+    let shared_connection = if let Some(ref db_name) = db {
+        let pg = with_puff_context(|ctx| ctx.postgres_named(db_name.as_str()));
+        let conn = Connection::new(pg.pool());
+        crate::python::postgres::set_autocommit(&conn, true).await;
+        Some(conn)
+    } else {
+        None
+    };
+
     Ok(PuffGraphqlConfig {
         root: Arc::new(schema),
         auth,
         auth_async,
         db,
+        shared_connection,
     })
 }
 

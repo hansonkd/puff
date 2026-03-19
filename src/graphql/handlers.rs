@@ -399,9 +399,15 @@ pub fn handle_graphql_named<T: Into<Text>>(
 
                     let new_ctx = root_node.new_context(Some(v));
                     let resp = request.execute(&root_node.root(), &new_ctx).await;
+                    // Only close connections that were created for this request
+                    // (e.g. Django's borrow_db_context).  The shared connection
+                    // is long-lived and must not be torn down per request — its
+                    // background task holds the prepared-statement cache.
                     if let Some(conn_mutex) = new_ctx.connection() {
                         let conn = conn_mutex.lock().await;
-                        close_conn(&conn).await;
+                        if !root_node.is_shared_connection(&conn) {
+                            close_conn(&conn).await;
+                        }
                     }
                     JuniperPuffResponse(resp).into_response()
                 }
