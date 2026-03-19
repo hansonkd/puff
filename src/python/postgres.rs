@@ -65,6 +65,12 @@ enum DbOp {
         params: Vec<PythonSqlValue>,
         reply: oneshot::Sender<PuffResult<(Statement, Vec<Row>)>>,
     },
+    /// ExecuteRustNative is used by the zero-Python fast path — pure Rust params
+    ExecuteRustNative {
+        sql: String,
+        params: Vec<RustSqlValue>,
+        reply: oneshot::Sender<PuffResult<(Statement, Vec<Row>)>>,
+    },
     Commit {
         reply: oneshot::Sender<Result<(), PyErr>>,
     },
@@ -84,6 +90,7 @@ impl Debug for DbOp {
             DbOp::Query { .. } => f.write_str("Query"),
             DbOp::ExecuteMany { .. } => f.write_str("ExecuteMany"),
             DbOp::ExecuteRust { .. } => f.write_str("ExecuteRust"),
+            DbOp::ExecuteRustNative { .. } => f.write_str("ExecuteRustNative"),
             DbOp::Commit { .. } => f.write_str("Commit"),
             DbOp::Rollback { .. } => f.write_str("Rollback"),
             DbOp::SetAutoCommit { .. } => f.write_str("SetAutoCommit"),
@@ -148,6 +155,18 @@ async fn conn_task(pool: Pool<PostgresConnectionManager<NoTls>>, mut rx: mpsc::R
             }
             DbOp::ExecuteRust { sql, params, reply } => {
                 let result = do_execute_rust(
+                    &client,
+                    &mut stmt_cache,
+                    &sql,
+                    &params,
+                    autocommit,
+                    &mut in_transaction,
+                )
+                .await;
+                let _ = reply.send(result);
+            }
+            DbOp::ExecuteRustNative { sql, params, reply } => {
+                let result = do_execute_rust_native(
                     &client,
                     &mut stmt_cache,
                     &sql,
@@ -225,6 +244,9 @@ async fn drain_on_error(
                 let _ = reply.send(Err(OperationalError::new_err(msg.clone())));
             }
             DbOp::ExecuteRust { reply, .. } => {
+                let _ = reply.send(Err(anyhow!(msg.clone())));
+            }
+            DbOp::ExecuteRustNative { reply, .. } => {
                 let _ = reply.send(Err(anyhow!(msg.clone())));
             }
             DbOp::Commit { reply } => {
@@ -347,6 +369,35 @@ async fn do_execute_rust(
 
     let row_stream = client.query_raw(&stmt, params).await?;
     let rows: Vec<Row> = row_stream.try_collect().await?;
+    Ok((stmt, rows))
+}
+
+async fn do_execute_rust_native(
+    client: &tokio_postgres::Client,
+    stmt_cache: &mut HashMap<String, Statement>,
+    sql: &str,
+    params: &[RustSqlValue],
+    autocommit: bool,
+    in_transaction: &mut bool,
+) -> PuffResult<(Statement, Vec<Row>)> {
+    if !autocommit && !*in_transaction {
+        client.batch_execute("BEGIN").await?;
+        *in_transaction = true;
+    }
+
+    let stmt = match get_or_prepare(client, stmt_cache, sql).await {
+        Ok(s) => s,
+        Err(e) => return Err(anyhow!("{e}")),
+    };
+
+    let param_refs: Vec<&(dyn ToSql + Sync)> = params
+        .iter()
+        .map(|p| p as &(dyn ToSql + Sync))
+        .collect();
+
+    let rows: Vec<Row> = client
+        .query(&stmt, &param_refs)
+        .await?;
     Ok((stmt, rows))
 }
 
@@ -481,6 +532,25 @@ pub async fn execute_rust(
     sender
         .send(DbOp::ExecuteRust {
             sql: converted,
+            params,
+            reply: tx,
+        })
+        .await
+        .map_err(|_| anyhow!("Connection task dropped"))?;
+    rx.await.map_err(|_| anyhow!("Connection task dropped"))?
+}
+
+/// Public async helper used by the zero-Python GraphQL fast path.
+pub async fn execute_rust_native(
+    conn: &Connection,
+    sql: String,
+    params: Vec<RustSqlValue>,
+) -> PuffResult<(Statement, Vec<Row>)> {
+    let sender = ensure_sender(&conn.pool, &conn.sender).await;
+    let (tx, rx) = oneshot::channel();
+    sender
+        .send(DbOp::ExecuteRustNative {
+            sql,
             params,
             reply: tx,
         })
@@ -894,6 +964,208 @@ fn row_to_python(py: Python, row: &Row) -> PyResult<Py<PyTuple>> {
         row_vec.push(val)
     }
     Ok(PyTuple::new(py, row_vec)?.into_py(py))
+}
+
+// ---------------------------------------------------------------------------
+// RustSqlValue — pure-Rust SQL parameter (no Python GIL needed)
+// ---------------------------------------------------------------------------
+
+/// A SQL parameter value that lives entirely in Rust — no Python objects.
+/// Used by the zero-Python fast path for `@sql`-annotated GraphQL fields.
+#[derive(Debug, Clone)]
+pub enum RustSqlValue {
+    Null,
+    Bool(bool),
+    Int(i32),
+    Long(i64),
+    Float(f64),
+    Text(String),
+    Bytes(Vec<u8>),
+    Uuid(Uuid),
+    Json(serde_json::Value),
+    /// Array of i32 (for ANY($1) with int arrays)
+    IntArray(Vec<i32>),
+    /// Array of i64
+    LongArray(Vec<i64>),
+    /// Array of String
+    TextArray(Vec<String>),
+    /// Array of GqlValue serialized to serde_json::Value (for heterogeneous arrays)
+    JsonArray(Vec<serde_json::Value>),
+}
+
+impl ToSql for RustSqlValue {
+    fn to_sql(
+        &self,
+        ty: &Type,
+        out: &mut BytesMut,
+    ) -> Result<IsNull, Box<dyn Error + Sync + Send>> {
+        match self {
+            RustSqlValue::Null => Ok(IsNull::Yes),
+            RustSqlValue::Bool(b) => b.to_sql(ty, out),
+            RustSqlValue::Int(i) => match *ty {
+                Type::INT2 => (*i as i16).to_sql(ty, out),
+                Type::INT8 => (*i as i64).to_sql(ty, out),
+                _ => i.to_sql(ty, out),
+            },
+            RustSqlValue::Long(l) => match *ty {
+                Type::INT4 => (*l as i32).to_sql(ty, out),
+                Type::INT2 => (*l as i16).to_sql(ty, out),
+                _ => l.to_sql(ty, out),
+            },
+            RustSqlValue::Float(f) => match *ty {
+                Type::FLOAT4 => (*f as f32).to_sql(ty, out),
+                _ => f.to_sql(ty, out),
+            },
+            RustSqlValue::Text(s) => s.to_sql(ty, out),
+            RustSqlValue::Bytes(b) => b.as_slice().to_sql(ty, out),
+            RustSqlValue::Uuid(u) => u.to_sql(ty, out),
+            RustSqlValue::Json(v) => v.to_sql(ty, out),
+            RustSqlValue::IntArray(a) => a.to_sql(ty, out),
+            RustSqlValue::LongArray(a) => a.to_sql(ty, out),
+            RustSqlValue::TextArray(a) => a.to_sql(ty, out),
+            RustSqlValue::JsonArray(a) => serde_json::Value::Array(a.clone()).to_sql(ty, out),
+        }
+    }
+
+    fn accepts(ty: &Type) -> bool
+    where
+        Self: Sized,
+    {
+        // Accept everything PythonSqlValue accepts, plus arrays
+        matches!(
+            *ty,
+            Type::BOOL
+                | Type::INT2
+                | Type::INT4
+                | Type::INT8
+                | Type::FLOAT4
+                | Type::FLOAT8
+                | Type::TEXT
+                | Type::VARCHAR
+                | Type::NAME
+                | Type::CHAR
+                | Type::UNKNOWN
+                | Type::BYTEA
+                | Type::UUID
+                | Type::JSON
+                | Type::JSONB
+                | Type::OID
+                | Type::INT4_ARRAY
+                | Type::INT8_ARRAY
+                | Type::TEXT_ARRAY
+                | Type::VARCHAR_ARRAY
+                | Type::BOOL_ARRAY
+                | Type::FLOAT4_ARRAY
+                | Type::FLOAT8_ARRAY
+        )
+    }
+
+    to_sql_checked!();
+}
+
+/// Convert an `async_graphql::Value` to a `RustSqlValue` without touching Python.
+pub fn gql_value_to_rust_sql(v: &async_graphql::Value) -> RustSqlValue {
+    match v {
+        async_graphql::Value::Null => RustSqlValue::Null,
+        async_graphql::Value::Boolean(b) => RustSqlValue::Bool(*b),
+        async_graphql::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                if i >= i32::MIN as i64 && i <= i32::MAX as i64 {
+                    RustSqlValue::Int(i as i32)
+                } else {
+                    RustSqlValue::Long(i)
+                }
+            } else if let Some(f) = n.as_f64() {
+                RustSqlValue::Float(f)
+            } else {
+                RustSqlValue::Null
+            }
+        }
+        async_graphql::Value::String(s) => {
+            // Try to parse as UUID first
+            if let Ok(u) = Uuid::parse_str(s) {
+                RustSqlValue::Uuid(u)
+            } else {
+                RustSqlValue::Text(s.clone())
+            }
+        }
+        async_graphql::Value::List(items) => {
+            // Try to infer a typed array from the first non-null element
+            let first_non_null = items.iter().find(|v| !matches!(v, async_graphql::Value::Null));
+            match first_non_null {
+                Some(async_graphql::Value::Number(n)) => {
+                    if n.as_i64().is_some() {
+                        // Check if all fit in i32
+                        let all_i32 = items.iter().all(|v| match v {
+                            async_graphql::Value::Number(n) => {
+                                n.as_i64().is_some_and(|i| i >= i32::MIN as i64 && i <= i32::MAX as i64)
+                            }
+                            async_graphql::Value::Null => true,
+                            _ => false,
+                        });
+                        if all_i32 {
+                            RustSqlValue::IntArray(
+                                items
+                                    .iter()
+                                    .map(|v| match v {
+                                        async_graphql::Value::Number(n) => n.as_i64().unwrap_or(0) as i32,
+                                        _ => 0,
+                                    })
+                                    .collect(),
+                            )
+                        } else {
+                            RustSqlValue::LongArray(
+                                items
+                                    .iter()
+                                    .map(|v| match v {
+                                        async_graphql::Value::Number(n) => n.as_i64().unwrap_or(0),
+                                        _ => 0,
+                                    })
+                                    .collect(),
+                            )
+                        }
+                    } else {
+                        RustSqlValue::Json(gql_value_to_json(v))
+                    }
+                }
+                Some(async_graphql::Value::String(_)) => {
+                    RustSqlValue::TextArray(
+                        items
+                            .iter()
+                            .map(|v| match v {
+                                async_graphql::Value::String(s) => s.clone(),
+                                _ => String::new(),
+                            })
+                            .collect(),
+                    )
+                }
+                _ => RustSqlValue::Json(gql_value_to_json(v)),
+            }
+        }
+        async_graphql::Value::Object(_) => RustSqlValue::Json(gql_value_to_json(v)),
+        _ => RustSqlValue::Null,
+    }
+}
+
+/// Convert an async_graphql::Value to serde_json::Value.
+fn gql_value_to_json(v: &async_graphql::Value) -> serde_json::Value {
+    match v {
+        async_graphql::Value::Null => serde_json::Value::Null,
+        async_graphql::Value::Boolean(b) => serde_json::Value::Bool(*b),
+        async_graphql::Value::Number(n) => serde_json::Value::Number(n.clone()),
+        async_graphql::Value::String(s) => serde_json::Value::String(s.clone()),
+        async_graphql::Value::List(items) => {
+            serde_json::Value::Array(items.iter().map(gql_value_to_json).collect())
+        }
+        async_graphql::Value::Object(obj) => {
+            let map: serde_json::Map<String, serde_json::Value> = obj
+                .iter()
+                .map(|(k, v)| (k.to_string(), gql_value_to_json(v)))
+                .collect();
+            serde_json::Value::Object(map)
+        }
+        _ => serde_json::Value::Null,
+    }
 }
 
 // ---------------------------------------------------------------------------

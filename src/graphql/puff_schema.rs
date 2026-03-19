@@ -11,7 +11,10 @@ use crate::graphql::row_return::{
 };
 use crate::graphql::scalar::AggroValue;
 use crate::python::async_python::run_python_async;
-use crate::python::postgres::{execute_rust, Connection, PythonSqlValue};
+use crate::python::postgres::{
+    execute_rust, execute_rust_native, gql_value_to_rust_sql, Connection, PythonSqlValue,
+    RustSqlValue,
+};
 use crate::types::text::ToText;
 use crate::types::Text;
 use anyhow::{anyhow, bail};
@@ -151,6 +154,14 @@ pub struct AggroField {
     pub arguments: BTreeMap<Text, AggroArgument>,
     pub safe_without_context: bool,
     pub default: Py<PyAny>,
+    /// Static SQL query -- if set, bypasses Python producer entirely (zero-Python fast path)
+    pub sql_template: Option<String>,
+    /// Maps GraphQL argument names to SQL parameter positions ($1, $2, ...)
+    pub sql_arg_names: Vec<String>,
+    /// Parent correlation key columns (for child fields)
+    pub sql_parent_keys: Vec<Text>,
+    /// Child correlation key columns (for child fields)
+    pub sql_child_keys: Vec<Text>,
 }
 
 impl Clone for AggroField {
@@ -166,6 +177,10 @@ impl Clone for AggroField {
             arguments: self.arguments.clone(),
             safe_without_context: self.safe_without_context,
             default: self.default.clone_ref(py),
+            sql_template: self.sql_template.clone(),
+            sql_arg_names: self.sql_arg_names.clone(),
+            sql_parent_keys: self.sql_parent_keys.clone(),
+            sql_child_keys: self.sql_child_keys.clone(),
         })
     }
 }
@@ -274,12 +289,48 @@ pub fn convert_obj(name: &str, desc: BTreeMap<String, Bound<'_, PyAny>>) -> PyRe
             .extract::<Option<_>>()?
             .unwrap_or_default();
 
+        // Detect @sql decorator attributes on the producer method
+        let producer: Option<Py<PyAny>> = field_description.getattr("producer")?.extract()?;
+        let (sql_template, sql_arg_names, sql_parent_keys, sql_child_keys) =
+            if let Some(ref prod) = producer {
+                let py = field_description.py();
+                let py_producer = prod.bind(py);
+                let sql = py_producer
+                    .getattr("__puff_sql__")
+                    .ok()
+                    .and_then(|v| {
+                        if v.is_none() {
+                            None
+                        } else {
+                            v.extract::<String>().ok()
+                        }
+                    });
+                let args = py_producer
+                    .getattr("__puff_sql_args__")
+                    .ok()
+                    .and_then(|v| v.extract::<Vec<String>>().ok())
+                    .unwrap_or_default();
+                let parent_keys = py_producer
+                    .getattr("__puff_sql_parent_keys__")
+                    .ok()
+                    .and_then(|v| v.extract::<Vec<Text>>().ok())
+                    .unwrap_or_default();
+                let child_keys = py_producer
+                    .getattr("__puff_sql_child_keys__")
+                    .ok()
+                    .and_then(|v| v.extract::<Vec<Text>>().ok())
+                    .unwrap_or_default();
+                (sql, args, parent_keys, child_keys)
+            } else {
+                (None, vec![], vec![], vec![])
+            };
+
         let field = AggroField {
             depends_on,
             name: k.into(),
             return_type: decode_type(&field_description.getattr("return_type")?)?,
             is_async: field_description.getattr("is_async")?.extract()?,
-            producer_method: field_description.getattr("producer")?.extract()?,
+            producer_method: producer,
             acceptor_method: field_description.getattr("acceptor")?.extract()?,
             value_from_column: field_description.getattr("value_from_column")?.extract()?,
             safe_without_context: field_description
@@ -287,6 +338,10 @@ pub fn convert_obj(name: &str, desc: BTreeMap<String, Bound<'_, PyAny>>) -> PyRe
                 .extract()?,
             default: field_description.getattr("default")?.extract()?,
             arguments: final_arguments,
+            sql_template,
+            sql_arg_names,
+            sql_parent_keys,
+            sql_child_keys,
         };
 
         object_fields.insert(k.into(), field);
@@ -804,6 +859,177 @@ pub async fn do_returned_values_into_stream(
         }
     }
     let children_require = child_depends_on_vec.into_iter().collect::<Vec<_>>();
+
+    // -----------------------------------------------------------------------
+    // FAST PATH: If this field has a static SQL template (@sql decorator),
+    // execute directly in Rust without calling Python at all.
+    // -----------------------------------------------------------------------
+    if let Some(ref sql) = aggro_field.sql_template {
+        let conn_mutex = aggro_context.connection().ok_or_else(|| {
+            anyhow!("SQL fast path: Postgres is not configured")
+        })?;
+        let conn = conn_mutex.lock().await;
+
+        // Build params from GraphQL arguments (pure Rust, no Python)
+        let mut params: Vec<RustSqlValue> = aggro_field
+            .sql_arg_names
+            .iter()
+            .map(|name| {
+                let val = Python::with_gil(|py| {
+                    args.get(&name.to_text())
+                        .map(|pyobj| {
+                            // Convert PyObject argument back to GqlValue for the Rust path
+                            crate::graphql::row_return::convert_pyany_to_value(pyobj.bind(py))
+                                .unwrap_or(GqlValue::Null)
+                        })
+                        .unwrap_or(GqlValue::Null)
+                });
+                gql_value_to_rust_sql(&val)
+            })
+            .collect();
+
+        // For correlated child fields, collect parent key values and append
+        // them as an array parameter
+        let method_corr = if !aggro_field.sql_parent_keys.is_empty()
+            && !aggro_field.sql_child_keys.is_empty()
+        {
+            let parent_vals = rows.extract_values(&aggro_field.sql_parent_keys)?;
+            // Collect all parent key values into arrays for ANY($N)
+            let num_keys = aggro_field.sql_parent_keys.len();
+            for key_idx in 0..num_keys {
+                let key_values: Vec<GqlValue> = parent_vals
+                    .iter()
+                    .filter_map(|row| {
+                        row.as_ref()
+                            .and_then(|cols| cols.get(key_idx).cloned())
+                    })
+                    .collect();
+                // Build a GqlValue::List and convert
+                let list_val = GqlValue::List(key_values);
+                params.push(gql_value_to_rust_sql(&list_val));
+            }
+            Some((
+                aggro_field.sql_parent_keys.clone(),
+                aggro_field.sql_child_keys.clone(),
+            ))
+        } else {
+            None
+        };
+
+        let (statement, result_rows) =
+            execute_rust_native(&conn, sql.clone(), params).await?;
+        let rr: Arc<dyn ExtractValues + Send + Sync> =
+            Arc::new(PostgresResultRows::new(statement, result_rows));
+
+        // Process results identically to the normal path
+        match method_corr {
+            None => {
+                let parent_row_len = rows.len();
+                let children_vec = if child_fields.is_empty() {
+                    if let Some(col) = aggro_field.value_from_column.as_ref() {
+                        let vals = rr.extract_values(std::slice::from_ref(col))?;
+                        vals.into_iter()
+                            .map(|val| {
+                                val.and_then(|v| v.into_iter().next())
+                                    .unwrap_or(GqlValue::Null)
+                            })
+                            .collect()
+                    } else {
+                        rr.extract_first()?
+                    }
+                } else {
+                    build_child_objects(rr, &child_fields, &all_objects, aggro_context).await?
+                };
+                let mut final_vec = Vec::with_capacity(parent_row_len);
+                if aggro_value_is_list {
+                    final_vec.push(GqlValue::List(children_vec));
+                    for _ in 1..parent_row_len {
+                        final_vec.push(GqlValue::List(vec![]));
+                    }
+                } else {
+                    let mut child_iter = children_vec.into_iter();
+                    for _ in 0..parent_row_len {
+                        if let Some(c) = child_iter.next() {
+                            final_vec.push(c)
+                        } else if aggro_value_optional {
+                            final_vec.push(GqlValue::Null)
+                        } else {
+                            bail!(
+                                "Missing value in return for field {} which is not optional.",
+                                aggro_field.name
+                            );
+                        }
+                    }
+                }
+                return Ok(final_vec);
+            }
+            Some((parent_cor, cor)) => {
+                let parent_vals = rows.extract_values(&parent_cor)?;
+                if parent_vals.iter().all(|f| f.is_none()) {
+                    return Ok(parent_vals.iter().map(|_| GqlValue::Null).collect());
+                }
+                let mapped_children = if child_fields.is_empty() {
+                    let mut rows_to_get = cor.clone();
+                    if let Some(col) = aggro_field.value_from_column.as_ref() {
+                        rows_to_get.push(col.clone())
+                    }
+                    let vals: Vec<Vec<GqlValue>> = rr
+                        .extract_values(rows_to_get.as_slice())?
+                        .into_iter()
+                        .flatten()
+                        .collect();
+                    let mut return_vec = BTreeMap::new();
+                    for v in vals {
+                        let mut row_iter = v.into_iter();
+                        let cor_val = key_from_extracted(&mut row_iter, cor.len());
+                        let value = if aggro_field.return_type.optional {
+                            row_iter.next().unwrap_or(GqlValue::Null)
+                        } else {
+                            row_iter.next().ok_or(anyhow!(
+                                "Could not find a value for non-optional field {}",
+                                aggro_field.name
+                            ))?
+                        };
+                        return_vec.insert(cor_val, value);
+                    }
+                    return_vec
+                } else {
+                    build_correlated_child_objects(
+                        rr,
+                        &child_fields,
+                        &all_objects,
+                        aggro_context,
+                        &cor,
+                        aggro_value_is_list,
+                    )
+                    .await?
+                };
+                let mut final_vec = Vec::with_capacity(parent_vals.len());
+                for parent in parent_vals {
+                    if let Some(p) = parent {
+                        let row_cor_len = p.len();
+                        let mut row_cor_iter = p.into_iter();
+                        let key = key_from_extracted(&mut row_cor_iter, row_cor_len);
+                        let r = mapped_children.get(&key).cloned();
+                        let val = if aggro_value_is_list {
+                            r.unwrap_or_else(|| GqlValue::List(vec![]))
+                        } else if aggro_value_optional {
+                            r.unwrap_or(GqlValue::Null)
+                        } else {
+                            r.ok_or(anyhow!(
+                                "Missing value in return for field {} which is not optional.",
+                                aggro_field.name
+                            ))?
+                        };
+                        final_vec.push(val)
+                    } else {
+                        final_vec.push(GqlValue::Null)
+                    }
+                }
+                return Ok(final_vec);
+            }
+        }
+    }
 
     match class_method {
         Some(cm) => {

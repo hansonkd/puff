@@ -50,6 +50,54 @@ def nested_dataclass(*args, **kwargs):
     return wrapper(args[0]) if args else wrapper
 
 
+def sql(query, args=None, parent_key=None, child_key=None):
+    """Declare a static SQL query for a GraphQL field.
+
+    When a field has @sql, Puff executes the query directly in Rust
+    without calling Python at request time -- zero Python overhead.
+
+    Args:
+        query: SQL query string (use $1, $2, ... for parameters)
+        args: List of GraphQL argument names mapping to $1, $2, ...
+        parent_key: Parent column name(s) for correlation (child fields)
+        child_key: Child column name(s) for correlation (child fields)
+
+    Example:
+        @dataclass
+        class Query:
+            @classmethod
+            @sql("SELECT id, name, email FROM users")
+            def users(cls, context, /) -> Tuple[List[UserObject], str, List[Any]]:
+                ...
+
+            @classmethod
+            @sql("SELECT * FROM users WHERE id = $1", args=["id"])
+            def user_by_id(cls, context, /, id: int) -> Tuple[UserObject, str, List[Any]]:
+                ...
+
+        @dataclass
+        class UserObject:
+            @classmethod
+            @sql("SELECT * FROM posts WHERE user_id = ANY($1)",
+                 parent_key=["id"], child_key=["user_id"])
+            def posts(cls, context, /) -> Tuple[List[PostObject], str, List[Any], List[str], List[str]]:
+                ...
+    """
+    def decorator(func):
+        func.__puff_sql__ = query
+        func.__puff_sql_args__ = args or []
+        if parent_key:
+            func.__puff_sql_parent_keys__ = (
+                parent_key if isinstance(parent_key, list) else [parent_key]
+            )
+        if child_key:
+            func.__puff_sql_child_keys__ = (
+                child_key if isinstance(child_key, list) else [child_key]
+            )
+        return func
+    return decorator
+
+
 def parent(parent_field):
     def decorator(func):
         @wraps(func)
