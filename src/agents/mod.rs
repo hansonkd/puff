@@ -8,12 +8,14 @@ pub mod memory;
 pub mod orchestration;
 pub mod provider;
 pub mod python_bindings;
+pub mod quota;
 pub mod sandbox;
 pub mod server;
 pub mod skill;
 pub mod streaming;
 pub mod tool;
 pub mod trace;
+pub mod wasm;
 
 pub use agent::{Agent, AgentConfig};
 pub use capabilities::AgentCapabilities;
