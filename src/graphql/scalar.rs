@@ -18,23 +18,19 @@ pub fn register_scalars(schema: SchemaBuilder) -> SchemaBuilder {
 }
 
 fn create_json_scalar() -> Scalar {
-    Scalar::new("GenericScalar")
-        .description("An opaque representation of raw input (JSON scalar)")
+    Scalar::new("GenericScalar").description("An opaque representation of raw input (JSON scalar)")
 }
 
 fn create_binary_scalar() -> Scalar {
-    Scalar::new("Binary")
-        .description("Binary data (base64 encoded string)")
+    Scalar::new("Binary").description("Binary data (base64 encoded string)")
 }
 
 fn create_long_scalar() -> Scalar {
-    Scalar::new("Long")
-        .description("A 64-bit integer")
+    Scalar::new("Long").description("A 64-bit integer")
 }
 
 fn create_datetime_scalar() -> Scalar {
-    Scalar::new("DateTime")
-        .description("An ISO 8601 datetime string")
+    Scalar::new("DateTime").description("An ISO 8601 datetime string")
 }
 
 // ---------------------------------------------------------------------------

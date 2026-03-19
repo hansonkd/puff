@@ -145,8 +145,8 @@ pub fn graphql_validate_tool(schema_name: Option<&str>) -> RegisteredTool {
     RegisteredTool {
         definition: ToolDefinition {
             name,
-            description:
-                "Validate a GraphQL query for syntax errors without executing it.".to_string(),
+            description: "Validate a GraphQL query for syntax errors without executing it."
+                .to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -203,8 +203,7 @@ pub async fn execute_graphql_query(
     let mut request = async_graphql::Request::new(query);
 
     if let Some(serde_json::Value::Object(map)) = variables {
-        let vars =
-            async_graphql::Variables::from_json(serde_json::Value::Object(map.clone()));
+        let vars = async_graphql::Variables::from_json(serde_json::Value::Object(map.clone()));
         request = request.variables(vars);
     }
 

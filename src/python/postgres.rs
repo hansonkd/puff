@@ -21,9 +21,9 @@ use std::fmt::{Debug, Formatter};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tokio::runtime::Handle;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::sync::{oneshot, Mutex};
-use tokio::runtime::Handle;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type};
@@ -391,14 +391,10 @@ async fn do_execute_rust_native(
         Err(e) => return Err(anyhow!("{e}")),
     };
 
-    let param_refs: Vec<&(dyn ToSql + Sync)> = params
-        .iter()
-        .map(|p| p as &(dyn ToSql + Sync))
-        .collect();
+    let param_refs: Vec<&(dyn ToSql + Sync)> =
+        params.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
 
-    let rows: Vec<Row> = client
-        .query(&stmt, &param_refs)
-        .await?;
+    let rows: Vec<Row> = client.query(&stmt, &param_refs).await?;
     Ok((stmt, rows))
 }
 
@@ -1092,15 +1088,17 @@ pub fn gql_value_to_rust_sql(v: &async_graphql::Value) -> RustSqlValue {
         }
         async_graphql::Value::List(items) => {
             // Try to infer a typed array from the first non-null element
-            let first_non_null = items.iter().find(|v| !matches!(v, async_graphql::Value::Null));
+            let first_non_null = items
+                .iter()
+                .find(|v| !matches!(v, async_graphql::Value::Null));
             match first_non_null {
                 Some(async_graphql::Value::Number(n)) => {
                     if n.as_i64().is_some() {
                         // Check if all fit in i32
                         let all_i32 = items.iter().all(|v| match v {
-                            async_graphql::Value::Number(n) => {
-                                n.as_i64().is_some_and(|i| i >= i32::MIN as i64 && i <= i32::MAX as i64)
-                            }
+                            async_graphql::Value::Number(n) => n
+                                .as_i64()
+                                .is_some_and(|i| i >= i32::MIN as i64 && i <= i32::MAX as i64),
                             async_graphql::Value::Null => true,
                             _ => false,
                         });
@@ -1109,7 +1107,9 @@ pub fn gql_value_to_rust_sql(v: &async_graphql::Value) -> RustSqlValue {
                                 items
                                     .iter()
                                     .map(|v| match v {
-                                        async_graphql::Value::Number(n) => n.as_i64().unwrap_or(0) as i32,
+                                        async_graphql::Value::Number(n) => {
+                                            n.as_i64().unwrap_or(0) as i32
+                                        }
                                         _ => 0,
                                     })
                                     .collect(),
@@ -1129,17 +1129,15 @@ pub fn gql_value_to_rust_sql(v: &async_graphql::Value) -> RustSqlValue {
                         RustSqlValue::Json(gql_value_to_json(v))
                     }
                 }
-                Some(async_graphql::Value::String(_)) => {
-                    RustSqlValue::TextArray(
-                        items
-                            .iter()
-                            .map(|v| match v {
-                                async_graphql::Value::String(s) => s.clone(),
-                                _ => String::new(),
-                            })
-                            .collect(),
-                    )
-                }
+                Some(async_graphql::Value::String(_)) => RustSqlValue::TextArray(
+                    items
+                        .iter()
+                        .map(|v| match v {
+                            async_graphql::Value::String(s) => s.clone(),
+                            _ => String::new(),
+                        })
+                        .collect(),
+                ),
                 _ => RustSqlValue::Json(gql_value_to_json(v)),
             }
         }

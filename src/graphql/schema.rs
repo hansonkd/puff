@@ -32,18 +32,9 @@ struct ParentObjectValue {
 /// We support both the typed parent-object payload used by the async-graphql
 /// adapter and plain `Value::Object` payloads for compatibility with older
 /// result paths.
-fn extract_parent_field_value(
-    ctx: &ResolverContext<'_>,
-    column: &str,
-) -> Option<GqlValue> {
+fn extract_parent_field_value(ctx: &ResolverContext<'_>, column: &str) -> Option<GqlValue> {
     if let Ok(parent) = ctx.parent_value.try_downcast_ref::<ParentObjectValue>() {
-        return Some(
-            parent
-                .fields
-                .get(column)
-                .cloned()
-                .unwrap_or(GqlValue::Null),
-        );
+        return Some(parent.fields.get(column).cloned().unwrap_or(GqlValue::Null));
     }
 
     match ctx.parent_value.try_to_value() {
@@ -55,7 +46,9 @@ fn extract_parent_field_value(
 fn gql_value_into_field_value(val: GqlValue) -> FieldValue<'static> {
     match val {
         GqlValue::Null => FieldValue::NULL,
-        GqlValue::List(values) => FieldValue::list(values.into_iter().map(gql_value_into_field_value)),
+        GqlValue::List(values) => {
+            FieldValue::list(values.into_iter().map(gql_value_into_field_value))
+        }
         GqlValue::Object(fields) => FieldValue::owned_any(ParentObjectValue { fields }),
         scalar => FieldValue::value(scalar),
     }

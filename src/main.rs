@@ -6,8 +6,8 @@ use puff_rs::graphql::handlers::{handle_graphql_named, handle_subscriptions_name
 use puff_rs::prelude::*;
 use puff_rs::program::commands::{
     ASGIServerCommand, AgentAskCommand, AgentListCommand, AgentServeCommand, BasicCommand,
-    DjangoManagementCommand, PytestCommand, PythonCommand, ServerCommand, SkillListCommand,
-    WSGIServerCommand, WaitForever,
+    DjangoManagementCommand, DoctorCommand, ProjectNewCommand, PytestCommand, PythonCommand,
+    ServerCommand, SkillListCommand, WSGIServerCommand, WaitForever,
 };
 use puff_rs::runtime::{
     GqlOpts, HttpClientOpts, PostgresOpts, PubSubOpts, RedisOpts, TaskQueueOpts,
@@ -672,11 +672,14 @@ fn main() -> ExitCode {
         rc = rc.add_cwd_to_python_path();
     }
 
+    let doctor_runtime = rc.clone();
     let mut program = Program::new("puff")
         .about("Puff CLI. Reads puff.toml or configuration file specified with PUFF_CONFG")
         .version(VERSION)
         .after_help("☁ Thanks for using Puff ☁")
         .runtime_config(rc)
+        .command(ProjectNewCommand::new())
+        .command(DoctorCommand::new(doctor_runtime))
         .command(BasicCommand::new_with_options(
             clap::Command::new("example_config").about("Display an example puff.toml"),
             |_opts| async {

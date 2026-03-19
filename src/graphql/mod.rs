@@ -4,7 +4,10 @@ use pyo3::types::{PyDict, PyList, PyString};
 use pyo3::{Py, PyAny, PyObject, PyResult, Python};
 use std::sync::Arc;
 
-pub use handlers::{handle_graphql, handle_graphql_named, handle_subscriptions, handle_subscriptions_named, playground};
+pub use handlers::{
+    handle_graphql, handle_graphql_named, handle_subscriptions, handle_subscriptions_named,
+    playground,
+};
 pub mod handlers;
 pub(crate) mod puff_schema;
 mod row_return;
@@ -102,11 +105,11 @@ pub(crate) async fn load_schema(
     let temp_schema = {
         use async_graphql::dynamic::*;
         Schema::build("_TempQ", None, None)
-            .register(Object::new("_TempQ").field(
-                Field::new("_e", TypeRef::named(TypeRef::BOOLEAN), |_| {
-                    FieldFuture::new(async { Ok(None::<FieldValue<'_>>) })
-                }),
-            ))
+            .register(Object::new("_TempQ").field(Field::new(
+                "_e",
+                TypeRef::named(TypeRef::BOOLEAN),
+                |_| FieldFuture::new(async { Ok(None::<FieldValue<'_>>) }),
+            )))
             .finish()
             .expect("temp schema")
     };
@@ -118,8 +121,10 @@ pub(crate) async fn load_schema(
         shared_connection: shared_connection.clone(),
     };
 
-    let dynamic_schema = schema::build_schema(&all_objs, &input_objs_arc, &temp_config)
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Schema build failed: {}", e)))?;
+    let dynamic_schema =
+        schema::build_schema(&all_objs, &input_objs_arc, &temp_config).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("Schema build failed: {}", e))
+        })?;
 
     Ok(PuffGraphqlConfig {
         schema: dynamic_schema,
