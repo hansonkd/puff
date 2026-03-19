@@ -1,0 +1,13 @@
+Running 2s test @ http://127.0.0.1:7799/redis
+  2 threads and 16 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    42.17ms    5.13ms  54.99ms   91.79%
+    Req/Sec   189.23     18.32   230.00     52.50%
+  Latency Distribution
+     50%   42.02ms
+     75%   43.01ms
+     90%   45.03ms
+     99%   51.51ms
+  755 requests in 2.00s, 95.34KB read
+Requests/sec:    376.84
+Transfer/sec:     47.59KB

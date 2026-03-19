@@ -1,0 +1,13 @@
+Running 2s test @ http://127.0.0.1:7799/combo
+  2 threads and 16 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    42.27ms    8.98ms  59.73ms   89.20%
+    Req/Sec   187.95     18.08   232.00     70.00%
+  Latency Distribution
+     50%   43.05ms
+     75%   44.03ms
+     90%   46.90ms
+     99%   56.24ms
+  750 requests in 2.00s, 105.59KB read
+Requests/sec:    374.14
+Transfer/sec:     52.67KB

@@ -1,0 +1,12 @@
+dotenv = false
+asyncio = true
+add_cwd_to_path = true
+asgi = "bench.integration_asgi_app.application"
+
+[[postgres]]
+name = "default"
+pool_size = 32
+
+[[redis]]
+name = "default"
+pool_size = 64

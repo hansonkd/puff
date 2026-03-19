@@ -1,0 +1,11 @@
+dotenv = false
+add_cwd_to_path = true
+wsgi = "bench.integration_wsgi_app.application"
+
+[[postgres]]
+name = "default"
+pool_size = 32
+
+[[redis]]
+name = "default"
+pool_size = 64

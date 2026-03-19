@@ -1,0 +1,9 @@
+2026-03-19T15:50:22.622710Z  INFO puff: Loaded /root/puff/bench/puff_integration_wsgi.toml.
+2026-03-19T15:50:22.664849Z  INFO puff_rs::python: Adding /root/puff to beginning of PYTHONPATH
+2026-03-19T15:50:22.664877Z  INFO puff_rs::python: Adding puff to python....
+2026-03-19T15:50:22.720325Z  INFO puff_rs::python: Finished adding puff to python.
+2026-03-19T15:50:22.720422Z  INFO puff_rs::databases::redis: Checking redis connectivity...
+2026-03-19T15:50:22.722150Z  INFO puff_rs::databases::redis: Redis looks good.
+2026-03-19T15:50:22.722204Z  INFO puff_rs::databases::postgres: Checking Postgres connectivity...
+2026-03-19T15:50:22.727056Z  INFO puff_rs::databases::postgres: Postgres looks good.
+2026-03-19T15:50:22.779121Z  INFO puff_rs::program::commands: Serving on http://127.0.0.1:7799

@@ -1,0 +1,13 @@
+Running 2s test @ http://127.0.0.1:7799/pg
+  2 threads and 16 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    42.02ms    7.34ms  67.88ms   94.41%
+    Req/Sec   188.45     19.11   232.00     72.50%
+  Latency Distribution
+     50%   42.98ms
+     75%   43.97ms
+     90%   44.96ms
+     99%   53.82ms
+  751 requests in 2.00s, 97.15KB read
+Requests/sec:    375.08
+Transfer/sec:     48.52KB

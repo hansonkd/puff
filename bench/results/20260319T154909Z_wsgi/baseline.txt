@@ -1,0 +1,13 @@
+Running 2s test @ http://127.0.0.1:7799/baseline
+  2 threads and 16 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    40.89ms    5.38ms  48.06ms   97.42%
+    Req/Sec   194.12     23.52   242.00     62.50%
+  Latency Distribution
+     50%   41.05ms
+     75%   42.00ms
+     90%   42.97ms
+     99%   45.93ms
+  774 requests in 2.00s, 90.23KB read
+Requests/sec:    386.87
+Transfer/sec:     45.10KB
