@@ -66,12 +66,7 @@ fn extract_redis_to_python(py: Python, val: &Value) -> PyObject {
 }
 
 impl PythonRedis {
-    fn run_command(
-        &self,
-        py: Python,
-        return_fun: PyObject,
-        command: Cmd,
-    ) -> PyResult<PyObject> {
+    fn run_command(&self, py: Python, return_fun: PyObject, command: Cmd) -> PyResult<PyObject> {
         let client = self.0.pool();
         run_python_async(return_fun, async move {
             let mut conn = client.get().await?;
@@ -101,15 +96,20 @@ impl PythonRedis {
         if nx {
             match ex {
                 Some(seconds) => {
-                    let mut command =
-                        Cmd::set(python::py_obj_to_bytes(&key)?, python::py_obj_to_bytes(&val)?);
+                    let mut command = Cmd::set(
+                        python::py_obj_to_bytes(&key)?,
+                        python::py_obj_to_bytes(&val)?,
+                    );
                     command.arg("NX").arg("EX").arg(seconds);
                     self.run_command(py, return_fun, command)
                 }
                 None => self.run_command(
                     py,
                     return_fun,
-                    Cmd::set_nx(python::py_obj_to_bytes(&key)?, python::py_obj_to_bytes(&val)?),
+                    Cmd::set_nx(
+                        python::py_obj_to_bytes(&key)?,
+                        python::py_obj_to_bytes(&val)?,
+                    ),
                 ),
             }
         } else {
@@ -126,13 +126,21 @@ impl PythonRedis {
                 None => self.run_command(
                     py,
                     return_fun,
-                    Cmd::set(python::py_obj_to_bytes(&key)?, python::py_obj_to_bytes(&val)?),
+                    Cmd::set(
+                        python::py_obj_to_bytes(&key)?,
+                        python::py_obj_to_bytes(&val)?,
+                    ),
                 ),
             }
         }
     }
 
-    fn mget(&self, py: Python, return_fun: PyObject, keys: Bound<'_, PyList>) -> PyResult<PyObject> {
+    fn mget(
+        &self,
+        py: Python,
+        return_fun: PyObject,
+        keys: Bound<'_, PyList>,
+    ) -> PyResult<PyObject> {
         let mut vec = Vec::with_capacity(keys.len());
         for key in keys.iter() {
             vec.push(python::py_obj_to_bytes(&key.into())?);
@@ -172,7 +180,12 @@ impl PythonRedis {
         }
     }
 
-    fn persist(&self, py: Python, return_fun: PyObject, key: Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn persist(
+        &self,
+        py: Python,
+        return_fun: PyObject,
+        key: Bound<'_, PyAny>,
+    ) -> PyResult<PyObject> {
         self.run_command(py, return_fun, Cmd::persist(python::py_obj_to_bytes(&key)?))
     }
 
@@ -190,7 +203,12 @@ impl PythonRedis {
         )
     }
 
-    fn delete(&self, py: Python, return_fun: PyObject, key: Bound<'_, PyAny>) -> PyResult<PyObject> {
+    fn delete(
+        &self,
+        py: Python,
+        return_fun: PyObject,
+        key: Bound<'_, PyAny>,
+    ) -> PyResult<PyObject> {
         self.run_command(py, return_fun, Cmd::del(python::py_obj_to_bytes(&key)?))
     }
 

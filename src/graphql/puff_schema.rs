@@ -33,7 +33,10 @@ use uuid::Uuid;
 
 static NUMBERS: &'static [&'static str] = &["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
 
-fn args_to_py_dict<'py>(py: Python<'py>, args: &BTreeMap<Text, PyObject>) -> PyResult<Bound<'py, PyDict>> {
+fn args_to_py_dict<'py>(
+    py: Python<'py>,
+    args: &BTreeMap<Text, PyObject>,
+) -> PyResult<Bound<'py, PyDict>> {
     let dict = PyDict::new(py);
     for (k, v) in args.iter() {
         dict.set_item(k.as_str(), v)?;
@@ -222,8 +225,12 @@ pub fn convert(
     BTreeMap<Text, AggroObject>,
 )> {
     let description = type_to_description.call1((schema,))?;
-    let all_types = description.getattr("all_types")?.downcast_into::<PyDict>()?;
-    let input_types = description.getattr("input_types")?.downcast_into::<PyDict>()?;
+    let all_types = description
+        .getattr("all_types")?
+        .downcast_into::<PyDict>()?;
+    let input_types = description
+        .getattr("input_types")?
+        .downcast_into::<PyDict>()?;
     let py_auth_function = description.getattr("auth_function")?;
     let py_auth_async: bool = description.getattr("auth_async")?.extract()?;
     let auth_function = if !py_auth_function.is_none() {
@@ -252,7 +259,9 @@ pub fn convert_obj(name: &str, desc: BTreeMap<String, Bound<'_, PyAny>>) -> PyRe
     let mut object_fields: BTreeMap<Text, AggroField> = BTreeMap::new();
 
     for (k, field_description) in desc.iter() {
-        let args = field_description.getattr("arguments")?.downcast_into::<PyDict>()?;
+        let args = field_description
+            .getattr("arguments")?
+            .downcast_into::<PyDict>()?;
         let mut final_arguments = BTreeMap::new();
 
         for (param_name, param) in args.iter() {
@@ -428,16 +437,17 @@ fn input_to_python(
             _ => bail!("Input non-string to a string input"),
         },
         AggroTypeInfo::Binary => match v {
-            LookAheadValue::Scalar(AggroScalarValue::String(i)) => {
-                Ok(PyBytes::new(py, &base64::engine::general_purpose::STANDARD.decode(i.as_str())?).into_py(py))
-            }
+            LookAheadValue::Scalar(AggroScalarValue::String(i)) => Ok(PyBytes::new(
+                py,
+                &base64::engine::general_purpose::STANDARD.decode(i.as_str())?,
+            )
+            .into_py(py)),
             LookAheadValue::Scalar(AggroScalarValue::Binary(i)) => Ok(i.clone().into_py(py)),
             _ => bail!("Binary input expected base64 string or binary"),
         },
         AggroTypeInfo::Datetime => match v {
             LookAheadValue::Scalar(AggroScalarValue::String(i)) => {
-                let py_obj: NaiveDateTime =
-                    DateTime::parse_from_rfc3339(i.as_str())?.naive_utc();
+                let py_obj: NaiveDateTime = DateTime::parse_from_rfc3339(i.as_str())?.naive_utc();
                 Ok(py_obj.into_py(py))
             }
             LookAheadValue::Scalar(AggroScalarValue::Datetime(i)) => {
@@ -529,7 +539,12 @@ pub async fn do_returned_values_into_stream(
     layer_cache: Py<PyDict>,
 ) -> PuffResult<Vec<AggroValue>> {
     let type_info = aggro_field.return_type.type_info.clone();
-    let class_method = Python::with_gil(|py| aggro_field.producer_method.as_ref().map(|o| o.clone_ref(py)));
+    let class_method = Python::with_gil(|py| {
+        aggro_field
+            .producer_method
+            .as_ref()
+            .map(|o| o.clone_ref(py))
+    });
     let aggro_value_optional = aggro_field.return_type.optional;
     let aggro_value_is_list = aggro_field.return_type.type_info.is_list();
     if rows.len() == 0 {
@@ -656,15 +671,21 @@ pub async fn do_returned_values_into_stream(
 
             let (method_result, method_corr) = Python::with_gil(|py| {
                 let py_res = result.bind(py);
-                if let Ok((_elp, q, l)) = py_res.extract::<(Bound<'_, PyAny>, Bound<'_, PyString>, Bound<'_, PyList>)>() {
+                if let Ok((_elp, q, l)) =
+                    py_res.extract::<(Bound<'_, PyAny>, Bound<'_, PyString>, Bound<'_, PyList>)>()
+                {
                     let v = l
                         .iter()
                         .map(|f| PythonSqlValue::new(f.to_object(py)))
                         .collect::<Vec<_>>();
                     PuffResult::Ok((PythonMethodResult::SqlQuery(q.to_string(), v), None))
-                } else if let Ok((_elp, q, l, parent_cor, child_cor)) =
-                    py_res.extract::<(Bound<'_, PyAny>, Bound<'_, PyString>, Bound<'_, PyList>, Vec<Text>, Vec<Text>)>()
-                {
+                } else if let Ok((_elp, q, l, parent_cor, child_cor)) = py_res.extract::<(
+                    Bound<'_, PyAny>,
+                    Bound<'_, PyString>,
+                    Bound<'_, PyList>,
+                    Vec<Text>,
+                    Vec<Text>,
+                )>() {
                     let v = l
                         .iter()
                         .map(|f| PythonSqlValue::new(f.to_object(py)))
@@ -673,7 +694,9 @@ pub async fn do_returned_values_into_stream(
                         PythonMethodResult::SqlQuery(q.to_string(), v),
                         Some((parent_cor, child_cor)),
                     ))
-                } else if let Ok((_elp, py_list)) = py_res.extract::<(Bound<'_, PyAny>, Bound<'_, PyList>)>() {
+                } else if let Ok((_elp, py_list)) =
+                    py_res.extract::<(Bound<'_, PyAny>, Bound<'_, PyList>)>()
+                {
                     Ok((PythonMethodResult::PythonList(py_list.unbind()), None))
                 } else if let Ok((_elp, py_list, parent_cor, child_cor)) =
                     py_res.extract::<(Bound<'_, PyAny>, Bound<'_, PyList>, Vec<Text>, Vec<Text>)>()
@@ -748,7 +771,8 @@ pub async fn do_returned_values_into_stream(
                             let new_layer_cache: Py<PyDict> =
                                 Python::with_gil(|py| PyDict::new(py).unbind());
                             for (child, new_lookahead) in child_fields {
-                                let this_layer_cache = Python::with_gil(|py| new_layer_cache.clone_ref(py));
+                                let this_layer_cache =
+                                    Python::with_gil(|py| new_layer_cache.clone_ref(py));
                                 let fut = async {
                                     let children = returned_values_into_stream(
                                         rr.clone(),
@@ -859,7 +883,8 @@ pub async fn do_returned_values_into_stream(
                             let new_layer_cache: Py<PyDict> =
                                 Python::with_gil(|py| PyDict::new(py).unbind());
                             for (child, new_lookahead) in child_fields {
-                                let this_layer_cache = Python::with_gil(|py| new_layer_cache.clone_ref(py));
+                                let this_layer_cache =
+                                    Python::with_gil(|py| new_layer_cache.clone_ref(py));
                                 let fut = async {
                                     let children = returned_values_into_stream(
                                         rr.clone(),
@@ -984,8 +1009,7 @@ pub async fn do_returned_values_into_stream(
                 }
 
                 let mut to_compute = Vec::with_capacity(child_fields.len());
-                let new_layer_cache: Py<PyDict> =
-                    Python::with_gil(|py| PyDict::new(py).unbind());
+                let new_layer_cache: Py<PyDict> = Python::with_gil(|py| PyDict::new(py).unbind());
                 for (child, new_lookahead) in child_fields {
                     let this_layer_cache = Python::with_gil(|py| new_layer_cache.clone_ref(py));
                     let fut = async {
@@ -1042,10 +1066,9 @@ impl Clone for LookAheadFields {
             LookAheadFields::Terminal(args) => {
                 LookAheadFields::Terminal(clone_pyobject_btreemap(py, args))
             }
-            LookAheadFields::Nested(args, children) => LookAheadFields::Nested(
-                clone_pyobject_btreemap(py, args),
-                children.clone(),
-            ),
+            LookAheadFields::Nested(args, children) => {
+                LookAheadFields::Nested(clone_pyobject_btreemap(py, args), children.clone())
+            }
         })
     }
 }

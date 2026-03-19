@@ -45,15 +45,15 @@ pub mod vector_builder;
 
 use axum::body::Bytes as AxumBytes;
 use axum::response::{IntoResponse, Response};
+use base64::Engine;
 use bb8_redis::redis::{
     ErrorKind, FromRedisValue, RedisError, RedisResult, RedisWrite, ToRedisArgs, Value,
 };
 pub use bytes_builder::BytesBuilder;
-use chrono::{NaiveDate, DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use pyo3::types::PyBytes;
 use pyo3::{IntoPy, Py, PyAny, Python};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use base64::Engine;
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 
@@ -81,7 +81,9 @@ pub struct Bytes(AxumBytes);
 
 impl Debug for Bytes {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        base64::engine::general_purpose::STANDARD.encode(self.as_slice()).fmt(f)
+        base64::engine::general_purpose::STANDARD
+            .encode(self.as_slice())
+            .fmt(f)
     }
 }
 

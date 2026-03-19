@@ -307,10 +307,8 @@ impl Program {
                 let python_dispatcher = if rt_config.python() {
                     pyo3::prepare_freethreaded_python();
                     bootstrap_puff_globals(rt_config.clone())?;
-                    let dispatcher = setup_python_executors(
-                        rt_config.clone(),
-                        mutex_switcher.clone(),
-                    )?;
+                    let dispatcher =
+                        setup_python_executors(rt_config.clone(), mutex_switcher.clone())?;
                     Some(dispatcher)
                 } else {
                     None

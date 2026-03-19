@@ -1,6 +1,6 @@
 use axum::body::Body;
-use axum::extract::{FromRequest, Query};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{FromRequest, Query};
 use axum::http::{HeaderMap, Method, Request, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
@@ -304,7 +304,11 @@ pub async fn handle_graphql_socket<S: Schema>(socket: WebSocket, schema: S, cont
 }
 
 #[cfg(Py_GIL_DISABLED)]
-pub async fn handle_graphql_socket<S: Schema>(mut socket: WebSocket, _schema: S, _context: S::Context) {
+pub async fn handle_graphql_socket<S: Schema>(
+    mut socket: WebSocket,
+    _schema: S,
+    _context: S::Context,
+) {
     // GraphQL subscriptions over WebSocket are not yet supported under free-threaded Python
     // due to Unpin constraints on PyObject in the juniper subscription bridge.
     let _ = socket.send(Message::Text(
@@ -326,7 +330,6 @@ where
             .protocols(["graphql-ws"])
             .max_frame_size(1024)
             .max_message_size(1024)
-
             .on_upgrade(move |socket| handle_graphql_socket(socket, schema, context));
         future::ready(s)
     }
@@ -416,7 +419,9 @@ fn auth_result_to_response(v: &PyObject) -> Result<Option<Response<String>>, Err
             let status = v.getattr(py, "status")?.extract::<u16>(py)?;
             let message = v.getattr(py, "message")?.extract::<String>(py)?;
             let header_v = v.getattr(py, "headers")?;
-            let headers = header_v.bind(py).downcast::<PyDict>()
+            let headers = header_v
+                .bind(py)
+                .downcast::<PyDict>()
                 .map_err(|e| anyhow::anyhow!("Expected headers to be a dict: {}", e.to_string()))?;
             let mut r = Response::builder().status(status);
             for (hn, hv) in headers.iter() {
@@ -511,7 +516,6 @@ pub fn handle_subscriptions_named<N: Into<Text>>(
                         .protocols(["graphql-ws"])
                         .max_frame_size(1024)
                         .max_message_size(1024)
-            
                         .on_upgrade(move |socket| {
                             handle_graphql_socket(socket, root_node.root(), new_ctx)
                         });

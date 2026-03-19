@@ -115,7 +115,11 @@ impl PythonPubSubClient {
         Ok(())
     }
 
-    fn connection_with_id(&self, py: Python, connection_id: Bound<'_, PyString>) -> PyResult<PyObject> {
+    fn connection_with_id(
+        &self,
+        py: Python,
+        connection_id: Bound<'_, PyString>,
+    ) -> PyResult<PyObject> {
         let connection_id_bytes = ConnectionId::from_str(connection_id.to_str()?)
             .map_err(|_e| PyTypeError::new_err("Invalid Connection ID"))?;
         let (connection, rec) = to_py_error(

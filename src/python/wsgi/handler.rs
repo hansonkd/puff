@@ -13,7 +13,6 @@ use pyo3::DowncastError;
 use std::future::Future;
 
 use std::pin::Pin;
-use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -158,7 +157,10 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                         self.bytesio
                             .call1(py, (PyByteArray::new(py, &body_bytes[..]),))?,
                     )?;
-                    environ.set_item(get_cached_string(py, "wsgi.errors"), self.std_err.clone_ref(py))?;
+                    environ.set_item(
+                        get_cached_string(py, "wsgi.errors"),
+                        self.std_err.clone_ref(py),
+                    )?;
                     environ.set_item(get_cached_string(py, "wsgi.multithread"), true)?;
                     environ.set_item(get_cached_string(py, "wsgi.run_once"), false)?;
 
@@ -214,7 +216,14 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                             s => format!("HTTP_{}", s.replace("-", "_")),
                         };
                         if let Some(val) = environ.get_item(corrected_name.as_str())? {
-                            let s: Bound<'_, PyString> = val.downcast().map_err(|e| pyo3::PyErr::new::<pyo3::exceptions::PyTypeError, _>(e.to_string()))?.clone();
+                            let s: Bound<'_, PyString> = val
+                                .downcast()
+                                .map_err(|e| {
+                                    pyo3::PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+                                        e.to_string(),
+                                    )
+                                })?
+                                .clone();
                             let new_value = [s.to_str()?, value.to_str()?].join(",");
                             environ.set_item(corrected_name.as_str(), new_value)?;
                         } else {

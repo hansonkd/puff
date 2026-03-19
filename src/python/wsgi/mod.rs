@@ -81,7 +81,12 @@ impl<T: WsgiServerSpawner> ServerContext<T> {
                         let bytesio = py.import("io")?.getattr("BytesIO")?;
                         let app_clone = app.clone_ref(py);
                         let dispatcher_clone = self.python_dispatcher.clone();
-                        return PyResult::Ok((std_err.unbind(), bytesio.unbind(), app_clone, dispatcher_clone));
+                        return PyResult::Ok((
+                            std_err.unbind(),
+                            bytesio.unbind(),
+                            app_clone,
+                            dispatcher_clone,
+                        ));
                     })?;
                     let wsgi_handler = WsgiHandler::new(
                         app_clone,

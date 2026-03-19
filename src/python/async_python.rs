@@ -20,7 +20,11 @@ impl AsyncReturn {
 
 #[pymethods]
 impl AsyncReturn {
-    pub fn __call__(&mut self, value: PyObject, exception: Option<Bound<'_, PyAny>>) -> PyResult<()> {
+    pub fn __call__(
+        &mut self,
+        value: PyObject,
+        exception: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
         match self.0.take() {
             Some(sender) => match exception {
                 Some(e) => Ok(sender.send(Err(PyErr::from_value(e))).unwrap_or(())),

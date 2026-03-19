@@ -46,13 +46,20 @@ async fn get_many(key: Text, num: usize) -> PuffResult<PyObject> {
     }
 
     let bytes = builder.into_bytes();
-    Ok(Python::with_gil(|py| pyo3::types::PyBytes::new(py, bytes.as_ref()).into_any().unbind()))
+    Ok(Python::with_gil(|py| {
+        pyo3::types::PyBytes::new(py, bytes.as_ref())
+            .into_any()
+            .unbind()
+    }))
 }
 
 async fn handle_root() -> RequestResult<Bytes> {
     let pool = with_redis(|r| r.pool());
     let mut conn = pool.get().await.map_err(|e| anyhow::anyhow!("{}", e))?;
-    let result: Vec<u8> = Cmd::get("mykey").query_async(&mut *conn).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+    let result: Vec<u8> = Cmd::get("mykey")
+        .query_async(&mut *conn)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
     Ok(Bytes::copy_from_slice(&result))
 }
 
@@ -63,7 +70,7 @@ fn main() -> ExitCode {
         .add_default_postgres()
         .add_default_redis()
         .add_default_pubsub()
-        .set_global_state_fn(|py| Ok(MyState.into_py(py)));
+        .set_global_state_fn(|py| pyo3::Py::new(py, MyState).map(Into::into));
 
     Program::new("my_first_app")
         .about("This is my first app")

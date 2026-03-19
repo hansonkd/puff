@@ -38,7 +38,6 @@ use pyo3::types::{PyBytes, PyDict, PyFloat, PyList, PyTuple};
 use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{self, Serialize, SerializeMap, SerializeSeq, Serializer};
 
-
 #[pyfunction]
 pub fn load(py: Python, fp: PyObject, kwargs: Option<Bound<'_, PyDict>>) -> PyResult<PyObject> {
     // Temporary workaround for
@@ -328,9 +327,9 @@ pub fn run_load_bytes(
     let seed = HyperJsonValue::new(py, &parse_float, &parse_int);
     match seed.deserialize(&mut deserializer) {
         Ok(py_object) => {
-            deserializer.end().map_err(|e| {
-                JSONDecodeError::new_err((e.to_string(), string.to_vec(), 0))
-            })?;
+            deserializer
+                .end()
+                .map_err(|e| JSONDecodeError::new_err((e.to_string(), string.to_vec(), 0)))?;
             Ok(py_object)
         }
         Err(e) => {
@@ -484,7 +483,9 @@ impl<'p> Serialize for SerializePyObject<'p> {
         extract!(String);
         extract!(bool);
 
-        cast!(PyFloat, |x: &Bound<'_, PyFloat>| x.value().serialize(serializer));
+        cast!(PyFloat, |x: &Bound<'_, PyFloat>| x
+            .value()
+            .serialize(serializer));
         extract!(u64);
         extract!(i64);
 

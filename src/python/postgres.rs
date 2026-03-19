@@ -101,10 +101,7 @@ struct QueryResult {
 // Background connection task
 // ---------------------------------------------------------------------------
 
-async fn conn_task(
-    pool: Pool<PostgresConnectionManager<NoTls>>,
-    mut rx: mpsc::Receiver<DbOp>,
-) {
+async fn conn_task(pool: Pool<PostgresConnectionManager<NoTls>>, mut rx: mpsc::Receiver<DbOp>) {
     let client = match pool.get().await {
         Ok(c) => c,
         Err(e) => {
@@ -477,8 +474,7 @@ pub async fn execute_rust(
         })
         .await
         .map_err(|_| anyhow!("Connection task dropped"))?;
-    rx.await
-        .map_err(|_| anyhow!("Connection task dropped"))?
+    rx.await.map_err(|_| anyhow!("Connection task dropped"))?
 }
 
 /// Public async helper used by the GraphQL handler to clean up.
@@ -515,10 +511,9 @@ impl Connection {
                 })
                 .await;
             handle_python_return(ret_func, async {
-                rx.await
-                    .map_err(|_| {
-                        pyo3::exceptions::PyRuntimeError::new_err("Database operation cancelled")
-                    })?
+                rx.await.map_err(|_| {
+                    pyo3::exceptions::PyRuntimeError::new_err("Database operation cancelled")
+                })?
             })
             .await;
         });
@@ -554,12 +549,9 @@ impl Connection {
                 let (tx, rx) = oneshot::channel();
                 let _ = s.send(DbOp::Commit { reply: tx }).await;
                 handle_python_return(return_fun, async {
-                    rx.await
-                        .map_err(|_| {
-                            pyo3::exceptions::PyRuntimeError::new_err(
-                                "Database operation cancelled",
-                            )
-                        })?
+                    rx.await.map_err(|_| {
+                        pyo3::exceptions::PyRuntimeError::new_err("Database operation cancelled")
+                    })?
                 })
                 .await;
             } else {
@@ -581,12 +573,9 @@ impl Connection {
                 let (tx, rx) = oneshot::channel();
                 let _ = s.send(DbOp::Rollback { reply: tx }).await;
                 handle_python_return(return_fun, async {
-                    rx.await
-                        .map_err(|_| {
-                            pyo3::exceptions::PyRuntimeError::new_err(
-                                "Database operation cancelled",
-                            )
-                        })?
+                    rx.await.map_err(|_| {
+                        pyo3::exceptions::PyRuntimeError::new_err("Database operation cancelled")
+                    })?
                 })
                 .await;
             } else {
@@ -681,11 +670,9 @@ impl Cursor {
                 })
                 .await;
             handle_python_return::<_, PyObject>(return_func, async move {
-                let result: QueryResult = rx
-                    .await
-                    .map_err(|_| {
-                        pyo3::exceptions::PyRuntimeError::new_err("Database operation cancelled")
-                    })??;
+                let result: QueryResult = rx.await.map_err(|_| {
+                    pyo3::exceptions::PyRuntimeError::new_err("Database operation cancelled")
+                })??;
                 // Return (rows, description, rowcount) as a Python tuple
                 // that the Python wrapper can store on the cursor
                 Python::with_gil(|py| {
@@ -757,11 +744,9 @@ impl Cursor {
                 })
                 .await;
             handle_python_return::<_, PyObject>(return_func, async move {
-                let result: QueryResult = rx
-                    .await
-                    .map_err(|_| {
-                        pyo3::exceptions::PyRuntimeError::new_err("Database operation cancelled")
-                    })??;
+                let result: QueryResult = rx.await.map_err(|_| {
+                    pyo3::exceptions::PyRuntimeError::new_err("Database operation cancelled")
+                })??;
                 Python::with_gil(|py| {
                     let description = statement_to_description_py(py, &Some(result.statement))?;
                     Ok(PyTuple::new(
@@ -832,9 +817,7 @@ pub(crate) fn column_to_python(
         Type::FLOAT8 => row.get::<_, Option<f64>>(ix).into_py(py),
         Type::OID => row.get::<_, Option<u32>>(ix).into_py(py),
         Type::BYTEA => row.get::<_, Option<&[u8]>>(ix).into_py(py),
-        Type::UUID => {
-            pythonize::pythonize(py, &row.get::<_, Option<Uuid>>(ix))?.unbind()
-        }
+        Type::UUID => pythonize::pythonize(py, &row.get::<_, Option<Uuid>>(ix))?.unbind(),
         Type::JSON => {
             pythonize::pythonize(py, &row.get::<_, Option<serde_json::Value>>(ix))?.unbind()
         }
@@ -856,12 +839,8 @@ pub(crate) fn column_to_python(
         Type::UUID_ARRAY => {
             pythonize::pythonize(py, &row.get::<_, Vec<Option<Uuid>>>(ix))?.unbind()
         }
-        Type::TIME_ARRAY => row
-            .get::<_, Option<Vec<Option<NaiveTime>>>>(ix)
-            .into_py(py),
-        Type::DATE_ARRAY => row
-            .get::<_, Option<Vec<Option<NaiveDate>>>>(ix)
-            .into_py(py),
+        Type::TIME_ARRAY => row.get::<_, Option<Vec<Option<NaiveTime>>>>(ix).into_py(py),
+        Type::DATE_ARRAY => row.get::<_, Option<Vec<Option<NaiveDate>>>>(ix).into_py(py),
         ref t => {
             return Err(NotSupportedError::new_err(format!(
                 "Unsupported postgres type {:?}",
@@ -911,12 +890,8 @@ impl ToSql for PythonSqlValue {
             match *ty {
                 Type::JSON => depythonize::<Option<serde_json::Value>>(obj_ref)?.to_sql(ty, out),
                 Type::JSONB => depythonize::<Option<serde_json::Value>>(obj_ref)?.to_sql(ty, out),
-                Type::TIMESTAMP => obj_ref
-                    .extract::<Option<NaiveDateTime>>()?
-                    .to_sql(ty, out),
-                Type::TIMESTAMPTZ => obj_ref
-                    .extract::<Option<NaiveDateTime>>()?
-                    .to_sql(ty, out),
+                Type::TIMESTAMP => obj_ref.extract::<Option<NaiveDateTime>>()?.to_sql(ty, out),
+                Type::TIMESTAMPTZ => obj_ref.extract::<Option<NaiveDateTime>>()?.to_sql(ty, out),
                 Type::BOOL => obj_ref.extract::<Option<bool>>()?.to_sql(ty, out),
                 Type::TEXT => {
                     let s = obj_ref.extract::<Option<String>>();

@@ -38,6 +38,7 @@ impl RunnableCommand for AgentServeCommand {
         let mut agents = HashMap::new();
         for config in &self.agent_configs {
             let mut agent = Agent::new(config.clone());
+            let mut registry = ToolRegistry::new();
             for skill_path in &config.skills {
                 let path = std::path::Path::new(skill_path);
                 if path.exists() {
@@ -46,17 +47,29 @@ impl RunnableCommand for AgentServeCommand {
                             if let Some(ref ctx) = skill.context {
                                 agent = agent.with_context(ctx.clone());
                             }
-                            let mut registry = ToolRegistry::new();
-                            for tool in skill.into_registered_tools() {
-                                registry.register(tool);
+                            match skill.into_registered_tools() {
+                                Ok(tools) => {
+                                    for tool in tools {
+                                        registry.register(tool);
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Failed to register tools for skill '{}': {}",
+                                        skill_path,
+                                        e
+                                    );
+                                }
                             }
-                            agent = agent.with_tools(registry);
                         }
                         Err(e) => {
                             tracing::warn!("Failed to load skill '{}': {}", skill_path, e);
                         }
                     }
                 }
+            }
+            if !registry.is_empty() {
+                agent = agent.with_tools(registry);
             }
             agents.insert(config.name.clone(), agent);
         }
@@ -95,10 +108,7 @@ impl RunnableCommand for AgentAskCommand {
     fn cli_parser(&self) -> Command {
         Command::new("agent-ask")
             .about("Start an interactive REPL with a configured agent")
-            .arg(
-                clap::arg!(--agent <NAME> "Name of the agent to talk to")
-                    .required(true),
-            )
+            .arg(clap::arg!(--agent <NAME> "Name of the agent to talk to").required(true))
     }
 
     fn make_runnable(&mut self, args: &ArgMatches, _context: PuffContext) -> Result<Runnable> {
@@ -118,6 +128,7 @@ impl RunnableCommand for AgentAskCommand {
 
         // Build the agent, loading skills the same way AgentServeCommand does.
         let mut agent = Agent::new(config.clone());
+        let mut registry = ToolRegistry::new();
         for skill_path in &config.skills {
             let path = std::path::Path::new(skill_path);
             if path.exists() {
@@ -126,17 +137,29 @@ impl RunnableCommand for AgentAskCommand {
                         if let Some(ref ctx) = skill.context {
                             agent = agent.with_context(ctx.clone());
                         }
-                        let mut registry = ToolRegistry::new();
-                        for tool in skill.into_registered_tools() {
-                            registry.register(tool);
+                        match skill.into_registered_tools() {
+                            Ok(tools) => {
+                                for tool in tools {
+                                    registry.register(tool);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to register tools for skill '{}': {}",
+                                    skill_path,
+                                    e
+                                );
+                            }
                         }
-                        agent = agent.with_tools(registry);
                     }
                     Err(e) => {
                         tracing::warn!("Failed to load skill '{}': {}", skill_path, e);
                     }
                 }
             }
+        }
+        if !registry.is_empty() {
+            agent = agent.with_tools(registry);
         }
 
         Ok(Runnable::new(async move {
@@ -147,7 +170,10 @@ impl RunnableCommand for AgentAskCommand {
             let stdin = std::io::stdin();
             let stdout = std::io::stdout();
 
-            println!("Talking to agent '{}'. Type 'exit' or 'quit' to stop.", agent.config.name);
+            println!(
+                "Talking to agent '{}'. Type 'exit' or 'quit' to stop.",
+                agent.config.name
+            );
 
             loop {
                 print!("> ");
@@ -237,7 +263,10 @@ impl RunnableCommand for SkillListCommand {
     fn make_runnable(&mut self, _args: &ArgMatches, _context: PuffContext) -> Result<Runnable> {
         let skill_paths = self.skill_paths.clone();
         Ok(Runnable::new(async move {
-            println!("{:<20} {:<12} {:<8} {}", "Name", "Version", "Tools", "Source");
+            println!(
+                "{:<20} {:<12} {:<8} {}",
+                "Name", "Version", "Tools", "Source"
+            );
             println!("{}", "\u{2500}".repeat(60));
             for skill_path in &skill_paths {
                 let path = std::path::Path::new(skill_path);

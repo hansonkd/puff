@@ -375,11 +375,7 @@ impl PubSubConnection {
         body: M,
     ) -> BoxFuture<'_, PuffResult<()>> {
         let channel_text = channel.into();
-        let message = PubSubMessage::new(
-            channel_text.clone(),
-            self.connection_id,
-            body.into(),
-        );
+        let message = PubSubMessage::new(channel_text.clone(), self.connection_id, body.into());
 
         let inner_client = self.client.clone();
         let fut = async move {

@@ -76,10 +76,12 @@ impl Binary {
     pub fn from_input(v: &InputValue<AggroScalarValue>) -> Result<Binary, String> {
         match v {
             InputValue::Scalar(AggroScalarValue::Binary(b)) => Ok(Binary(b.clone())),
-            InputValue::Scalar(AggroScalarValue::String(b)) => match base64::engine::general_purpose::STANDARD.decode(b.as_str()) {
-                Ok(s) => Ok(Binary(Bytes::copy_from_slice(&s))),
-                _ => Err("Invalid base64 string for Binary".to_owned()),
-            },
+            InputValue::Scalar(AggroScalarValue::String(b)) => {
+                match base64::engine::general_purpose::STANDARD.decode(b.as_str()) {
+                    Ok(s) => Ok(Binary(Bytes::copy_from_slice(&s))),
+                    _ => Err("Invalid base64 string for Binary".to_owned()),
+                }
+            }
             _ => Err("Expected a binary or string in base64".to_owned()),
         }
     }
@@ -325,7 +327,9 @@ impl Display for AggroScalarValue {
             AggroScalarValue::Long(i) => i.fmt(f),
             AggroScalarValue::Datetime(i) => i.fmt(f),
             AggroScalarValue::Uuid(i) => i.fmt(f),
-            AggroScalarValue::Binary(i) => base64::engine::general_purpose::STANDARD.encode(i.as_slice()).fmt(f),
+            AggroScalarValue::Binary(i) => base64::engine::general_purpose::STANDARD
+                .encode(i.as_slice())
+                .fmt(f),
             AggroScalarValue::Float(i) => i.fmt(f),
             AggroScalarValue::String(i) => i.fmt(f),
             AggroScalarValue::Boolean(i) => i.fmt(f),
@@ -449,7 +453,9 @@ impl ScalarValue for AggroScalarValue {
             Self::Long(i) => S::from(i.to_string()),
             Self::Datetime(i) => S::from(i.to_string()),
             Self::Uuid(i) => S::from(i.to_string()),
-            Self::Binary(i) => S::from(base64::engine::general_purpose::STANDARD.encode(i.as_slice())),
+            Self::Binary(i) => {
+                S::from(base64::engine::general_purpose::STANDARD.encode(i.as_slice()))
+            }
             Self::Float(f) => S::from(f),
             Self::String(s) => S::from(s.to_string()),
             Self::Boolean(b) => S::from(b),

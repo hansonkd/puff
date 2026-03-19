@@ -307,10 +307,9 @@ impl<'de> Deserialize<'de> for UserAgent {
             {
                 use serde::de::Unexpected;
 
-                Ok(UserAgent(
-                    HeaderValue::from_str(v)
-                        .map_err(|_| E::invalid_value(Unexpected::Str(v), &self))?,
-                ))
+                Ok(UserAgent(HeaderValue::from_str(v).map_err(|_| {
+                    E::invalid_value(Unexpected::Str(v), &self)
+                })?))
             }
         }
         deserializer.deserialize_str(UserAgentVisitor)
@@ -590,8 +589,7 @@ fn main() -> ExitCode {
         }
     }
 
-    let mut rc = RuntimeConfig::default()
-        .set_asyncio(config.asyncio.unwrap_or(false));
+    let mut rc = RuntimeConfig::default().set_asyncio(config.asyncio.unwrap_or(false));
 
     for c in config.graphql.iter() {
         if !c.enable {
@@ -704,11 +702,7 @@ fn main() -> ExitCode {
 
     if let Some(ref agent_configs) = config.agents {
         let llm_config = config.llm.clone().unwrap_or_default();
-        let port = config
-            .agent_server
-            .as_ref()
-            .map(|s| s.port)
-            .unwrap_or(8080);
+        let port = config.agent_server.as_ref().map(|s| s.port).unwrap_or(8080);
         program = program.command(AgentServeCommand {
             agent_configs: agent_configs.clone(),
             llm_config: llm_config.clone(),

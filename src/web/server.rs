@@ -290,15 +290,12 @@ mod tests {
         let rt = Runtime::new().unwrap();
         let puff_context = RealPuffContext::empty(rt.handle().clone());
 
-        let mut svc = router
-            .into_axum_router(puff_context.clone())
-            .with_state(());
-        let fut = svc
-            .call(
-                AxumRequest::get("http://localhost/")
-                    .body(Body::empty())
-                    .unwrap(),
-            );
+        let mut svc = router.into_axum_router(puff_context.clone()).with_state(());
+        let fut = svc.call(
+            AxumRequest::get("http://localhost/")
+                .body(Body::empty())
+                .unwrap(),
+        );
 
         let result = rt.block_on(fut);
         assert!(result.is_ok());

@@ -7,8 +7,8 @@ use juniper::{
     GraphQLSubscriptionValue, GraphQLType, GraphQLValue, GraphQLValueAsync, InputValue, Registry,
     Value, ValuesStream,
 };
-use pyo3::types::PyDict;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 use crate::errors::{log_puff_error, PuffResult};
 use chrono::{DateTime, Utc};
@@ -480,10 +480,11 @@ impl GraphQLValueAsync<AggroScalarValue> for PuffGqlObject {
                 )
                 .await?;
 
-                for s in res {
-                    return Ok(s);
+                if let Some(value) = res.into_iter().next() {
+                    Ok(value)
+                } else {
+                    Ok(AggroValue::Null)
                 }
-                return Ok(AggroValue::Null);
             };
             let result = log_puff_error("GQL", fut.await);
 
@@ -537,7 +538,9 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                         selection_to_fields(py, field, look_ahead_slice, input_objs, &all_objects)?;
                     let args_dict = PyDict::new(py);
                     for (k, v) in laf.arguments().iter() {
-                        args_dict.set_item(k.as_str(), v).expect("Failed to set dict item");
+                        args_dict
+                            .set_item(k.as_str(), v)
+                            .expect("Failed to set dict item");
                     }
                     let args: PyObject = args_dict.into_py(py);
                     PuffResult::Ok((laf, args, PyDict::new(py).unbind()))
@@ -554,13 +557,9 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                 );
 
                 let py_dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
-                let acceptor_method = Python::with_gil(|py| {
-                    field
-                        .acceptor_method
-                        .as_ref()
-                        .map(|o| o.clone_ref(py))
-                })
-                .expect("Subscription field needs an acceptor");
+                let acceptor_method =
+                    Python::with_gil(|py| field.acceptor_method.as_ref().map(|o| o.clone_ref(py)))
+                        .expect("Subscription field needs an acceptor");
 
                 let python_context = PyContext::new(
                     parents.clone(),
@@ -576,11 +575,7 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                         None,
                     )?;
                 } else {
-                    py_dispatcher.dispatch(
-                        acceptor_method,
-                        (ss, python_context, args),
-                        None,
-                    )?;
+                    py_dispatcher.dispatch(acceptor_method, (ss, python_context, args), None)?;
                 }
 
                 let stream: ValuesStream<AggroScalarValue> =

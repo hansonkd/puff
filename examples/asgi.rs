@@ -26,7 +26,7 @@ fn main() -> ExitCode {
     let rc = RuntimeConfig::default()
         .add_python_path("./examples")
         .set_asyncio(true)
-        .set_global_state_fn(|py| Ok(MyPythonState.into_py(py)));
+        .set_global_state_fn(|py| pyo3::Py::new(py, MyPythonState).map(Into::into));
 
     Program::new("my_first_app")
         .about("This is my first app")

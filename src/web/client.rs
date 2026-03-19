@@ -181,7 +181,10 @@ impl PyHttpClient {
     }
 }
 
-fn build_headers(headers: Option<&Bound<'_, PyDict>>, rb: RequestBuilder) -> PyResult<RequestBuilder> {
+fn build_headers(
+    headers: Option<&Bound<'_, PyDict>>,
+    rb: RequestBuilder,
+) -> PyResult<RequestBuilder> {
     let mut rb = rb;
     if let Some(h) = headers {
         for (k, v) in h.iter() {

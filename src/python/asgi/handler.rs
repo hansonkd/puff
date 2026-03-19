@@ -1,11 +1,10 @@
 use crate::context::with_puff_context;
-use crate::python::{asgi, get_cached_string, PythonDispatcher};
-use asgi::Sender;
+use crate::python::{get_cached_string, PythonDispatcher};
 use axum::body::{Body, Bytes as AxumBytes};
 use axum::handler::Handler;
-use http::header::HeaderName;
 use axum::http::{HeaderValue, Request, StatusCode, Version};
 use axum::response::{IntoResponse, Response};
+use http::header::HeaderName;
 use http_body_util::BodyExt;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -163,10 +162,7 @@ impl SyncReceiver {
                     get_cached_string(py, "type"),
                     get_cached_string(py, "http.request"),
                 )?;
-                scope.set_item(
-                    get_cached_string(py, "body"),
-                    PyBytes::new(py, &bytes[..]),
-                )?;
+                scope.set_item(get_cached_string(py, "body"), PyBytes::new(py, &bytes[..]))?;
             }
             Ok(scope.unbind().into_any())
         })
@@ -340,9 +336,7 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
                             this_response = this_response.status(status);
                             let headers = this_response.headers_mut().unwrap();
 
-                            if let Some(raw) =
-                                dict.get_item(get_cached_string(py, "headers"))?
-                            {
+                            if let Some(raw) = dict.get_item(get_cached_string(py, "headers"))? {
                                 for item in raw.iter()? {
                                     let item = item?;
                                     let (key_obj, val_obj) =
@@ -353,10 +347,9 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
                                         } else {
                                             continue;
                                         };
-                                    let k: &Bound<'_, PyBytes> =
-                                        key_obj.downcast::<PyBytes>().map_err(|_e| {
-                                            anyhow::anyhow!("Invalid asgi header key")
-                                        })?;
+                                    let k: &Bound<'_, PyBytes> = key_obj
+                                        .downcast::<PyBytes>()
+                                        .map_err(|_e| anyhow::anyhow!("Invalid asgi header key"))?;
                                     let v: &Bound<'_, PyBytes> =
                                         val_obj.downcast::<PyBytes>().map_err(|_e| {
                                             anyhow::anyhow!("Invalid asgi header value")
@@ -396,9 +389,7 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
                 while let Some(resp) = http_sender_rx.recv().await {
                     let more_body = match Python::with_gil(|py| {
                         let dict = resp.into_bound(py);
-                        if let Some(value) =
-                            dict.get_item(get_cached_string(py, "type"))?
-                        {
+                        if let Some(value) = dict.get_item(get_cached_string(py, "type"))? {
                             let value: Bound<'_, PyString> = value.downcast()?.clone();
                             let value = value.to_str()?;
                             if value == "http.response.body" {
@@ -409,14 +400,9 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
                                 } else {
                                     false
                                 };
-                                if let Some(raw) =
-                                    dict.get_item(get_cached_string(py, "body"))?
-                                {
+                                if let Some(raw) = dict.get_item(get_cached_string(py, "body"))? {
                                     if let Ok(s) = raw.downcast::<PyBytes>() {
-                                        Ok((
-                                            AxumBytes::copy_from_slice(s.as_bytes()),
-                                            more_body,
-                                        ))
+                                        Ok((AxumBytes::copy_from_slice(s.as_bytes()), more_body))
                                     } else {
                                         Err(AsgiError::ExpectedResponseBody)
                                     }
