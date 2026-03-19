@@ -435,16 +435,18 @@ async fn auth_result(
     root_node: &PuffGraphqlConfig,
     dispatcher: PythonDispatcher,
 ) -> Result<PyObject, Error> {
-    if let Some(auth) = root_node.auth.as_ref().map(|a| Python::with_gil(|py| a.clone_ref(py))) {
-        let headers = Python::with_gil(|py| {
+    // Single with_gil: clone auth + convert headers to Python in one acquisition
+    if let Some((auth, py_headers)) = root_node.auth.as_ref().map(|a| {
+        Python::with_gil(|py| {
+            let auth_clone = a.clone_ref(py);
             let mut d: HashMap<String, PyObject> = HashMap::with_capacity(headers.len());
-            for (hn, hv) in headers {
-                if let Some(hn) = hn {
-                    d.insert(hn.to_string(), PyBytes::new(py, hv.as_bytes()).into_py(py));
-                }
+            for (hn, hv) in headers.iter() {
+                d.insert(hn.to_string(), PyBytes::new(py, hv.as_bytes()).into_py(py));
             }
-            d
-        });
+            (auth_clone, d)
+        })
+    }) {
+        let headers = py_headers;
 
         if root_node.auth_async {
             async {

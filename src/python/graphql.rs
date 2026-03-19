@@ -68,8 +68,13 @@ impl StreamReceiver {
 
 /// Query a graphql schema from Python
 #[pyclass]
-#[derive(Clone)]
 pub struct PythonGraphql(PuffGraphqlConfig);
+
+impl Clone for PythonGraphql {
+    fn clone(&self) -> Self {
+        PythonGraphql(self.0.clone())
+    }
+}
 
 impl ToPyObject for PythonGraphql {
     fn to_object(&self, py: Python<'_>) -> PyObject {
