@@ -16,9 +16,12 @@ import contextvars
 import dataclasses
 import concurrent.futures
 from importlib import import_module
+from pkgutil import extend_path
 from typing import Any, Union
 from threading import Thread, local
 import functools
+
+__path__ = extend_path(__path__, __name__)
 
 thread_local = local()
 ASYNCIO = object()

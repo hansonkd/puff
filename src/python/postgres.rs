@@ -493,9 +493,7 @@ pub async fn execute_rust(
 pub async fn set_autocommit(conn: &Connection, value: bool) {
     let sender = ensure_sender(&conn.pool, &conn.sender).await;
     let (tx, rx) = oneshot::channel();
-    let _ = sender
-        .send(DbOp::SetAutoCommit { value, reply: tx })
-        .await;
+    let _ = sender.send(DbOp::SetAutoCommit { value, reply: tx }).await;
     // Best-effort: ignore errors (e.g. task dropped)
     let _ = rx.await;
 }

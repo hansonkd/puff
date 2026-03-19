@@ -1,0 +1,7 @@
+dotenv = false
+add_cwd_to_path = true
+schema = "bench.puff_graphql_pg_bench_schema.Schema"
+
+[[postgres]]
+name = "default"
+pool_size = 32

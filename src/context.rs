@@ -204,8 +204,7 @@ impl RealPuffContext {
     pub fn redis_named(&self, key: &str) -> RedisClient {
         self.redis
             .get(key)
-            .unwrap_or_else(|| panic!("Redis named {} is not configured for this runtime.",
-                key))
+            .unwrap_or_else(|| panic!("Redis named {} is not configured for this runtime.", key))
             .clone()
     }
 
@@ -223,8 +222,7 @@ impl RealPuffContext {
     pub fn postgres_named(&self, key: &str) -> PostgresClient {
         self.postgres
             .get(key)
-            .unwrap_or_else(|| panic!("Postgres named {} is not configured for this runtime.",
-                key))
+            .unwrap_or_else(|| panic!("Postgres named {} is not configured for this runtime.", key))
             .clone()
     }
 
@@ -242,8 +240,7 @@ impl RealPuffContext {
     pub fn gql_named(&self, key: &str) -> PuffGraphqlConfig {
         self.gql_roots
             .get(key)
-            .unwrap_or_else(|| panic!("Graphql named {} is not configured for this runtime.",
-                key))
+            .unwrap_or_else(|| panic!("Graphql named {} is not configured for this runtime.", key))
             .clone()
     }
 }

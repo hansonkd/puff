@@ -30,11 +30,11 @@ impl AsyncReturn {
                 Some(e) => {
                     let _: () = sender.send(Err(PyErr::from_value(e))).unwrap_or(());
                     Ok(())
-                },
+                }
                 None => {
                     let _: () = sender.send(Ok(value)).unwrap_or(());
                     Ok(())
-                },
+                }
             },
             None => Err(PyException::new_err("Already used AsyncReturn")),
         }

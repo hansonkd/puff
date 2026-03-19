@@ -194,6 +194,7 @@ sys.path[:0] = new_sys_path
 
 pub(crate) fn bootstrap_puff_globals(config: RuntimeConfig) -> PuffResult<()> {
     let global_state = config.global_state()?;
+    let bundled_puff_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("puff_py");
     Python::with_gil(|py| {
         if let Ok(v) = std::env::var("VIRTUAL_ENV") {
             let locals = [("abs_file", format!("{}/bin/activate", v))].into_py_dict(py)?;
@@ -202,6 +203,12 @@ pub(crate) fn bootstrap_puff_globals(config: RuntimeConfig) -> PuffResult<()> {
 
         let sys_path = py.import("sys")?.getattr("path")?;
         let mut paths = config.python_paths();
+        if bundled_puff_path.is_dir() {
+            let bundled_puff_path = bundled_puff_path.to_string_lossy().into_owned();
+            if !paths.iter().any(|p| p.as_str() == bundled_puff_path) {
+                paths.push(bundled_puff_path.into());
+            }
+        }
         paths.reverse();
         for t in paths {
             info!("Adding {} to beginning of PYTHONPATH", t);
@@ -377,9 +384,11 @@ impl PythonDispatcher {
             let returner = AsyncReturn::new(Some(sender));
             self.asyncio_obj
                 .as_ref()
-                .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    "AsyncIO not enabled in Puff RuntimeConfig. Set asyncio=true in puff.toml."
-                ))?
+                .ok_or_else(|| {
+                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                        "AsyncIO not enabled in Puff RuntimeConfig. Set asyncio=true in puff.toml.",
+                    )
+                })?
                 .call_method1(
                     py,
                     "spawn",
@@ -406,9 +415,11 @@ impl PythonDispatcher {
         let returner = AsyncReturn::new(Some(sender));
         self.asyncio_obj
             .as_ref()
-            .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                "AsyncIO not enabled in Puff RuntimeConfig. Set asyncio=true in puff.toml."
-            ))?
+            .ok_or_else(|| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    "AsyncIO not enabled in Puff RuntimeConfig. Set asyncio=true in puff.toml.",
+                )
+            })?
             .call_method1(py, "spawn_coro", (function, returner))?;
         Ok(rec)
     }

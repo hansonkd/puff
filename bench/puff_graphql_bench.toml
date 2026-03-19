@@ -1,0 +1,7 @@
+dotenv = false
+add_cwd_to_path = true
+
+[[graphql]]
+name = "default"
+schema = "bench.puff_graphql_bench_schema.PuffBenchSchema"
+url = "/graphql"

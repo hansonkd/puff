@@ -64,15 +64,13 @@ fn default_agents() -> AgentCapability {
 // SqlCapability
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum SqlCapability {
     None,
     ReadOnly,
     #[default]
     ReadWrite,
 }
-
 
 impl Serialize for SqlCapability {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
@@ -102,15 +100,13 @@ impl<'de> Deserialize<'de> for SqlCapability {
 // HttpCapability
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum HttpCapability {
     None,
     Allowlist(Vec<String>),
     #[default]
     Any,
 }
-
 
 impl Serialize for HttpCapability {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
@@ -146,15 +142,17 @@ impl<'de> Deserialize<'de> for HttpCapability {
 // FsCapability
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum FsCapability {
     #[default]
     None,
-    ReadOnly { read_only: Vec<PathBuf> },
-    ReadWrite { read_write: Vec<PathBuf> },
+    ReadOnly {
+        read_only: Vec<PathBuf>,
+    },
+    ReadWrite {
+        read_write: Vec<PathBuf>,
+    },
 }
-
 
 impl Serialize for FsCapability {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
@@ -212,15 +210,13 @@ impl<'de> Deserialize<'de> for FsCapability {
 // ToolCapability
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum ToolCapability {
     None,
     Specific(Vec<String>),
     #[default]
     All,
 }
-
 
 impl Serialize for ToolCapability {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
@@ -256,15 +252,13 @@ impl<'de> Deserialize<'de> for ToolCapability {
 // AgentCapability
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum AgentCapability {
     None,
     Specific(Vec<String>),
     #[default]
     All,
 }
-
 
 impl Serialize for AgentCapability {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {

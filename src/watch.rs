@@ -67,9 +67,7 @@ fn main() {
         );
 
     let args = command.get_matches();
-    let should_watch = args
-        .get_one::<bool>("watch").copied()
-        .unwrap_or(true);
+    let should_watch = args.get_one::<bool>("watch").copied().unwrap_or(true);
     let dir = args.get_one::<String>("dir").unwrap().clone();
     let num = args.get_one::<usize>("num").unwrap();
     let args = args.get_raw("args").unwrap();

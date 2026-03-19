@@ -149,8 +149,8 @@ impl SyncReceiver {
 
         let result: (Option<AxumBytes>, bool) = Python::with_gil(|py| {
             py.allow_threads(|| {
-                orx.blocking_recv().map_err(|_|
-                    pyo3::exceptions::PyRuntimeError::new_err("Receive cancelled"))
+                orx.blocking_recv()
+                    .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Receive cancelled"))
             })
         })?;
 
@@ -304,7 +304,14 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
 
                     // Get or create a thread-local event loop
                     let loop_obj = match asyncio.call_method0("get_event_loop") {
-                        Ok(l) if !l.call_method0("is_closed").and_then(|r| r.extract::<bool>()).unwrap_or(true) => l,
+                        Ok(l)
+                            if !l
+                                .call_method0("is_closed")
+                                .and_then(|r| r.extract::<bool>())
+                                .unwrap_or(true) =>
+                        {
+                            l
+                        }
                         _ => {
                             let new_loop = asyncio.call_method0("new_event_loop")?;
                             asyncio.call_method1("set_event_loop", (&new_loop,))?;
@@ -321,14 +328,15 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
                         }
                     }
                 })
-            }).await;
+            })
+            .await;
 
             // Flatten: JoinError (panic/cancel) -> AsgiError, or inner error
             let call_result: Result<(), AsgiError> = match call_result {
                 Ok(inner) => inner,
-                Err(e) => Err(AsgiError::PyErr(
-                    pyo3::exceptions::PyRuntimeError::new_err(format!("ASGI task panicked: {}", e))
-                )),
+                Err(e) => Err(AsgiError::PyErr(pyo3::exceptions::PyRuntimeError::new_err(
+                    format!("ASGI task panicked: {}", e),
+                ))),
             };
 
             if let Err(e) = call_result {
@@ -451,7 +459,7 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
                         }
                         Err(_e) => {
                             tracing::error!("Failed to create response: {:?}", _e);
-                            return ;
+                            return;
                         }
                     };
                     if !more_body {

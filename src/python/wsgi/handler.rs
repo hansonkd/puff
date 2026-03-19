@@ -141,7 +141,10 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
             {
                 body_bytes
             } else {
-                error!("Could not extract request body (exceeds {} byte limit).", MAX_BODY_SIZE);
+                error!(
+                    "Could not extract request body (exceeds {} byte limit).",
+                    MAX_BODY_SIZE
+                );
                 return WsgiError::ExpectedResponseBody.into_response();
             };
 
@@ -305,18 +308,15 @@ impl<S> Handler<WsgiHandler, S> for WsgiHandler {
                             let iter_py = iterator.bind(py);
                             if let Ok(iter) = iter_py.iter() {
                                 for item in iter.flatten() {
-                                    let chunk =
-                                        if let Ok(bytes) = item.downcast::<PyBytes>() {
-                                            Some(axum::body::Bytes::copy_from_slice(
-                                                bytes.as_bytes(),
-                                            ))
-                                        } else if let Ok(s) = item.downcast::<PyString>() {
-                                            Some(axum::body::Bytes::copy_from_slice(
-                                                s.to_str().unwrap_or("").as_bytes(),
-                                            ))
-                                        } else {
-                                            None
-                                        };
+                                    let chunk = if let Ok(bytes) = item.downcast::<PyBytes>() {
+                                        Some(axum::body::Bytes::copy_from_slice(bytes.as_bytes()))
+                                    } else if let Ok(s) = item.downcast::<PyString>() {
+                                        Some(axum::body::Bytes::copy_from_slice(
+                                            s.to_str().unwrap_or("").as_bytes(),
+                                        ))
+                                    } else {
+                                        None
+                                    };
                                     if let Some(chunk) = chunk {
                                         if body_tx.blocking_send(Ok(chunk)).is_err() {
                                             break; // client disconnected

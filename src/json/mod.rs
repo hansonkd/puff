@@ -303,22 +303,17 @@ pub fn run_loads(
                 .map_err(|e| JSONDecodeError::new_err((e.to_string(), string.clone(), 0)))?;
             Ok(py_object)
         }
-        Err(e) => {
-            convert_special_floats(py, string.as_bytes(), &parse_int).map_err(|err| {
-                if e.is_syntax() {
-                    JSONDecodeError::new_err((
-                        format!("Value: {:?}, Error: {:?}", string, err),
-                        string.clone(),
-                        0,
-                    ))
-                } else {
-                    PyValueError::new_err(format!(
-                        "Value: {:?}, Error: {:?}",
-                        string, e
-                    ))
-                }
-            })
-        }
+        Err(e) => convert_special_floats(py, string.as_bytes(), &parse_int).map_err(|err| {
+            if e.is_syntax() {
+                JSONDecodeError::new_err((
+                    format!("Value: {:?}, Error: {:?}", string, err),
+                    string.clone(),
+                    0,
+                ))
+            } else {
+                PyValueError::new_err(format!("Value: {:?}, Error: {:?}", string, e))
+            }
+        }),
     }
 }
 
@@ -337,22 +332,17 @@ pub fn run_load_bytes(
                 .map_err(|e| JSONDecodeError::new_err((e.to_string(), string.to_vec(), 0)))?;
             Ok(py_object)
         }
-        Err(e) => {
-            convert_special_floats(py, string, &parse_int).map_err(|err| {
-                if e.is_syntax() {
-                    JSONDecodeError::new_err((
-                        format!("Value: {:?}, Error: {:?}", string, err),
-                        string.to_vec(),
-                        0,
-                    ))
-                } else {
-                    PyValueError::new_err(format!(
-                        "Value: {:?}, Error: {:?}",
-                        string, e
-                    ))
-                }
-            })
-        }
+        Err(e) => convert_special_floats(py, string, &parse_int).map_err(|err| {
+            if e.is_syntax() {
+                JSONDecodeError::new_err((
+                    format!("Value: {:?}, Error: {:?}", string, err),
+                    string.to_vec(),
+                    0,
+                ))
+            } else {
+                PyValueError::new_err(format!("Value: {:?}, Error: {:?}", string, e))
+            }
+        }),
     }
 }
 
@@ -371,10 +361,12 @@ pub fn loads_impl(
     match string_result {
         Ok(string) => run_loads(py, string, parse_float, parse_int),
         _ => {
-            let bytes: Vec<u8> = s.extract(py).map_err(|e| PyTypeError::new_err(format!(
+            let bytes: Vec<u8> = s.extract(py).map_err(|e| {
+                PyTypeError::new_err(format!(
                     "the JSON object must be str, bytes or bytearray, got: {:?}",
                     e
-                )))?;
+                ))
+            })?;
             let mut deserializer = serde_json::Deserializer::from_slice(&bytes);
             let seed = HyperJsonValue::new(py, &parse_float, &parse_int);
             match seed.deserialize(&mut deserializer) {
@@ -384,12 +376,10 @@ pub fn loads_impl(
                         .map_err(|e| JSONDecodeError::new_err((e.to_string(), bytes.clone(), 0)))?;
                     Ok(py_object)
                 }
-                Err(e) => {
-                    Err(PyTypeError::new_err(format!(
-                        "the JSON object must be str, bytes or bytearray, got: {:?}",
-                        e
-                    )))
-                }
+                Err(e) => Err(PyTypeError::new_err(format!(
+                    "the JSON object must be str, bytes or bytearray, got: {:?}",
+                    e
+                ))),
             }
         }
     }

@@ -263,10 +263,7 @@ impl RunnableCommand for SkillListCommand {
     fn make_runnable(&mut self, _args: &ArgMatches, _context: PuffContext) -> Result<Runnable> {
         let skill_paths = self.skill_paths.clone();
         Ok(Runnable::new(async move {
-            println!(
-                "{:<20} {:<12} {:<8} Source",
-                "Name", "Version", "Tools"
-            );
+            println!("{:<20} {:<12} {:<8} Source", "Name", "Version", "Tools");
             println!("{}", "\u{2500}".repeat(60));
             for skill_path in &skill_paths {
                 let path = std::path::Path::new(skill_path);
