@@ -19,6 +19,8 @@ pub enum OutputFormat {
 pub enum ToolExecutor {
     Python { module: String, function: String },
     Cli { command: String, args_template: Vec<String>, output_format: OutputFormat },
+    /// Execute a compiled `.wasm` module via wasmtime (requires `wasm-tools` feature).
+    Wasm { module_path: std::path::PathBuf },
     Noop,
 }
 

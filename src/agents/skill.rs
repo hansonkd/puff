@@ -30,7 +30,10 @@ struct SkillMeta {
 struct SkillToolToml {
     name: String,
     description: String,
-    command: String,
+    /// CLI command to run (mutually exclusive with `wasm`).
+    command: Option<String>,
+    /// Path to a `.wasm` file (mutually exclusive with `command`).
+    wasm: Option<String>,
     #[serde(default)]
     args: HashMap<String, ArgDef>,
     #[serde(default = "default_output")]
@@ -66,7 +69,10 @@ struct SkillPermissionsToml {
 pub struct SkillTool {
     pub name: String,
     pub description: String,
-    pub command: String,
+    /// CLI command string, if this is a CLI tool.
+    pub command: Option<String>,
+    /// Path to a `.wasm` module, if this is a WASM tool.
+    pub wasm_path: Option<std::path::PathBuf>,
     /// Argument name -> JSON type string
     pub args: HashMap<String, String>,
     pub output_format: OutputFormat,
@@ -104,6 +110,8 @@ impl Skill {
                 message: format!("TOML parse error: {e}"),
             })?;
 
+        let source_path = std::path::Path::new(source_dir);
+
         let tools = parsed
             .tools
             .into_iter()
@@ -120,10 +128,16 @@ impl Skill {
                     .map(|(k, v)| (k, v.type_))
                     .collect::<HashMap<String, String>>();
 
+                // Resolve the WASM path relative to the skill's source directory.
+                let wasm_path = t
+                    .wasm
+                    .map(|w| source_path.join(w));
+
                 SkillTool {
                     name: t.name,
                     description: t.description,
                     command: t.command,
+                    wasm_path,
                     args,
                     output_format,
                     requires_approval: t.requires_approval,
@@ -224,8 +238,20 @@ impl Skill {
                 });
 
                 let requires_approval = t.requires_approval;
-                let command = t.command.clone();
                 let output_format = t.output_format.clone();
+
+                // Choose executor: WASM takes priority when both are set.
+                let executor = if let Some(module_path) = t.wasm_path.clone() {
+                    ToolExecutor::Wasm { module_path }
+                } else if let Some(command) = t.command.clone() {
+                    ToolExecutor::Cli {
+                        command,
+                        args_template: Vec::new(),
+                        output_format,
+                    }
+                } else {
+                    ToolExecutor::Noop
+                };
 
                 RegisteredTool {
                     definition: ToolDefinition {
@@ -233,11 +259,7 @@ impl Skill {
                         description: t.description,
                         input_schema,
                     },
-                    executor: ToolExecutor::Cli {
-                        command,
-                        args_template: Vec::new(),
-                        output_format,
-                    },
+                    executor,
                     requires_approval,
                     timeout_ms: 30_000,
                 }
@@ -328,7 +350,8 @@ deny = ["gh pr close *"]
         assert_eq!(skill.tools.len(), 2);
 
         let pr_list = skill.tools.iter().find(|t| t.name == "gh_pr_list").unwrap();
-        assert_eq!(pr_list.command, "gh pr list");
+        assert_eq!(pr_list.command.as_deref(), Some("gh pr list"));
+        assert!(pr_list.wasm_path.is_none());
         assert!(!pr_list.requires_approval);
         assert!(pr_list.args.contains_key("repo"));
 
