@@ -306,31 +306,31 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
                                     if let Some(raw) =
                                         dict.get_item(get_cached_string(py, "headers"))?
                                     {
-                                        let value: Bound<'_, PyMapping> = raw
-                                            .downcast()
-                                            .map_err(|_e| anyhow!("Invalid asgi headers value"))?
-                                            .clone();
-                                        for item in value.iter()? {
-                                            if let Ok(t) = item?.downcast::<PyTuple>() {
-                                                let k: Bound<'_, PyBytes> = t
-                                                    .get_item(0)?
-                                                    .downcast::<PyBytes>()
-                                                    .map_err(|_e| {
-                                                        anyhow!("Invalid asgi header key value")
-                                                    })?
-                                                    .clone();
-                                                let v: Bound<'_, PyBytes> = t
-                                                    .get_item(1)?
-                                                    .downcast::<PyBytes>()
-                                                    .map_err(|_e| {
-                                                        anyhow!("Invalid asgi header value value")
-                                                    })?
-                                                    .clone();
-                                                headers.insert(
-                                                    HeaderName::from_bytes(k.as_bytes())?,
-                                                    HeaderValue::from_bytes(v.as_bytes())?,
-                                                );
-                                            }
+                                        for item in raw.iter()? {
+                                            let item = item?;
+                                            // ASGI spec: headers are list of 2-element [name, value] sequences
+                                            // Accept both PyTuple and PyList
+                                            let (key_obj, val_obj) = if let Ok(t) = item.downcast::<PyTuple>() {
+                                                (t.get_item(0)?, t.get_item(1)?)
+                                            } else if let Ok(l) = item.downcast::<PyList>() {
+                                                (l.get_item(0)?, l.get_item(1)?)
+                                            } else {
+                                                continue;
+                                            };
+                                            let k: &Bound<'_, PyBytes> = key_obj
+                                                .downcast::<PyBytes>()
+                                                .map_err(|_e| {
+                                                    anyhow!("Invalid asgi header key")
+                                                })?;
+                                            let v: &Bound<'_, PyBytes> = val_obj
+                                                .downcast::<PyBytes>()
+                                                .map_err(|_e| {
+                                                    anyhow!("Invalid asgi header value")
+                                                })?;
+                                            headers.insert(
+                                                HeaderName::from_bytes(k.as_bytes())?,
+                                                HeaderValue::from_bytes(v.as_bytes())?,
+                                            );
                                         }
                                     };
 

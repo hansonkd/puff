@@ -16,6 +16,16 @@ def fibonacci(n):
 
 
 async def application(scope, receive, send):
+    if scope["type"] == "lifespan":
+        while True:
+            message = await receive()
+            if message["type"] == "lifespan.startup":
+                await send({"type": "lifespan.startup.complete"})
+            elif message["type"] == "lifespan.shutdown":
+                await send({"type": "lifespan.shutdown.complete"})
+                return
+        return
+
     if scope["type"] != "http":
         return
 
