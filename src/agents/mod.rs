@@ -8,6 +8,7 @@ pub mod memory;
 pub mod orchestration;
 pub mod provider;
 pub mod python_bindings;
+pub mod sandbox;
 pub mod server;
 pub mod skill;
 pub mod streaming;
