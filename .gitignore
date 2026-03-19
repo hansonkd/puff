@@ -21,3 +21,4 @@ __pycache__/
 .venv
 .idea/vcs.xml
 .DS_Store
+.claude/
