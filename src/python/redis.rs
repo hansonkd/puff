@@ -143,7 +143,7 @@ impl PythonRedis {
     ) -> PyResult<PyObject> {
         let mut vec = Vec::with_capacity(keys.len());
         for key in keys.iter() {
-            vec.push(python::py_obj_to_bytes(&key.into())?);
+            vec.push(python::py_obj_to_bytes(&key)?);
         }
         self.run_command(py, return_fun, Cmd::get(vec))
     }

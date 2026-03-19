@@ -420,12 +420,12 @@ impl Program {
                     // let result = ctx.start()?.await;
                     tokio::select! {
                         res = runnable.0 => {
-                            return res
+                            res
                         }
                         _ = shutdown => {
                             // The shutdown signal has been received.
                             info!("shutting down");
-                            return Ok(ExitCode::SUCCESS)
+                            Ok(ExitCode::SUCCESS)
                         }
                     }
                 };

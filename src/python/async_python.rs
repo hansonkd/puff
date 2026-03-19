@@ -27,8 +27,14 @@ impl AsyncReturn {
     ) -> PyResult<()> {
         match self.0.take() {
             Some(sender) => match exception {
-                Some(e) => Ok(sender.send(Err(PyErr::from_value(e))).unwrap_or(())),
-                None => Ok(sender.send(Ok(value)).unwrap_or(())),
+                Some(e) => {
+                    let _: () = sender.send(Err(PyErr::from_value(e))).unwrap_or(());
+                    Ok(())
+                },
+                None => {
+                    let _: () = sender.send(Ok(value)).unwrap_or(());
+                    Ok(())
+                },
             },
             None => Err(PyException::new_err("Already used AsyncReturn")),
         }

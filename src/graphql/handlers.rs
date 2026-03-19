@@ -7,7 +7,6 @@ use axum::Json;
 use juniper::{
     BoxFuture, GraphQLSubscriptionType, GraphQLTypeAsync, InputValue, RootNode, ScalarValue,
 };
-use std::collections::HashMap;
 use std::convert::Infallible;
 use std::future;
 
@@ -87,12 +86,9 @@ impl TryFrom<SingleRequestBody> for GraphQLRequest<AggroScalarValue> {
     type Error = serde_json::Error;
 
     fn try_from(value: SingleRequestBody) -> Result<GraphQLRequest<AggroScalarValue>, Self::Error> {
-        // Convert Map<String, Value> to InputValue with the help of serde_json
         let variables: Option<InputValue<AggroScalarValue>> = value
             .variables
-            .map(|vars| serde_json::to_string(&vars))
-            .transpose()?
-            .map(|s| serde_json::from_str(&s))
+            .map(|vars| serde_json::from_value(serde_json::Value::Object(vars)))
             .transpose()?;
 
         Ok(GraphQLRequest::new(
@@ -376,7 +372,7 @@ where
 pub fn handle_graphql(
 ) -> impl FnOnce(HeaderMap, JuniperPuffRequest) -> BoxFuture<'static, Response> + Clone + Send + 'static
 {
-    return handle_graphql_named("default");
+    handle_graphql_named("default")
 }
 
 pub fn handle_graphql_named<T: Into<Text>>(
@@ -422,7 +418,7 @@ fn auth_result_to_response(v: &PyObject) -> Result<Option<Response<String>>, Err
             let headers = header_v
                 .bind(py)
                 .downcast::<PyDict>()
-                .map_err(|e| anyhow::anyhow!("Expected headers to be a dict: {}", e.to_string()))?;
+                .map_err(|e| anyhow::anyhow!("Expected headers to be a dict: {}", e))?;
             let mut r = Response::builder().status(status);
             for (hn, hv) in headers.iter() {
                 let header_name: String = hn.extract()?;
@@ -440,28 +436,25 @@ async fn auth_result(
     root_node: &PuffGraphqlConfig,
     dispatcher: PythonDispatcher,
 ) -> Result<PyObject, Error> {
-    // Single with_gil: clone auth + convert headers to Python in one acquisition
-    if let Some((auth, py_headers)) = root_node.auth.as_ref().map(|a| {
-        Python::with_gil(|py| {
-            let auth_clone = a.clone_ref(py);
-            let mut d: HashMap<String, PyObject> = HashMap::with_capacity(headers.len());
+    if let Some(auth) = root_node.auth.as_ref() {
+        let (auth, py_headers) = Python::with_gil(|py| -> PyResult<(PyObject, PyObject)> {
+            let auth_clone = auth.clone_ref(py);
+            let headers_dict = PyDict::new(py);
             for (hn, hv) in headers.iter() {
-                d.insert(hn.to_string(), PyBytes::new(py, hv.as_bytes()).into_py(py));
+                headers_dict.set_item(hn.to_string(), PyBytes::new(py, hv.as_bytes()))?;
             }
-            (auth_clone, d)
-        })
-    }) {
-        let headers = py_headers;
+            Ok((auth_clone, headers_dict.into_py(py)))
+        })?;
 
         if root_node.auth_async {
             async {
                 Ok(dispatcher
-                    .dispatch_asyncio(auth, (headers,), None)?
+                    .dispatch_asyncio(auth, (py_headers,), None)?
                     .await??)
             }
             .await
         } else {
-            async { Ok(dispatcher.dispatch1(auth, (headers,))?.await??) }.await
+            async { Ok(dispatcher.dispatch1(auth, (py_headers,))?.await??) }.await
         }
     } else {
         Ok(Python::with_gil(|py| py.None()))
@@ -512,14 +505,14 @@ pub fn handle_subscriptions_named<N: Into<Text>>(
                     }
 
                     let new_ctx = root_node.new_context(Some(v));
-                    let s = ws
+                    
+                    ws
                         .protocols(["graphql-ws"])
                         .max_frame_size(1024)
                         .max_message_size(1024)
                         .on_upgrade(move |socket| {
                             handle_graphql_socket(socket, root_node.root(), new_ctx)
-                        });
-                    s
+                        })
                 }
                 Err(_e) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal Error").into_response(),
             }

@@ -81,6 +81,12 @@ impl<
 /// Run Puff runtime until terminated
 pub struct WaitForever;
 
+impl Default for WaitForever {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WaitForever {
     pub fn new() -> Self {
         Self
@@ -162,8 +168,8 @@ impl HttpServerConfig {
         let reuse_port = args.get_one::<bool>("reuse-port").unwrap();
 
         Self {
-            socket_addr: socket_addr.clone(),
-            reuse_port: reuse_port.clone(),
+            socket_addr: *socket_addr,
+            reuse_port: *reuse_port,
         }
     }
 }

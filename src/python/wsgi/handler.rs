@@ -86,9 +86,9 @@ impl<'a, 'py> From<DowncastError<'a, 'py>> for WsgiError {
     }
 }
 
-impl Into<Error> for WsgiError {
-    fn into(self) -> Error {
-        anyhow!("Error with response {:?}", self)
+impl From<WsgiError> for Error {
+    fn from(val: WsgiError) -> Self {
+        anyhow!("Error with response {:?}", val)
     }
 }
 

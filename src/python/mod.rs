@@ -45,7 +45,7 @@ pub mod wsgi;
 thread_local! {
     static CACHED_STRINGS: RefCell<HashMap<&'static str, Py<PyString>>> = RefCell::new(HashMap::new());
     static CACHED_IMPORTED_OBJS: RefCell<HashMap<Text, PyObject>> = RefCell::new(HashMap::new());
-    static CACHED_PATH_IMPORTER: RefCell<Option<PyObject>> = RefCell::new(None);
+    static CACHED_PATH_IMPORTER: RefCell<Option<PyObject>> = const { RefCell::new(None) };
 }
 
 pub fn get_cached_string<'a>(py: Python<'a>, k: &'static str) -> Py<PyString> {
@@ -167,7 +167,7 @@ pub fn log_traceback_with_label(label: &str, e: &PyErr) {
     });
 }
 
-const ACTIVATE_THIS: &'static std::ffi::CStr = c"
+const ACTIVATE_THIS: &std::ffi::CStr = c"
 import sys
 import os
 
@@ -425,7 +425,7 @@ pub fn py_obj_to_bytes<'py>(val: &Bound<'py, PyAny>) -> PyResult<Vec<u8>> {
     } else {
         Err(PyTypeError::new_err(format!(
             "Expected str or bytes, got {}",
-            val.to_string()
+            val
         )))
     }
 }

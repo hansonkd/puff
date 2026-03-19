@@ -220,7 +220,7 @@ impl RunnableCommand for AgentListCommand {
     fn make_runnable(&mut self, _args: &ArgMatches, _context: PuffContext) -> Result<Runnable> {
         let configs = self.agent_configs.clone();
         Ok(Runnable::new(async move {
-            println!("{:<20} {:<30} {}", "Name", "Model", "Skills");
+            println!("{:<20} {:<30} Skills", "Name", "Model");
             println!("{}", "\u{2500}".repeat(70));
             for c in &configs {
                 let skills = if c.skills.is_empty() {
@@ -264,8 +264,8 @@ impl RunnableCommand for SkillListCommand {
         let skill_paths = self.skill_paths.clone();
         Ok(Runnable::new(async move {
             println!(
-                "{:<20} {:<12} {:<8} {}",
-                "Name", "Version", "Tools", "Source"
+                "{:<20} {:<12} {:<8} Source",
+                "Name", "Version", "Tools"
             );
             println!("{}", "\u{2500}".repeat(60));
             for skill_path in &skill_paths {

@@ -202,7 +202,7 @@ impl UtcDateTime {
         Self(dt)
     }
     pub fn to_chrono(&self) -> DateTime<Utc> {
-        self.0.clone()
+        self.0
     }
 }
 

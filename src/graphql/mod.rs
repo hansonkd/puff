@@ -46,7 +46,7 @@ impl Clone for PuffGraphqlConfig {
 
 impl PuffGraphqlConfig {
     pub fn root(&self) -> PuffGraphqlRoot {
-        return self.root.clone();
+        self.root.clone()
     }
     pub fn new_context(&self, auth: Option<PyObject>) -> AggroContext {
         if let Some(db) = self.db.clone() {

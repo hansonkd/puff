@@ -55,7 +55,6 @@ impl Router {
         // Parse the first token-like integer from the response text.
         let index: usize = response
             .text
-            .trim()
             .split_whitespace()
             .next()
             .and_then(|s| s.parse().ok())

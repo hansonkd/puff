@@ -101,6 +101,15 @@ where
     }
 }
 
+impl<S> Default for Router<S>
+where
+    S: Send + Sync + Default + Clone + 'static,
+ {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<S> Router<S>
 where
     S: Send + Sync + Default + Clone + 'static,

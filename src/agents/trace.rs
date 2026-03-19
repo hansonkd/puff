@@ -104,7 +104,7 @@ pub async fn save_trace(client: &tokio_postgres::Client, trace: &Trace) -> Resul
                     .and_then(|c| Uuid::parse_str(c).ok()),
                 &trace_json,
                 &(trace.total_latency_ms as i32),
-                &(trace.total_cost_usd as f64),
+                &{ trace.total_cost_usd },
             ],
         )
         .await

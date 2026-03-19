@@ -20,7 +20,7 @@ impl Puff for RedisClient {}
 
 impl RedisClient {
     pub fn pool(&self) -> Pool<RedisConnectionManager> {
-        return self.client.clone();
+        self.client.clone()
     }
 }
 

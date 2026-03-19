@@ -40,7 +40,7 @@ pub struct WSGIServerCommand {
 impl WSGIServerCommand {
     pub fn new<M: Into<Text>>(app_path: M) -> Self {
         Self {
-            router_fn: Some(Box::new(|| Router::new())),
+            router_fn: Some(Box::new(Router::new)),
             app_path: app_path.into(),
         }
     }

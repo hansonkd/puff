@@ -208,7 +208,7 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
             let mut body = body;
             while let Some(frame_result) = body.frame().await {
                 if let Ok(frame) = frame_result {
-                    if let Some(data) = frame.into_data().ok() {
+                    if let Ok(data) = frame.into_data() {
                         let _ = receiver_tx.send(data);
                     }
                 }
@@ -425,7 +425,7 @@ impl<S> Handler<AsgiHandler, S> for AsgiHandler {
                         }
                         Err(_e) => {
                             tracing::error!("Failed to create response: {:?}", _e);
-                            return ();
+                            return ;
                         }
                     };
                     if !more_body {

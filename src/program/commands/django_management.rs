@@ -14,6 +14,12 @@ use pyo3::types::PyDict;
 #[derive(Clone)]
 pub struct DjangoManagementCommand {}
 
+impl Default for DjangoManagementCommand {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DjangoManagementCommand {
     pub fn new() -> Self {
         Self {}

@@ -23,7 +23,7 @@ impl Puff for PostgresClient {}
 
 impl PostgresClient {
     pub fn pool(&self) -> Pool<PostgresConnectionManager<NoTls>> {
-        return self.client.clone();
+        self.client.clone()
     }
 }
 
