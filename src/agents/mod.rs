@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod capabilities;
 pub mod conversation;
 pub mod error;
 pub mod eval;
@@ -14,6 +15,7 @@ pub mod tool;
 pub mod trace;
 
 pub use agent::{Agent, AgentConfig};
+pub use capabilities::AgentCapabilities;
 pub use conversation::Conversation;
 pub use error::AgentError;
 pub use llm::{LlmClient, LlmConfig, LlmRequest, LlmResponse, Message, Role};
