@@ -7,6 +7,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
 
 use anyhow::Error;
+use async_graphql_axum::GraphQLResponse;
 use std::future;
 use std::sync::Arc;
 
@@ -92,7 +93,7 @@ impl From<GetQueryVariables> for PuffGraphqlRequest {
         if let Some(var_str) = value.variables {
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&var_str) {
                 let variables = async_graphql::Variables::from_json(val);
-                    request = request.variables(variables);
+                request = request.variables(variables);
             }
         }
         PuffGraphqlRequest(request)
@@ -111,11 +112,10 @@ impl<S: Send + Sync> FromRequest<S> for PuffGraphqlRequest {
 
         match (req.method().clone(), content_type.as_deref()) {
             (Method::GET, _) => {
-                let query_vars =
-                    axum::extract::Query::<GetQueryVariables>::from_request(req, &())
-                        .await
-                        .map(|result| result.0)
-                        .map_err(|_err| (StatusCode::BAD_REQUEST, "Request not valid"))?;
+                let query_vars = axum::extract::Query::<GetQueryVariables>::from_request(req, &())
+                    .await
+                    .map(|result| result.0)
+                    .map_err(|_err| (StatusCode::BAD_REQUEST, "Request not valid"))?;
                 Ok(PuffGraphqlRequest::from(query_vars))
             }
             (Method::POST, Some("application/json")) => {
@@ -174,9 +174,7 @@ async fn execute_gql_request(
         }
     }
 
-    let json_response = serde_json::to_value(&response).unwrap_or(serde_json::Value::Null);
-
-    Json(json_response).into_response()
+    GraphQLResponse::from(response).into_response()
 }
 
 pub fn handle_graphql(
@@ -272,8 +270,7 @@ async fn auth_result(
 }
 
 #[cfg(not(Py_GIL_DISABLED))]
-pub fn handle_subscriptions(
-) -> impl FnOnce(
+pub fn handle_subscriptions() -> impl FnOnce(
     HeaderMap,
     axum::extract::ws::WebSocketUpgrade,
     (),
@@ -284,8 +281,7 @@ pub fn handle_subscriptions(
 }
 
 #[cfg(Py_GIL_DISABLED)]
-pub fn handle_subscriptions(
-) -> impl FnOnce(
+pub fn handle_subscriptions() -> impl FnOnce(
     HeaderMap,
     axum::extract::ws::WebSocketUpgrade,
     (),
@@ -340,7 +336,7 @@ pub fn handle_subscriptions_named<N: Into<Text>>(
                     ws.protocols(["graphql-transport-ws", "graphql-ws"])
                         .on_upgrade(move |socket| {
                             use axum::extract::ws::Message;
-                            use futures_util::{SinkExt, StreamExt, future};
+                            use futures_util::{future, SinkExt, StreamExt};
 
                             async move {
                                 let (mut ws_sink, ws_stream) = socket.split();
@@ -361,19 +357,21 @@ pub fn handle_subscriptions_named<N: Into<Text>>(
                                 let mut data = async_graphql::Data::default();
                                 data.insert(ctx_arc);
 
-                                let mut gql_stream = std::pin::pin!(
-                                    async_graphql::http::WebSocket::new(schema, input, protocol)
-                                        .connection_data(data)
-                                        .map(|msg| match msg {
-                                            async_graphql::http::WsMessage::Text(text) => Message::Text(text.into()),
-                                            async_graphql::http::WsMessage::Close(code, status) => {
-                                                Message::Close(Some(axum::extract::ws::CloseFrame {
-                                                    code,
-                                                    reason: status.into(),
-                                                }))
-                                            }
-                                        })
-                                );
+                                let mut gql_stream =
+                                    std::pin::pin!(async_graphql::http::WebSocket::new(
+                                        schema, input, protocol
+                                    )
+                                    .connection_data(data)
+                                    .map(|msg| match msg {
+                                        async_graphql::http::WsMessage::Text(text) =>
+                                            Message::Text(text.into()),
+                                        async_graphql::http::WsMessage::Close(code, status) => {
+                                            Message::Close(Some(axum::extract::ws::CloseFrame {
+                                                code,
+                                                reason: status.into(),
+                                            }))
+                                        }
+                                    }));
 
                                 while let Some(msg) = gql_stream.next().await {
                                     if ws_sink.send(msg).await.is_err() {

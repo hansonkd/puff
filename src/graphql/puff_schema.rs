@@ -6,9 +6,7 @@
 
 use crate::context::with_puff_context;
 use crate::errors::{to_py_error, PuffResult};
-use crate::graphql::row_return::{
-    ExtractValues, PostgresResultRows, PythonResultRows,
-};
+use crate::graphql::row_return::{ExtractValues, PostgresResultRows, PythonResultRows};
 use crate::graphql::scalar::AggroValue;
 use crate::python::async_python::run_python_async;
 use crate::python::postgres::{
@@ -23,7 +21,7 @@ use async_graphql::dynamic::*;
 use async_graphql::Value as GqlValue;
 
 use pyo3::prelude::*;
-use pyo3::types::{IntoPyDict, PyBytes, PyDict, PyList, PyString};
+use pyo3::types::{IntoPyDict, PyBytes, PyDict, PyList, PyString, PyTuple};
 use std::collections::{BTreeMap, HashSet};
 
 use base64::Engine;
@@ -41,7 +39,7 @@ use uuid::Uuid;
 
 static NUMBERS: &[&str] = &["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
 
-fn args_to_py_dict<'py>(
+pub(crate) fn args_to_py_dict<'py>(
     py: Python<'py>,
     args: &BTreeMap<Text, PyObject>,
 ) -> PyResult<Bound<'py, PyDict>> {
@@ -118,6 +116,21 @@ pub enum AggroTypeInfo {
 impl AggroTypeInfo {
     fn is_list(&self) -> bool {
         matches!(self, AggroTypeInfo::List(_))
+    }
+}
+
+pub(crate) fn supports_direct_value_fast_path(type_info: &AggroTypeInfo) -> bool {
+    match type_info {
+        AggroTypeInfo::String
+        | AggroTypeInfo::Int
+        | AggroTypeInfo::Boolean
+        | AggroTypeInfo::Float
+        | AggroTypeInfo::Any => true,
+        AggroTypeInfo::List(inner) => supports_direct_value_fast_path(&inner.type_info),
+        AggroTypeInfo::Datetime
+        | AggroTypeInfo::Uuid
+        | AggroTypeInfo::Binary
+        | AggroTypeInfo::Object(_) => false,
     }
 }
 
@@ -295,16 +308,13 @@ pub fn convert_obj(name: &str, desc: BTreeMap<String, Bound<'_, PyAny>>) -> PyRe
             if let Some(ref prod) = producer {
                 let py = field_description.py();
                 let py_producer = prod.bind(py);
-                let sql = py_producer
-                    .getattr("__puff_sql__")
-                    .ok()
-                    .and_then(|v| {
-                        if v.is_none() {
-                            None
-                        } else {
-                            v.extract::<String>().ok()
-                        }
-                    });
+                let sql = py_producer.getattr("__puff_sql__").ok().and_then(|v| {
+                    if v.is_none() {
+                        None
+                    } else {
+                        v.extract::<String>().ok()
+                    }
+                });
                 let args = py_producer
                     .getattr("__puff_sql_args__")
                     .ok()
@@ -865,9 +875,9 @@ pub async fn do_returned_values_into_stream(
     // execute directly in Rust without calling Python at all.
     // -----------------------------------------------------------------------
     if let Some(ref sql) = aggro_field.sql_template {
-        let conn_mutex = aggro_context.connection().ok_or_else(|| {
-            anyhow!("SQL fast path: Postgres is not configured")
-        })?;
+        let conn_mutex = aggro_context
+            .connection()
+            .ok_or_else(|| anyhow!("SQL fast path: Postgres is not configured"))?;
         let conn = conn_mutex.lock().await;
 
         // Build params from GraphQL arguments (pure Rust, no Python)
@@ -890,34 +900,29 @@ pub async fn do_returned_values_into_stream(
 
         // For correlated child fields, collect parent key values and append
         // them as an array parameter
-        let method_corr = if !aggro_field.sql_parent_keys.is_empty()
-            && !aggro_field.sql_child_keys.is_empty()
-        {
-            let parent_vals = rows.extract_values(&aggro_field.sql_parent_keys)?;
-            // Collect all parent key values into arrays for ANY($N)
-            let num_keys = aggro_field.sql_parent_keys.len();
-            for key_idx in 0..num_keys {
-                let key_values: Vec<GqlValue> = parent_vals
-                    .iter()
-                    .filter_map(|row| {
-                        row.as_ref()
-                            .and_then(|cols| cols.get(key_idx).cloned())
-                    })
-                    .collect();
-                // Build a GqlValue::List and convert
-                let list_val = GqlValue::List(key_values);
-                params.push(gql_value_to_rust_sql(&list_val));
-            }
-            Some((
-                aggro_field.sql_parent_keys.clone(),
-                aggro_field.sql_child_keys.clone(),
-            ))
-        } else {
-            None
-        };
+        let method_corr =
+            if !aggro_field.sql_parent_keys.is_empty() && !aggro_field.sql_child_keys.is_empty() {
+                let parent_vals = rows.extract_values(&aggro_field.sql_parent_keys)?;
+                // Collect all parent key values into arrays for ANY($N)
+                let num_keys = aggro_field.sql_parent_keys.len();
+                for key_idx in 0..num_keys {
+                    let key_values: Vec<GqlValue> = parent_vals
+                        .iter()
+                        .filter_map(|row| row.as_ref().and_then(|cols| cols.get(key_idx).cloned()))
+                        .collect();
+                    // Build a GqlValue::List and convert
+                    let list_val = GqlValue::List(key_values);
+                    params.push(gql_value_to_rust_sql(&list_val));
+                }
+                Some((
+                    aggro_field.sql_parent_keys.clone(),
+                    aggro_field.sql_child_keys.clone(),
+                ))
+            } else {
+                None
+            };
 
-        let (statement, result_rows) =
-            execute_rust_native(&conn, sql.clone(), params).await?;
+        let (statement, result_rows) = execute_rust_native(&conn, sql.clone(), params).await?;
         let rr: Arc<dyn ExtractValues + Send + Sync> =
             Arc::new(PostgresResultRows::new(statement, result_rows));
 
@@ -1067,11 +1072,7 @@ pub async fn do_returned_values_into_stream(
                                     Some(arg_dict.unbind()),
                                 )
                             } else {
-                                py_dispatcher.dispatch(
-                                    cm,
-                                    (py_extractor,),
-                                    Some(arg_dict.unbind()),
-                                )
+                                py_dispatcher.dispatch(cm, (py_extractor,), Some(arg_dict.unbind()))
                             }
                         })?
                     } else {
@@ -1091,17 +1092,33 @@ pub async fn do_returned_values_into_stream(
                                     Some(arg_dict.unbind()),
                                 )
                             } else {
-                                py_dispatcher.dispatch(
-                                    cm,
-                                    (py_extractor,),
-                                    Some(arg_dict.unbind()),
-                                )
+                                py_dispatcher.dispatch(cm, (py_extractor,), Some(arg_dict.unbind()))
                             }
                         })?
                     };
                     rec.await??
                 }
             };
+
+            if child_fields.is_empty()
+                && aggro_field.value_from_column.is_none()
+                && !aggro_value_is_list
+                && supports_direct_value_fast_path(&aggro_field.return_type.type_info)
+            {
+                let broadcast = Python::with_gil(|py| -> PuffResult<Option<Vec<GqlValue>>> {
+                    let py_res = result.bind(py);
+                    if py_res.downcast::<PyTuple>().is_ok() {
+                        return Ok(None);
+                    }
+
+                    let direct_value = crate::graphql::row_return::convert_pyany_to_value(py_res)?;
+                    Ok(Some(vec![direct_value; rows.len()]))
+                })?;
+
+                if let Some(values) = broadcast {
+                    return Ok(values);
+                }
+            }
 
             let (method_result, method_corr) = Python::with_gil(|py| {
                 let py_res = result.bind(py);
@@ -1426,23 +1443,17 @@ async fn build_correlated_child_objects(
         }
     }
 
-    let cor_vals: Vec<Vec<GqlValue>> = rr
-        .extract_values(cor)?
-        .into_iter()
-        .flatten()
-        .collect();
+    let cor_vals: Vec<Vec<GqlValue>> = rr.extract_values(cor)?.into_iter().flatten().collect();
     let cor_len = cor.len();
     if is_list {
         let mut hm = BTreeMap::new();
         for (obj, row_cor) in objs.into_iter().zip(cor_vals) {
             let mut row_cor_iter = row_cor.into_iter();
             let key = key_from_extracted(&mut row_cor_iter, cor_len);
-            hm.entry(key)
-                .or_insert_with(Vec::new)
-                .push(match obj {
-                    Some(o) => GqlValue::Object(o),
-                    None => GqlValue::Null,
-                });
+            hm.entry(key).or_insert_with(Vec::new).push(match obj {
+                Some(o) => GqlValue::Object(o),
+                None => GqlValue::Null,
+            });
         }
         Ok(hm
             .into_iter()

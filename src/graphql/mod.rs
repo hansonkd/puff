@@ -11,7 +11,7 @@ mod row_return;
 pub(crate) mod scalar;
 mod schema;
 
-use crate::context::with_puff_context;
+use crate::databases::postgres::PostgresClient;
 use crate::errors::PuffResult;
 pub use puff_schema::AggroContext;
 
@@ -68,6 +68,7 @@ impl PuffGraphqlConfig {
 pub(crate) async fn load_schema(
     module: Text,
     db: Option<Text>,
+    postgres: Option<PostgresClient>,
     _py_dispatcher: PythonDispatcher,
 ) -> PyResult<PuffGraphqlConfig> {
     let import_string_fn = Python::with_gil(|py| -> PyResult<_> {
@@ -89,8 +90,7 @@ pub(crate) async fn load_schema(
 
     // Create a shared connection whose background task (and its prepared-statement
     // cache) persists across requests.
-    let shared_connection = if let Some(ref db_name) = db {
-        let pg = with_puff_context(|ctx| ctx.postgres_named(db_name.as_str()));
+    let shared_connection = if let Some(pg) = postgres {
         let conn = Connection::new(pg.pool());
         crate::python::postgres::set_autocommit(&conn, true).await;
         Some(conn)

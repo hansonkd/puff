@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from puff import postgres
-from puff.graphql import EmptyObject
+from puff.graphql import EmptyObject, borrow_db_context
 
 
 POSTGRES_SQL = """
@@ -20,7 +20,7 @@ class PgBenchRow:
 
 
 def _python_fetch(count: int) -> list[PgBenchRow]:
-    conn = postgres.connect(autocommit=True)
+    conn = postgres.PostgresConnection(autocommit=True, dbname="default")
     try:
         cursor = conn.cursor()
         cursor.execute(POSTGRES_SQL, [count])
@@ -39,6 +39,7 @@ class Query:
         return ..., POSTGRES_SQL, [count or 64]
 
     @classmethod
+    @borrow_db_context
     def pg_items_python(
         cls, context, /, count: Optional[int] = 64
     ) -> tuple[list[PgBenchRow], list[Any]]:

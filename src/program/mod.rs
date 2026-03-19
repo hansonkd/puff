@@ -376,9 +376,24 @@ impl Program {
 
                 let mut gql_roots = HashMap::new();
                 for (k, gql_config) in rt_config.gql_modules() {
+                    let shared_postgres = if let Some(db_name) = gql_config.db.as_ref() {
+                        Some(
+                            postgres
+                                .get(db_name.as_str())
+                                .cloned()
+                                .ok_or_else(|| anyhow::anyhow!(
+                                    "GraphQL '{}' references unknown Postgres config '{}'",
+                                    k,
+                                    db_name
+                                ))?,
+                        )
+                    } else {
+                        None
+                    };
                     let res = rt.block_on(load_schema(
                         gql_config.schema_import.clone(),
                         gql_config.db.clone(),
+                        shared_postgres,
                         python_dispatcher.clone().expect("GQL needs Python"),
                     ))?;
                     gql_roots.insert(k.to_string(), res);

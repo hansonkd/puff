@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::sync::{oneshot, Mutex};
+use tokio::runtime::Handle;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::private::BytesMut;
 use tokio_postgres::types::{to_sql_checked, IsNull, ToSql, Type};
@@ -512,7 +513,7 @@ async fn ensure_sender(
     }
     let (tx, rx) = mpsc::channel(32);
     let pool_clone = pool.clone();
-    let handle = with_puff_context(|ctx| ctx.handle());
+    let handle = Handle::try_current().unwrap_or_else(|_| with_puff_context(|ctx| ctx.handle()));
     handle.spawn(async move {
         conn_task(pool_clone, rx).await;
     });
