@@ -38,6 +38,14 @@ pub enum ToolExecutor {
     GraphQL {
         schema_name: Option<String>,
     },
+    /// Return the SDL schema summary for a Puff GraphQL schema.
+    GraphQLSchema {
+        schema_name: Option<String>,
+    },
+    /// Validate a GraphQL query string without executing it.
+    GraphQLValidate {
+        schema_name: Option<String>,
+    },
     Noop,
 }
 
@@ -200,6 +208,16 @@ pub async fn execute_registered_tool(
                 schema_name.as_deref(),
             )
             .await
+        }
+        ToolExecutor::GraphQLSchema { schema_name } => {
+            crate::agents::graphql_tool::generate_schema_summary(schema_name.as_deref())
+        }
+        ToolExecutor::GraphQLValidate { schema_name } => {
+            let query = arguments
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            crate::agents::graphql_tool::validate_graphql_query(query, schema_name.as_deref())
         }
         ToolExecutor::Noop => Ok(format!("Tool '{}' completed (no-op)", tool.definition.name)),
     }
