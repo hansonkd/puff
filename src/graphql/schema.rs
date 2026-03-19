@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use crate::context::with_puff_context;
 use async_trait::async_trait;
 
@@ -96,7 +97,9 @@ impl GraphQLType<AggroScalarValue> for PuffGqlObject {
                 .build_input_object_type::<PuffGqlObject>(info, args.as_slice())
                 .into_meta()
         } else {
-            panic!("Did not find object, {}, in all types", info.name.as_str())
+            // Object not found in schema — return an empty object type as a safe fallback
+            // rather than panicking. This can happen with misconfigured Python schemas.
+            registry.build_object_type::<Self>(info, &[]).into_meta()
         }
     }
 }
@@ -158,7 +161,9 @@ fn build_argument<'r>(
                 (false, false) => registry.arg::<Vec<Uuid>>(arg_name, &()),
             },
             AggroTypeInfo::List(_) => {
-                panic!("Cannot have nested list. Found one in {}", arg_name)
+                // Nested lists are not supported in GraphQL arguments.
+                // Fall back to GenericScalar to avoid crashing.
+                registry.arg::<Option<GenericScalar>>(arg_name, &())
             }
             AggroTypeInfo::Object(tn) => {
                 let field_node_type_info = &SchemaInfo {
@@ -264,7 +269,9 @@ fn build_field<'r>(
     let juniper_field = match &field.return_type.type_info {
         AggroTypeInfo::List(inner) => match &inner.type_info {
             AggroTypeInfo::List(_) => {
-                panic!("Cannot have a nested list but found one for {}", field_name)
+                // Nested lists are not supported in GraphQL fields.
+                // Fall back to GenericScalar to avoid crashing.
+                registry.field::<Option<GenericScalar>>(field_name, &())
             }
             AggroTypeInfo::Any => match (field.return_type.optional, inner.optional) {
                 (true, true) => {
@@ -449,11 +456,11 @@ impl GraphQLValueAsync<AggroScalarValue> for PuffGqlObject {
                 let this_obj = info
                     .all_objs
                     .get(&info.name)
-                    .unwrap_or_else(|| panic!("Could not find object {}", info.name));
+                    .ok_or_else(|| anyhow!("Could not find object {}", info.name))?;
                 let aggro_field = this_obj
                     .fields
                     .get(&field_name.to_text())
-                    .unwrap_or_else(|| panic!("Could not find field {}", field_name));
+                    .ok_or_else(|| anyhow!("Could not find field {}", field_name))?;
                 // let ctx = executor.context();
                 let all_objects = info.all_objs.clone();
                 let input_objs = &info.input_objs;
@@ -524,11 +531,11 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                 let this_obj = info
                     .all_objs
                     .get(&info.name)
-                    .unwrap_or_else(|| panic!("Could not find object {}", info.name));
+                    .ok_or_else(|| anyhow!("Could not find object {}", info.name))?;
                 let field = this_obj
                     .fields
                     .get(&field_name.to_text())
-                    .unwrap_or_else(|| panic!("Could not find subscription field {}", field_name));
+                    .ok_or_else(|| anyhow!("Could not find subscription field {}", field_name))?;
                 // let ctx = executor.context();
                 let (sender, ret) = unbounded_channel();
                 let all_objects = info.all_objs.clone();
@@ -539,8 +546,7 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                     let args_dict = PyDict::new(py);
                     for (k, v) in laf.arguments().iter() {
                         args_dict
-                            .set_item(k.as_str(), v)
-                            .expect("Failed to set dict item");
+                            .set_item(k.as_str(), v)?;
                     }
                     let args: PyObject = args_dict.into_py(py);
                     PuffResult::Ok((laf, args, PyDict::new(py).unbind()))
@@ -557,9 +563,6 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                 );
 
                 let py_dispatcher = with_puff_context(|ctx| ctx.python_dispatcher());
-                let acceptor_method =
-                    Python::with_gil(|py| field.acceptor_method.as_ref().map(|o| o.clone_ref(py)))
-                        .expect("Subscription field needs an acceptor");
 
                 let python_context = PyContext::new(
                     parents.clone(),
@@ -568,6 +571,11 @@ impl GraphQLSubscriptionValue<AggroScalarValue> for PuffGqlObject {
                     layer_cache,
                     field.depends_on.clone(),
                 );
+
+                let acceptor_method =
+                    Python::with_gil(|py| field.acceptor_method.as_ref().map(|o| o.clone_ref(py)))
+                        .ok_or_else(|| anyhow!("Subscription field '{}' needs an acceptor", field_name))?;
+
                 if field.is_async {
                     py_dispatcher.dispatch_asyncio(
                         acceptor_method,

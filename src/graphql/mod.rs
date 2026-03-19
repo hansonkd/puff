@@ -2,6 +2,7 @@
 use anyhow::bail;
 use juniper::{InputValue, RootNode, Spanning};
 use pyo3::prelude::*;
+use pyo3::exceptions::PyRuntimeError;
 use pyo3::{Bound, IntoPy, Py, PyAny, PyObject, PyResult, Python, ToPyObject};
 use std::sync::Arc;
 
@@ -82,7 +83,9 @@ pub(crate) async fn load_schema(
     let schema = py_dispatcher
         .dispatch1(import_string_fn, (module,))?
         .await
-        .unwrap()?;
+        .map_err(|e| PyRuntimeError::new_err(
+            format!("Schema loading task failed: {}", e)
+        ))??;
     let (auth, auth_async, converted_objs, input_objs) = Python::with_gil(|py| -> PyResult<_> {
         let puff_gql = py.import("puff.graphql")?;
         let t2d = puff_gql.getattr("type_to_description")?;

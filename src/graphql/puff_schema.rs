@@ -70,8 +70,8 @@ impl AggroContext {
         Self { auth, config, conn }
     }
 
-    pub fn connection(&self) -> &Mutex<Connection> {
-        self.conn.as_ref().expect("Postgres not configured.")
+    pub fn connection(&self) -> Option<&Mutex<Connection>> {
+        self.conn.as_ref()
     }
 
     pub fn config(&self) -> &PuffGraphqlConfig {
@@ -725,7 +725,9 @@ pub async fn do_returned_values_into_stream(
             let rr: Arc<dyn ExtractValues + Send + Sync> = match method_result {
                 PythonMethodResult::PythonList(l) => Arc::new(PythonResultRows { py_list: l }),
                 PythonMethodResult::SqlQuery(q, params) => {
-                    let conn = aggro_context.connection().lock().await;
+                    let conn_mutex = aggro_context.connection()
+                        .ok_or_else(|| anyhow!("SQL query returned but Postgres is not configured"))?;
+                    let conn = conn_mutex.lock().await;
                     let (statement, rows) = execute_rust(&conn, q, params).await?;
                     Arc::new(PostgresResultRows::new(statement, rows))
                 }

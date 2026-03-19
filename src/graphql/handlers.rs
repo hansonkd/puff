@@ -399,8 +399,10 @@ pub fn handle_graphql_named<T: Into<Text>>(
 
                     let new_ctx = root_node.new_context(Some(v));
                     let resp = request.execute(&root_node.root(), &new_ctx).await;
-                    let conn = new_ctx.connection().lock().await;
-                    close_conn(&conn).await;
+                    if let Some(conn_mutex) = new_ctx.connection() {
+                        let conn = conn_mutex.lock().await;
+                        close_conn(&conn).await;
+                    }
                     JuniperPuffResponse(resp).into_response()
                 }
                 Err(_e) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal Error").into_response(),
@@ -411,7 +413,7 @@ pub fn handle_graphql_named<T: Into<Text>>(
 
 fn auth_result_to_response(v: &PyObject) -> Result<Option<Response<String>>, Error> {
     Python::with_gil(|py| {
-        if v.bind(py).hasattr("is_rejection").unwrap_or_default() {
+        if v.bind(py).hasattr("is_rejection")? {
             let status = v.getattr(py, "status")?.extract::<u16>(py)?;
             let message = v.getattr(py, "message")?.extract::<String>(py)?;
             let header_v = v.getattr(py, "headers")?;

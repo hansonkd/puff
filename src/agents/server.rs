@@ -53,6 +53,11 @@ pub struct StartConversationRequest {
     pub message: String,
 }
 
+#[derive(Deserialize)]
+pub struct ContinueConversationRequest {
+    pub message: String,
+}
+
 #[derive(Serialize)]
 pub struct ConversationResponse {
     pub conversation_id: String,
@@ -142,7 +147,7 @@ async fn start_conversation(
 async fn continue_conversation(
     State(state): State<Arc<AgentServerState>>,
     Path(id): Path<String>,
-    Json(req): Json<StartConversationRequest>,
+    Json(req): Json<ContinueConversationRequest>,
 ) -> Result<Json<ConversationResponse>, (StatusCode, String)> {
     let conversation = state
         .conversations

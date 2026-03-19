@@ -11,35 +11,36 @@ use pyo3::types::{PyDict, PyList, PyString};
 use std::collections::HashMap;
 use tokio_postgres::{Column, Row, Statement};
 
-pub fn convert_pyany_to_jupiter(attribute_val: &Bound<'_, PyAny>) -> AggroValue {
+pub fn convert_pyany_to_jupiter(attribute_val: &Bound<'_, PyAny>) -> Result<AggroValue> {
     if attribute_val.is_none() {
-        return AggroValue::Null;
+        return Ok(AggroValue::Null);
     }
     if let Ok(s) = attribute_val.extract() {
-        return AggroValue::Scalar(AggroScalarValue::String(s));
+        return Ok(AggroValue::Scalar(AggroScalarValue::String(s)));
     }
     if let Ok(s) = attribute_val.extract() {
-        return AggroValue::Scalar(AggroScalarValue::Boolean(s));
+        return Ok(AggroValue::Scalar(AggroScalarValue::Boolean(s)));
     }
     if let Ok(r) = attribute_val.extract::<i64>() {
-        return if let Ok(s) = r.try_into() {
+        return Ok(if let Ok(s) = r.try_into() {
             AggroValue::Scalar(AggroScalarValue::Int(s))
         } else {
             AggroValue::Scalar(AggroScalarValue::Long(r))
-        };
+        });
     }
     if let Ok(s) = attribute_val.extract() {
-        return AggroValue::Scalar(AggroScalarValue::Float(s));
+        return Ok(AggroValue::Scalar(AggroScalarValue::Float(s)));
     }
     if let Ok(l) = attribute_val.downcast::<PyList>() {
-        return AggroValue::List(l.iter().map(|s| convert_pyany_to_jupiter(&s)).collect());
+        let items: Result<Vec<_>> = l.iter().map(|s| convert_pyany_to_jupiter(&s)).collect();
+        return Ok(AggroValue::List(items?));
     }
     if let Ok(l) = attribute_val.downcast::<PyDict>() {
-        return AggroValue::Object(
-            l.iter()
-                .map(|(k, s)| (k.to_string(), convert_pyany_to_jupiter(&s)))
-                .collect(),
-        );
+        let mut obj = Object::with_capacity(l.len());
+        for (k, s) in l.iter() {
+            obj.add_field(&k.to_string(), convert_pyany_to_jupiter(&s)?);
+        }
+        return Ok(AggroValue::Object(obj));
     }
     if let Ok(dict_obj) = attribute_val.getattr("__dict__") {
         if let Ok(dict) = dict_obj.downcast::<PyDict>() {
@@ -48,32 +49,34 @@ pub fn convert_pyany_to_jupiter(attribute_val: &Bound<'_, PyAny>) -> AggroValue 
                 for (key, value) in dict.iter() {
                     let key = key.to_string();
                     if !key.starts_with("__") {
-                        obj.add_field(&key, convert_pyany_to_jupiter(&value));
+                        obj.add_field(&key, convert_pyany_to_jupiter(&value)?);
                     }
                 }
-                return AggroValue::Object(obj);
+                return Ok(AggroValue::Object(obj));
             }
         }
     }
-    let dir = attribute_val.dir().expect("Failed to call dir()");
+    let dir = attribute_val.dir()
+        .map_err(|e| anyhow!("Failed to call dir(): {}", e))?;
     let size = dir.len();
     let mut obj = Object::with_capacity(size);
 
     for v in dir.iter() {
         if let Ok(s) = v.downcast::<PyString>() {
-            let key = s.to_str().expect("Python dir could not unwrap key to str.");
+            let key = s.to_str()
+                .map_err(|e| anyhow!("Python dir could not unwrap key to str: {}", e))?;
             if !key.starts_with("__") {
                 let py_val = attribute_val
                     .getattr(key)
-                    .unwrap_or_else(|_| panic!("Could not get {}", key));
+                    .map_err(|e| anyhow!("Could not get attribute '{}': {}", key, e))?;
                 if !py_val.is_callable() {
-                    let juniper_val = convert_pyany_to_jupiter(&py_val);
+                    let juniper_val = convert_pyany_to_jupiter(&py_val)?;
                     obj.add_field(key, juniper_val);
                 }
             }
         }
     }
-    AggroValue::Object(obj)
+    Ok(AggroValue::Object(obj))
 }
 
 pub fn convert_postgres_to_juniper(
@@ -147,7 +150,7 @@ pub fn convert_postgres_to_juniper(
             }
         }
         t => {
-            panic!("Unsupported postgres type {}", t)
+            bail!("Unsupported postgres type {}", t)
         }
     }
 }
@@ -339,7 +342,7 @@ impl ExtractValues for PythonResultRows {
                     } else {
                         row.getattr(name.as_str())?
                     };
-                    let jupiter_val = convert_pyany_to_jupiter(&val);
+                    let jupiter_val = convert_pyany_to_jupiter(&val)?;
                     row_vec.push(jupiter_val)
                 }
                 ret_vec.push(Some(row_vec));
@@ -384,7 +387,7 @@ impl ExtractValues for PythonResultRows {
                     ret_vec.push(AggroValue::null());
                     continue;
                 }
-                let val = convert_pyany_to_jupiter(&row);
+                let val = convert_pyany_to_jupiter(&row)?;
                 ret_vec.push(val);
             }
             Ok(ret_vec)
