@@ -12,6 +12,7 @@ use crate::types::Text;
 
 use async_graphql::dynamic::*;
 use async_graphql::Value as GqlValue;
+use indexmap::IndexMap;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -21,12 +22,43 @@ use pyo3::types::PyDict;
 
 use crate::errors::log_puff_error;
 
-/// Extract the parent GqlValue from a resolver context's parent_value.
+#[derive(Debug)]
+struct ParentObjectValue {
+    fields: IndexMap<async_graphql::Name, GqlValue>,
+}
+
+/// Extract a named child field from the resolver's parent object payload.
 ///
-/// Parent values are stored as FieldValue::value(GqlValue::Object({...})).
-/// async-graphql passes this directly to child field resolvers.
-fn extract_parent_gql_value<'a>(ctx: &'a ResolverContext<'_>) -> Option<&'a GqlValue> {
-    ctx.parent_value.try_to_value().ok()
+/// We support both the typed parent-object payload used by the async-graphql
+/// adapter and plain `Value::Object` payloads for compatibility with older
+/// result paths.
+fn extract_parent_field_value(
+    ctx: &ResolverContext<'_>,
+    column: &str,
+) -> Option<GqlValue> {
+    if let Ok(parent) = ctx.parent_value.try_downcast_ref::<ParentObjectValue>() {
+        return Some(
+            parent
+                .fields
+                .get(column)
+                .cloned()
+                .unwrap_or(GqlValue::Null),
+        );
+    }
+
+    match ctx.parent_value.try_to_value() {
+        Ok(GqlValue::Object(parent)) => Some(parent.get(column).cloned().unwrap_or(GqlValue::Null)),
+        _ => None,
+    }
+}
+
+fn gql_value_into_field_value(val: GqlValue) -> FieldValue<'static> {
+    match val {
+        GqlValue::Null => FieldValue::NULL,
+        GqlValue::List(values) => FieldValue::list(values.into_iter().map(gql_value_into_field_value)),
+        GqlValue::Object(fields) => FieldValue::owned_any(ParentObjectValue { fields }),
+        scalar => FieldValue::value(scalar),
+    }
 }
 
 fn decoded_type_to_type_ref(dt: &DecodedType) -> TypeRef {
@@ -133,7 +165,7 @@ fn gql_to_field_value(val: GqlValue, _field: &AggroField) -> Option<FieldValue<'
     if val == GqlValue::Null {
         None
     } else {
-        Some(FieldValue::value(val))
+        Some(gql_value_into_field_value(val))
     }
 }
 
@@ -167,20 +199,11 @@ fn build_object_type(
                 // CHILD FIELD path: extract value from parent object data
                 // ---------------------------------------------------------
                 if !is_root {
-                    // The parent resolver returned FieldValue::value(GqlValue::Object({...})).
-                    // async-graphql passes it as parent_value. Extract the underlying
-                    // GqlValue::Object and read this field's column from it.
-                    if let Some(GqlValue::Object(parent_obj)) = extract_parent_gql_value(&ctx) {
-                        let col = field
-                            .value_from_column
-                            .as_ref()
-                            .unwrap_or(&field_name_owned);
-
-                        let val = parent_obj
-                            .get(col.as_str())
-                            .cloned()
-                            .unwrap_or(GqlValue::Null);
-
+                    let col = field
+                        .value_from_column
+                        .as_ref()
+                        .unwrap_or(&field_name_owned);
+                    if let Some(val) = extract_parent_field_value(&ctx, col.as_str()) {
                         return Ok(gql_to_field_value(val, &field));
                     }
                     // If we could not extract from parent, fall through to
