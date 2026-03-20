@@ -387,6 +387,44 @@ impl AgentCapabilities {
         }
     }
 
+    /// Check if this agent can invoke another agent, considering both
+    /// the capability list and scope visibility.
+    ///
+    /// `target_name` is the agent's name, `target_scope` is its declared
+    /// scope (if any), and `visible_scopes` are the calling agent's
+    /// visible scope prefixes.
+    pub fn check_agent_scoped(
+        &self,
+        target_name: &str,
+        target_scope: Option<&str>,
+        visible_scopes: &[String],
+    ) -> Result<(), AgentError> {
+        // First check capability (allowed agent list).
+        self.check_agent(target_name)?;
+
+        // Then check scope visibility.
+        if visible_scopes.is_empty() {
+            // No scope restrictions -- can see all agents.
+            return Ok(());
+        }
+
+        let target_scope = target_scope.unwrap_or("");
+
+        for pattern in visible_scopes {
+            if scope_matches(pattern, target_scope) || scope_matches(pattern, target_name) {
+                return Ok(());
+            }
+        }
+
+        Err(AgentError::ToolPermissionDenied {
+            tool: format!("agent:{}", target_name),
+            reason: format!(
+                "Agent '{}' (scope: {:?}) is not visible from scopes {:?}",
+                target_name, target_scope, visible_scopes
+            ),
+        })
+    }
+
     /// Check if filesystem access to the given path is allowed.
     pub fn check_filesystem(&self, path: &Path, write: bool) -> Result<(), AgentError> {
         match &self.filesystem {
@@ -427,6 +465,28 @@ impl AgentCapabilities {
                 }
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scope matching
+// ---------------------------------------------------------------------------
+
+/// Check if a scope pattern matches a target scope or agent name.
+///
+/// Patterns:
+///   - `"*"` matches everything
+///   - `""` matches everything (root)
+///   - `"billing/*"` matches `"billing"`, `"billing/invoices"`, `"billing/payments"`
+///   - `"billing/invoices"` matches exactly `"billing/invoices"`
+pub fn scope_matches(pattern: &str, target: &str) -> bool {
+    if pattern.is_empty() || pattern == "*" {
+        return true;
+    }
+    if let Some(prefix) = pattern.strip_suffix("/*") {
+        target == prefix || target.starts_with(&format!("{}/", prefix))
+    } else {
+        target == pattern
     }
 }
 
@@ -793,5 +853,74 @@ mod tests {
         assert_eq!(caps.filesystem, FsCapability::None);
         assert_eq!(caps.tools, ToolCapability::All);
         assert_eq!(caps.agents, AgentCapability::All);
+    }
+
+    // -----------------------------------------------------------------------
+    // scope_matches
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_scope_matches() {
+        // Wildcard patterns match everything.
+        assert!(scope_matches("*", "anything"));
+        assert!(scope_matches("", "anything"));
+
+        // Prefix glob patterns.
+        assert!(scope_matches("billing/*", "billing/invoices"));
+        assert!(scope_matches("billing/*", "billing/payments"));
+        assert!(scope_matches("billing/*", "billing"));
+        assert!(!scope_matches("billing/*", "support/technical"));
+
+        // Exact match patterns.
+        assert!(scope_matches("billing/invoices", "billing/invoices"));
+        assert!(!scope_matches("billing/invoices", "billing/payments"));
+    }
+
+    // -----------------------------------------------------------------------
+    // check_agent_scoped
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_check_agent_scoped_no_scope_restriction() {
+        let caps = AgentCapabilities::default(); // All agents allowed
+        // No scope restriction (empty visible_scopes) -- can see everything.
+        assert!(caps.check_agent_scoped("any", None, &[]).is_ok());
+        assert!(caps
+            .check_agent_scoped("anything", Some("deep/scope"), &[])
+            .is_ok());
+    }
+
+    #[test]
+    fn test_check_agent_scoped_with_scope_restriction() {
+        let caps = AgentCapabilities::default();
+        let scopes = vec!["billing/*".to_string()];
+        // Visible within billing scope.
+        assert!(caps
+            .check_agent_scoped("billing/invoices", Some("billing/invoices"), &scopes)
+            .is_ok());
+        // Not visible from billing scope.
+        assert!(caps
+            .check_agent_scoped("support/tech", Some("support/tech"), &scopes)
+            .is_err());
+    }
+
+    #[test]
+    fn test_check_agent_scoped_matches_by_name() {
+        let caps = AgentCapabilities::default();
+        let scopes = vec!["billing/*".to_string()];
+        // Target has no scope but its name matches the pattern.
+        assert!(caps
+            .check_agent_scoped("billing/invoices", None, &scopes)
+            .is_ok());
+    }
+
+    #[test]
+    fn test_check_agent_scoped_capability_denied_takes_precedence() {
+        let mut caps = AgentCapabilities::default();
+        caps.agents = AgentCapability::None;
+        // Capability check fails even if scope would match.
+        assert!(caps
+            .check_agent_scoped("billing/invoices", Some("billing/invoices"), &[])
+            .is_err());
     }
 }

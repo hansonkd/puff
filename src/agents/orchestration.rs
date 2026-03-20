@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use crate::agents::agent::{Agent, AgentConfig};
+use crate::agents::capabilities::scope_matches;
 use crate::agents::conversation::Conversation;
 use crate::agents::error::AgentError;
 use crate::agents::llm::*;
@@ -18,18 +19,56 @@ pub struct Router {
     pub router_prompt: String,
     pub router_model: String,
     pub agents: Vec<Agent>,
+    /// Scope prefixes this router can see. Empty means no restriction.
+    pub visible_scopes: Vec<String>,
 }
 
 impl Router {
+    /// Get the agents visible from this router's scope configuration.
+    ///
+    /// Returns `(original_index, &Agent)` pairs so the caller can map back
+    /// to the original `self.agents` vector.
+    fn visible_agents(&self) -> Vec<(usize, &Agent)> {
+        if self.visible_scopes.is_empty() {
+            // No scope restriction -- all agents visible.
+            return self.agents.iter().enumerate().collect();
+        }
+
+        self.agents
+            .iter()
+            .enumerate()
+            .filter(|(_, agent)| {
+                let agent_scope = agent.config.scope.as_deref().unwrap_or("");
+                self.visible_scopes
+                    .iter()
+                    .any(|pattern| scope_matches(pattern, agent_scope))
+                    || self
+                        .visible_scopes
+                        .iter()
+                        .any(|pattern| scope_matches(pattern, &agent.config.name))
+            })
+            .collect()
+    }
+
     /// Ask the LLM which agent index (0-based) best fits `message`.
     ///
     /// The LLM is given a compact listing of available agents and asked to
     /// return only the integer index. The response is parsed and bounds-checked
-    /// before being returned.
+    /// before being returned. Only agents visible from this router's scope are
+    /// presented to the LLM.
     pub async fn route(&self, message: &str, llm_client: &LlmClient) -> Result<usize, AgentError> {
-        // Build a system prompt that lists all agents.
+        let visible = self.visible_agents();
+
+        if visible.is_empty() {
+            return Err(AgentError::OrchestrationError(format!(
+                "Router '{}' has no visible agents for scopes {:?}",
+                self.name, self.visible_scopes
+            )));
+        }
+
+        // Build a system prompt that lists only visible agents.
         let mut agent_listing = String::new();
-        for (i, agent) in self.agents.iter().enumerate() {
+        for (i, agent) in &visible {
             let description = agent
                 .config
                 .system_prompt
@@ -165,6 +204,8 @@ impl Parallel {
                     memory: None,
                     permissions: None,
                     capabilities: None,
+                    scope: None,
+                    visible_scopes: Vec::new(),
                 };
                 let task_agent = Agent::new(config).with_tools_arc(tools);
                 let mut conv = Conversation::new(&agent_name);
@@ -222,6 +263,8 @@ pub struct Supervisor {
     pub name: String,
     pub supervisor: Agent,
     pub workers: Vec<Agent>,
+    /// Scope prefixes this supervisor can see. Empty means no restriction.
+    pub visible_scopes: Vec<String>,
 }
 
 impl Supervisor {
@@ -232,13 +275,36 @@ impl Supervisor {
     /// named worker is run with the provided task and its output is returned as
     /// the tool result. The loop continues until the supervisor produces a plain
     /// text response (no tool calls) or the maximum number of rounds is reached.
+    /// Get the workers visible from this supervisor's scope configuration.
+    fn visible_workers(&self) -> Vec<&Agent> {
+        if self.visible_scopes.is_empty() {
+            return self.workers.iter().collect();
+        }
+
+        self.workers
+            .iter()
+            .filter(|w| {
+                let ws = w.config.scope.as_deref().unwrap_or("");
+                self.visible_scopes
+                    .iter()
+                    .any(|p| scope_matches(p, ws))
+                    || self
+                        .visible_scopes
+                        .iter()
+                        .any(|p| scope_matches(p, &w.config.name))
+            })
+            .collect()
+    }
+
     pub async fn run(&self, input: &str, llm_client: &LlmClient) -> Result<String, AgentError> {
-        // 1. Build a delegate tool definition for the supervisor.
+        // 1. Build a delegate tool definition for the supervisor,
+        //    listing only workers visible from this supervisor's scopes.
+        let visible_workers = self.visible_workers();
         let delegate_tool = ToolDefinition {
             name: "delegate".to_string(),
             description: format!(
                 "Delegate a task to a worker agent. Available workers: {}",
-                self.workers
+                visible_workers
                     .iter()
                     .map(|w| w.config.name.as_str())
                     .collect::<Vec<_>>()
@@ -399,6 +465,23 @@ mod tests {
             memory: None,
             permissions: None,
             capabilities: None,
+            scope: None,
+            visible_scopes: Vec::new(),
+        })
+    }
+
+    fn make_scoped_agent(name: &str, system_prompt: &str, scope: &str) -> Agent {
+        Agent::new(AgentConfig {
+            name: name.to_string(),
+            model: "claude-sonnet-4-6".to_string(),
+            system_prompt: Some(system_prompt.to_string()),
+            skills: Vec::new(),
+            tools_module: None,
+            memory: None,
+            permissions: None,
+            capabilities: None,
+            scope: Some(scope.to_string()),
+            visible_scopes: Vec::new(),
         })
     }
 
@@ -412,6 +495,7 @@ mod tests {
                 make_agent("agent-a", "Handles topic A"),
                 make_agent("agent-b", "Handles topic B"),
             ],
+            visible_scopes: Vec::new(),
         };
         assert_eq!(router.name, "test-router");
         assert_eq!(router.agents.len(), 2);
@@ -468,6 +552,7 @@ mod tests {
                 make_agent("worker-a", "Handles topic A"),
                 make_agent("worker-b", "Handles topic B"),
             ],
+            visible_scopes: Vec::new(),
         };
         assert_eq!(supervisor.name, "test-supervisor");
         assert_eq!(supervisor.workers.len(), 2);
@@ -516,5 +601,114 @@ mod tests {
         // Original two messages are still present.
         assert_eq!(conv.messages.len(), 3);
         assert_eq!(conv.agent_name, "second");
+    }
+
+    // -----------------------------------------------------------------------
+    // Router scope filtering
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_router_visible_agents_no_scope() {
+        let router = Router {
+            name: "router".to_string(),
+            router_prompt: "Pick.".to_string(),
+            router_model: "claude-sonnet-4-6".to_string(),
+            agents: vec![
+                make_scoped_agent("billing/invoices", "Invoices", "billing/invoices"),
+                make_scoped_agent("support/tech", "Tech support", "support/tech"),
+            ],
+            visible_scopes: Vec::new(),
+        };
+        // No scope restriction -- all agents visible.
+        assert_eq!(router.visible_agents().len(), 2);
+    }
+
+    #[test]
+    fn test_router_visible_agents_with_scope() {
+        let router = Router {
+            name: "router".to_string(),
+            router_prompt: "Pick.".to_string(),
+            router_model: "claude-sonnet-4-6".to_string(),
+            agents: vec![
+                make_scoped_agent("billing/invoices", "Invoices", "billing/invoices"),
+                make_scoped_agent("billing/payments", "Payments", "billing/payments"),
+                make_scoped_agent("support/tech", "Tech support", "support/tech"),
+            ],
+            visible_scopes: vec!["billing/*".to_string()],
+        };
+        let visible = router.visible_agents();
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].1.config.name, "billing/invoices");
+        assert_eq!(visible[1].1.config.name, "billing/payments");
+    }
+
+    #[test]
+    fn test_router_visible_agents_preserves_original_indices() {
+        let router = Router {
+            name: "router".to_string(),
+            router_prompt: "Pick.".to_string(),
+            router_model: "claude-sonnet-4-6".to_string(),
+            agents: vec![
+                make_scoped_agent("support/tech", "Tech support", "support/tech"),
+                make_scoped_agent("billing/invoices", "Invoices", "billing/invoices"),
+                make_scoped_agent("billing/payments", "Payments", "billing/payments"),
+            ],
+            visible_scopes: vec!["billing/*".to_string()],
+        };
+        let visible = router.visible_agents();
+        // Original indices are preserved.
+        assert_eq!(visible[0].0, 1); // billing/invoices is at index 1
+        assert_eq!(visible[1].0, 2); // billing/payments is at index 2
+    }
+
+    // -----------------------------------------------------------------------
+    // Supervisor scope filtering
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_supervisor_visible_workers_no_scope() {
+        let supervisor = Supervisor {
+            name: "test-supervisor".to_string(),
+            supervisor: make_agent("boss", "Supervise."),
+            workers: vec![
+                make_scoped_agent("billing/invoices", "Invoices", "billing/invoices"),
+                make_scoped_agent("support/tech", "Tech support", "support/tech"),
+            ],
+            visible_scopes: Vec::new(),
+        };
+        assert_eq!(supervisor.visible_workers().len(), 2);
+    }
+
+    #[test]
+    fn test_supervisor_visible_workers_with_scope() {
+        let supervisor = Supervisor {
+            name: "test-supervisor".to_string(),
+            supervisor: make_agent("boss", "Supervise."),
+            workers: vec![
+                make_scoped_agent("billing/invoices", "Invoices", "billing/invoices"),
+                make_scoped_agent("billing/payments", "Payments", "billing/payments"),
+                make_scoped_agent("support/tech", "Tech support", "support/tech"),
+            ],
+            visible_scopes: vec!["billing/*".to_string()],
+        };
+        let visible = supervisor.visible_workers();
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].config.name, "billing/invoices");
+        assert_eq!(visible[1].config.name, "billing/payments");
+    }
+
+    // -----------------------------------------------------------------------
+    // Agent scope/visible_scopes accessors
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_agent_scope_accessors() {
+        let agent = make_scoped_agent("billing/invoices", "Invoices", "billing/invoices");
+        assert_eq!(agent.scope(), Some("billing/invoices"));
+        assert!(agent.visible_scopes().is_empty());
+
+        let root_agent = make_agent("root", "Root agent");
+        assert_eq!(root_agent.scope(), None);
+        assert!(root_agent.visible_scopes().is_empty());
     }
 }

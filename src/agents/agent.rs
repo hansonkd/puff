@@ -35,6 +35,14 @@ pub struct AgentConfig {
     pub permissions: Option<AgentPermissions>,
     #[serde(default)]
     pub capabilities: Option<AgentCapabilities>,
+    /// The agent's position in the scope hierarchy (e.g., "billing/invoices").
+    /// `None` means root scope (can be seen by everyone).
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// Scope prefixes this agent can see (e.g., ["billing/*", "shared/*"]).
+    /// Empty means no scope restrictions (can see all agents).
+    #[serde(default)]
+    pub visible_scopes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -156,6 +164,16 @@ impl Agent {
     /// with any context snippets, separated by double newlines.
     pub fn build_system_prompt(&self) -> &str {
         &self.system_prompt
+    }
+
+    /// Return this agent's scope in the hierarchy, if set.
+    pub fn scope(&self) -> Option<&str> {
+        self.config.scope.as_deref()
+    }
+
+    /// Return the scope prefixes this agent can see.
+    pub fn visible_scopes(&self) -> &[String] {
+        &self.config.visible_scopes
     }
 
     pub fn tool_definitions(&self) -> &[ToolDefinition] {
@@ -449,6 +467,8 @@ mod tests {
             memory: None,
             permissions: None,
             capabilities: None,
+            scope: None,
+            visible_scopes: Vec::new(),
         }
     }
 

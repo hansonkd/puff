@@ -275,6 +275,8 @@ mod tests {
             memory: None,
             permissions: None,
             capabilities: None,
+            scope: None,
+            visible_scopes: Vec::new(),
         })
     }
 
