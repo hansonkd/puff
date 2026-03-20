@@ -20,6 +20,7 @@ from pkgutil import extend_path
 from typing import Any, Union
 from threading import Thread, local
 import functools
+from puff.tools import tool
 
 __path__ = extend_path(__path__, __name__)
 

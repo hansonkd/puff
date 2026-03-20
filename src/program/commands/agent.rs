@@ -1,5 +1,6 @@
 use crate::agents::agent::{Agent, AgentConfig};
 use crate::agents::llm::{LlmClient, LlmConfig};
+use crate::agents::python_tools::load_python_tools_module;
 use crate::agents::registry::{AgentRegistryEntry, AgentRegistryKind};
 use crate::agents::registry_tool::{registry_message_tool, registry_scan_tool};
 use crate::agents::runtime::register_named_agent;
@@ -72,6 +73,23 @@ impl RunnableCommand for AgentServeCommand {
                         Err(e) => {
                             tracing::warn!("Failed to load skill '{}': {}", skill_path, e);
                         }
+                    }
+                }
+            }
+            if let Some(tools_module) = &config.tools_module {
+                match load_python_tools_module(tools_module) {
+                    Ok(tools) => {
+                        for tool in tools {
+                            registry.register(tool);
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            "Failed to load Python tools module '{}' for agent '{}': {}",
+                            tools_module,
+                            config.name,
+                            error
+                        );
                     }
                 }
             }
@@ -209,6 +227,23 @@ impl RunnableCommand for AgentAskCommand {
                     Err(e) => {
                         tracing::warn!("Failed to load skill '{}': {}", skill_path, e);
                     }
+                }
+            }
+        }
+        if let Some(tools_module) = &config.tools_module {
+            match load_python_tools_module(tools_module) {
+                Ok(tools) => {
+                    for tool in tools {
+                        registry.register(tool);
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        "Failed to load Python tools module '{}' for agent '{}': {}",
+                        tools_module,
+                        config.name,
+                        error
+                    );
                 }
             }
         }

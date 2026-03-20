@@ -12,6 +12,7 @@ pub mod orchestration;
 pub mod persistence;
 pub mod provider;
 pub mod python_bindings;
+pub mod python_tools;
 pub mod quota;
 pub mod registry;
 pub mod registry_tool;

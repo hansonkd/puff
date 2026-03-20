@@ -189,13 +189,9 @@ pub async fn execute_registered_tool(
     capabilities: &AgentCapabilities,
 ) -> Result<String, AgentError> {
     match &tool.executor {
-        ToolExecutor::Python { module, function } => Err(AgentError::ToolExecutionError {
-            tool: tool.definition.name.clone(),
-            message: format!(
-                "Python tool execution is not implemented for '{}.{}'",
-                module, function
-            ),
-        }),
+        ToolExecutor::Python { module, function } => {
+            crate::agents::python_tools::execute_python_tool(module, function, arguments).await
+        }
         ToolExecutor::Cli {
             command,
             args_template,

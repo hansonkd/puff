@@ -2,6 +2,7 @@
 
 use crate::agents::error::AgentError;
 use crate::agents::llm::ToolDefinition;
+use crate::agents::python_tools::load_python_tools_module;
 use crate::agents::tool::{OutputFormat, RegisteredTool, ToolExecutor};
 use serde::Deserialize;
 use serde_json::json;
@@ -26,6 +27,8 @@ struct SkillMeta {
     name: String,
     description: String,
     version: String,
+    #[serde(default)]
+    tools_module: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +96,7 @@ pub struct Skill {
     pub name: String,
     pub description: String,
     pub version: String,
+    pub tools_module: Option<String>,
     pub tools: Vec<SkillTool>,
     pub permissions: SkillPermissions,
     /// Contents of `context.md`, if present.
@@ -155,6 +159,7 @@ impl Skill {
             name: parsed.skill.name,
             description: parsed.skill.description,
             version: parsed.skill.version,
+            tools_module: parsed.skill.tools_module,
             tools,
             permissions,
             context: None,
@@ -201,65 +206,64 @@ impl Skill {
     pub fn into_registered_tools(self) -> Result<Vec<RegisteredTool>, AgentError> {
         let skill_name = self.name.clone();
         let permissions = self.permissions.clone();
+        let mut registered = Vec::new();
 
-        self.tools
-            .into_iter()
-            .map(|t| {
-                if let Some(command) = t.command.as_deref() {
-                    if !command_allowed(&permissions, command) {
-                        return Err(AgentError::SkillLoadError {
-                            skill: skill_name.clone(),
-                            message: format!(
-                                "tool '{}' command '{}' is not allowed by skill permissions",
-                                t.name, command
-                            ),
-                        });
-                    }
+        for t in self.tools {
+            if let Some(command) = t.command.as_deref() {
+                if !command_allowed(&permissions, command) {
+                    return Err(AgentError::SkillLoadError {
+                        skill: skill_name.clone(),
+                        message: format!(
+                            "tool '{}' command '{}' is not allowed by skill permissions",
+                            t.name, command
+                        ),
+                    });
                 }
+            }
 
-                // Build a JSON Schema for the tool's arguments.
-                let mut properties = serde_json::Map::new();
-                let mut required: Vec<serde_json::Value> = Vec::new();
+            let mut properties = serde_json::Map::new();
+            let mut required: Vec<serde_json::Value> = Vec::new();
 
-                for (arg_name, arg_type) in &t.args {
-                    properties.insert(arg_name.clone(), json!({ "type": arg_type }));
-                    required.push(json!(arg_name));
+            for (arg_name, arg_type) in &t.args {
+                properties.insert(arg_name.clone(), json!({ "type": arg_type }));
+                required.push(json!(arg_name));
+            }
+
+            let input_schema = json!({
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            });
+
+            let executor = if let Some(module_path) = t.wasm_path.clone() {
+                ToolExecutor::Wasm { module_path }
+            } else if let Some(command) = t.command.clone() {
+                ToolExecutor::Cli {
+                    command,
+                    args_template: Vec::new(),
+                    output_format: t.output_format.clone(),
                 }
+            } else {
+                ToolExecutor::Noop
+            };
 
-                let input_schema = json!({
-                    "type": "object",
-                    "properties": properties,
-                    "required": required,
-                });
+            registered.push(RegisteredTool {
+                definition: ToolDefinition {
+                    name: t.name,
+                    description: t.description,
+                    input_schema,
+                },
+                executor,
+                requires_approval: t.requires_approval,
+                timeout_ms: 30_000,
+            });
+        }
 
-                let requires_approval = t.requires_approval;
-                let output_format = t.output_format.clone();
+        if let Some(tools_module) = self.tools_module.as_deref() {
+            registered.extend(load_python_tools_module(tools_module)?);
+        }
 
-                // Choose executor: WASM takes priority when both are set.
-                let executor = if let Some(module_path) = t.wasm_path.clone() {
-                    ToolExecutor::Wasm { module_path }
-                } else if let Some(command) = t.command.clone() {
-                    ToolExecutor::Cli {
-                        command,
-                        args_template: Vec::new(),
-                        output_format,
-                    }
-                } else {
-                    ToolExecutor::Noop
-                };
-
-                Ok(RegisteredTool {
-                    definition: ToolDefinition {
-                        name: t.name,
-                        description: t.description,
-                        input_schema,
-                    },
-                    executor,
-                    requires_approval,
-                    timeout_ms: 30_000,
-                })
-            })
-            .collect()
+        Ok(registered)
     }
 }
 
@@ -359,6 +363,7 @@ deny = ["gh pr close *"]
 
         assert_eq!(skill.name, "github");
         assert_eq!(skill.version, "1.0.0");
+        assert!(skill.tools_module.is_none());
         assert_eq!(skill.tools.len(), 2);
 
         let pr_list = skill.tools.iter().find(|t| t.name == "gh_pr_list").unwrap();
@@ -423,5 +428,25 @@ deny = ["gh repo delete *"]
         assert!(error
             .to_string()
             .contains("not allowed by skill permissions"));
+    }
+
+    #[test]
+    fn test_parse_skill_toml_with_python_tools_module() {
+        let skill = Skill::from_toml(
+            r#"
+[skill]
+name = "marketplace"
+description = "Python-backed tools"
+version = "1.0.0"
+tools_module = "skills.marketplace.tools"
+"#,
+            "/tmp/marketplace",
+        )
+        .unwrap();
+
+        assert_eq!(
+            skill.tools_module.as_deref(),
+            Some("skills.marketplace.tools")
+        );
     }
 }
