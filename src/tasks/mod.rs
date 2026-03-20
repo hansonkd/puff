@@ -1,8 +1,8 @@
 use std::time::{Duration, SystemTime};
 
 use crate::context::is_puff_context_ready;
+use crate::context::{supervised_task, with_puff_context};
 use crate::errors::{handle_puff_result, log_puff_error, to_py_error, PuffResult};
-use crate::prelude::with_puff_context;
 use crate::python::async_python::run_python_async;
 use crate::python::{get_cached_object, PythonDispatcher};
 use crate::types::text::{Text, ToText};
@@ -14,8 +14,7 @@ use pyo3::exceptions::{PyException, PyRuntimeError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use serde::{Deserialize, Serialize};
-use tokio::runtime::Handle;
-use tokio::sync::mpsc;
+use tokio::task::JoinSet;
 use tracing::{error, info};
 use uuid::Uuid;
 
@@ -196,6 +195,10 @@ fn item_key_lock(task_queue: &TaskQueue, key: &[u8]) -> Vec<u8> {
 
 fn item_key_complete(task_queue: &TaskQueue, key: &[u8]) -> Vec<u8> {
     [task_queue.queue_name.as_bytes(), b"-complete-", key].concat()
+}
+
+fn item_key_retries(task_queue: &TaskQueue, key: &[u8]) -> Vec<u8> {
+    [task_queue.queue_name.as_bytes(), b"-retries-", key].concat()
 }
 
 fn task_hmap_key(task_queue: &TaskQueue) -> Vec<u8> {
@@ -404,6 +407,27 @@ pub async fn next_task(
                         .query_async(&mut *r)
                         .await?;
                     if claimed {
+                        // Check retry count; move to dead letter if threshold exceeded.
+                        let retry_key = item_key_retries(task_queue, item.as_slice());
+                        let retries: i64 = Cmd::incr(&retry_key, 1_i64)
+                            .query_async(&mut *r)
+                            .await
+                            .unwrap_or(0);
+                        if retries > 3 {
+                            tracing::warn!(
+                                task_id = ?item,
+                                retries,
+                                "Task exceeded max retries; moving to dead letter",
+                            );
+                            finish_task(
+                                task_queue,
+                                item.as_slice(),
+                                Err("Max retries exceeded".into()),
+                                86400 * 1000,
+                            )
+                            .await?;
+                            continue;
+                        }
                         return Ok(t);
                     }
                 }
@@ -472,59 +496,86 @@ pub async fn do_loop_iteration(
     Ok(())
 }
 
-pub fn loop_tasks(
+pub fn loop_tasks<T: Into<Text>>(
     task_queue: TaskQueue,
+    service_name: T,
     num_workers: usize,
-    handle: Handle,
     dispatcher: PythonDispatcher,
 ) {
+    let service_name = service_name.into();
+    let task_name: Text = format!("task-queue-workers-{}", service_name).into();
+    with_puff_context(move |ctx| {
+        supervised_task(ctx, task_name, move || {
+            let task_queue = task_queue.clone();
+            let dispatcher = dispatcher.clone();
+            Box::pin(run_task_workers(task_queue, num_workers, dispatcher))
+        });
+    });
+}
+
+async fn run_task_workers(
+    task_queue: TaskQueue,
+    num_workers: usize,
+    dispatcher: PythonDispatcher,
+) -> PuffResult<()> {
     let tasks_per_loop = num_workers as isize;
     let startup_wait_duration = Duration::from_millis(10);
     let wait_duration = Duration::from_millis(1000);
-    let (sender, mut rec) = mpsc::unbounded_channel();
-    let first_sender = sender.clone();
-    let inner_handle = handle.clone();
-    handle.spawn(async move {
-        while !is_puff_context_ready() {
-            tokio::time::sleep(startup_wait_duration).await;
-        }
 
-        if num_workers == 0 {
-            tokio::time::sleep(Duration::from_secs(u64::MAX)).await;
-        }
+    while !is_puff_context_ready() {
+        tokio::time::sleep(startup_wait_duration).await;
+    }
 
-        while let Some(()) = rec.recv().await {
-            let new_sender = sender.clone();
-            let new_tq = task_queue.clone();
-            let new_dispatcher = dispatcher.clone();
-            let task = match next_task(&new_tq, tasks_per_loop, wait_duration).await {
-                Ok(t) => t,
-                Err(e) => {
-                    handle_puff_result("task-queue-next-task", Err(e));
-                    if new_sender.send(()).is_err() {
-                        tracing::warn!("Task queue channel closed during shutdown");
-                    }
-                    continue;
-                }
-            };
+    if num_workers == 0 {
+        std::future::pending::<()>().await;
+        #[allow(unreachable_code)]
+        return Ok(());
+    }
 
-            inner_handle.spawn(async move {
-                let loop_result = do_loop_iteration(&new_tq, task, new_dispatcher).await;
-                handle_puff_result("task-queue-loop", loop_result);
-                if new_sender.send(()).is_err() {
-                    tracing::warn!("Task queue channel closed during shutdown");
-                }
-            });
-        }
-    });
-    handle.spawn(async move {
-        for _ in 0..num_workers {
-            if first_sender.send(()).is_err() {
-                tracing::warn!("Task queue channel closed during shutdown");
-                break;
+    let mut workers = JoinSet::new();
+    for _ in 0..num_workers {
+        workers.spawn(task_worker_iteration(
+            task_queue.clone(),
+            tasks_per_loop,
+            wait_duration,
+            dispatcher.clone(),
+        ));
+    }
+
+    while let Some(joined) = workers.join_next().await {
+        match joined {
+            Ok(()) => {}
+            Err(error) => {
+                tracing::warn!("Task queue worker join error: {error}");
             }
         }
-    });
+        workers.spawn(task_worker_iteration(
+            task_queue.clone(),
+            tasks_per_loop,
+            wait_duration,
+            dispatcher.clone(),
+        ));
+    }
+
+    Ok(())
+}
+
+async fn task_worker_iteration(
+    task_queue: TaskQueue,
+    tasks_per_loop: isize,
+    wait_duration: Duration,
+    dispatcher: PythonDispatcher,
+) {
+    let task = match next_task(&task_queue, tasks_per_loop, wait_duration).await {
+        Ok(task) => task,
+        Err(error) => {
+            handle_puff_result("task-queue-next-task", Err(error));
+            return;
+        }
+    };
+
+    let loop_result = do_loop_iteration(&task_queue, task, dispatcher).await;
+    handle_puff_result("task-queue-loop", loop_result);
 }
 
 /// Build a new TaskQueue with the provided connection information.

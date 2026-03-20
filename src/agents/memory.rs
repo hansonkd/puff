@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 
 use crate::agents::error::AgentError;
+use crate::context::with_puff_context;
+use crate::python::postgres::{execute_rust_native, Connection, RustSqlValue};
 
 // ---------------------------------------------------------------------------
 // MemoryConfig
@@ -166,6 +168,63 @@ pub async fn save_memory(
     result
         .map(|_| ())
         .map_err(|e| AgentError::MemoryError(format!("save_memory failed: {e}")))
+}
+
+/// Save a memory using the default Postgres connection from PuffContext.
+///
+/// This is a convenience wrapper around [`save_memory`] that obtains the
+/// Postgres connection automatically via `with_puff_context`. Returns
+/// `AgentError::MemoryError` if Postgres is not configured.
+pub async fn save_memory_via_context(
+    agent: &str,
+    scope: &str,
+    scope_id: Option<&str>,
+    content: &str,
+    embedding: Option<&[f32]>,
+) -> Result<(), AgentError> {
+    let conn = with_puff_context(|ctx| ctx.postgres_safe().map(|pg| Connection::new(pg.pool())));
+
+    let conn =
+        conn.ok_or_else(|| AgentError::MemoryError("Postgres not configured".to_string()))?;
+
+    let embedding_str: Option<String> = embedding.map(vector_to_pgvector);
+
+    let (sql, params) = if let Some(ref emb) = embedding_str {
+        let sql = "INSERT INTO puff_memories (agent, scope, scope_id, content, embedding) \
+                   VALUES ($1, $2, $3, $4, $5::vector)"
+            .to_string();
+        let params = vec![
+            RustSqlValue::Text(agent.to_string()),
+            RustSqlValue::Text(scope.to_string()),
+            match scope_id {
+                Some(id) => RustSqlValue::Text(id.to_string()),
+                None => RustSqlValue::Null,
+            },
+            RustSqlValue::Text(content.to_string()),
+            RustSqlValue::Text(emb.clone()),
+        ];
+        (sql, params)
+    } else {
+        let sql = "INSERT INTO puff_memories (agent, scope, scope_id, content) \
+                   VALUES ($1, $2, $3, $4)"
+            .to_string();
+        let params = vec![
+            RustSqlValue::Text(agent.to_string()),
+            RustSqlValue::Text(scope.to_string()),
+            match scope_id {
+                Some(id) => RustSqlValue::Text(id.to_string()),
+                None => RustSqlValue::Null,
+            },
+            RustSqlValue::Text(content.to_string()),
+        ];
+        (sql, params)
+    };
+
+    execute_rust_native(&conn, sql, params)
+        .await
+        .map_err(|e| AgentError::MemoryError(format!("Failed to save memory: {e}")))?;
+
+    Ok(())
 }
 
 /// Record LLM usage to Postgres.

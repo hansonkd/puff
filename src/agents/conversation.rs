@@ -3,7 +3,9 @@
 use crate::agents::llm::{Message, MessageContent, Role};
 use uuid::Uuid;
 
-#[derive(Debug, Clone)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Conversation {
     pub id: String,
     pub agent_name: String,
@@ -104,6 +106,16 @@ impl Conversation {
         self.touch();
     }
 
+    /// Serialize this conversation to JSON bytes for Redis storage.
+    pub fn to_json_bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
+        serde_json::to_vec(self)
+    }
+
+    /// Deserialize a conversation from JSON bytes.
+    pub fn from_json_bytes(bytes: &[u8]) -> Result<Self, serde_json::Error> {
+        serde_json::from_slice(bytes)
+    }
+
     fn touch(&mut self) {
         self.updated_at = chrono::Utc::now();
     }
@@ -177,6 +189,20 @@ mod tests {
 
         assert_eq!(conversation.messages.len(), 2);
         assert_eq!(conversation.archived_context(), Some("user: first\n"));
+    }
+
+    #[test]
+    fn to_json_bytes_and_from_json_bytes_roundtrip() {
+        let mut conversation = Conversation::new("my-agent");
+        conversation.add_user_message("hello");
+        conversation.add_assistant_message("world");
+
+        let bytes = conversation.to_json_bytes().expect("serialization failed");
+        let restored = Conversation::from_json_bytes(&bytes).expect("deserialization failed");
+
+        assert_eq!(restored.id, conversation.id);
+        assert_eq!(restored.agent_name, "my-agent");
+        assert_eq!(restored.messages.len(), 2);
     }
 
     #[test]
