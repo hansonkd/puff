@@ -268,6 +268,7 @@ fn is_transient_error(msg: &str) -> bool {
 
 /// The central LLM client that manages providers and makes streaming calls
 /// to LLM APIs.
+#[derive(Clone)]
 pub struct LlmClient {
     http_client: reqwest::Client,
     providers: HashMap<String, Arc<dyn Provider>>,

@@ -57,6 +57,7 @@ use std::sync::{Arc, Mutex};
 
 use tokio::runtime::Builder;
 
+use crate::agents::registry::AgentRegistry;
 use crate::context::{set_puff_context, set_puff_context_waiting, PuffContext, RealPuffContext};
 use crate::databases::postgres::{add_postgres_command_arguments, new_postgres_async};
 use crate::databases::pubsub::{add_pubsub_command_arguments, new_pubsub_async};
@@ -64,6 +65,7 @@ use crate::errors::{handle_puff_error, PuffResult, Result};
 use crate::graphql::load_schema;
 use crate::python::{bootstrap_puff_globals, setup_python_executors};
 use crate::runtime::RuntimeConfig;
+use crate::supervision::{SupervisionConfig, SupervisorRuntime};
 use crate::types::text::Text;
 use crate::types::Puff;
 pub use clap;
@@ -149,6 +151,7 @@ pub struct Program {
     after_help: Option<Text>,
     commands: Vec<PackedCommand>,
     runtime_config: RuntimeConfig,
+    supervision_config: SupervisionConfig,
 }
 
 impl Program {
@@ -162,6 +165,7 @@ impl Program {
             after_help: None,
             author: None,
             runtime_config: RuntimeConfig::default(),
+            supervision_config: SupervisionConfig::default(),
         }
     }
 
@@ -169,6 +173,13 @@ impl Program {
     pub fn runtime_config(self, runtime_config: RuntimeConfig) -> Self {
         let mut s = self;
         s.runtime_config = runtime_config;
+        s
+    }
+
+    /// Override the current supervision config for this program.
+    pub fn supervision_config(self, supervision_config: SupervisionConfig) -> Self {
+        let mut s = self;
+        s.supervision_config = supervision_config;
         s
     }
 
@@ -262,6 +273,7 @@ impl Program {
 
         let mut top_level = self.clap_command();
         let rt_config = self.runtime_config.clone();
+        let supervision_config = self.supervision_config.clone();
 
         for name in rt_config.postgres().keys() {
             top_level = add_postgres_command_arguments(name.as_str(), top_level)
@@ -350,14 +362,6 @@ impl Program {
                         true,
                         config.pool_size,
                     ))?;
-                    loop_tasks(
-                        task_queue.clone(),
-                        config.max_concurrent_tasks as usize,
-                        rt.handle().clone(),
-                        python_dispatcher
-                            .clone()
-                            .expect("TaskQueue requires Python"),
-                    );
                     task_queue_client.insert(name.to_string(), task_queue);
                 }
 
@@ -402,8 +406,23 @@ impl Program {
                     http_clients.insert(name.to_string(), http_client);
                 }
 
+                let supervisor =
+                    SupervisorRuntime::new(rt.handle().clone(), supervision_config.clone());
+                let registry = AgentRegistry::with_backends(
+                    redis
+                        .get("default")
+                        .cloned()
+                        .or_else(|| redis.values().next().cloned()),
+                    postgres
+                        .get("default")
+                        .cloned()
+                        .or_else(|| postgres.values().next().cloned()),
+                );
+
                 let context = RealPuffContext::new_with_options(
                     rt.handle().clone(),
+                    supervisor,
+                    registry,
                     redis,
                     postgres,
                     python_dispatcher,
@@ -417,6 +436,18 @@ impl Program {
 
                 for psc in pubsub_client.values() {
                     psc.start_supervised_listener();
+                }
+
+                if !rt_config.task_queue().is_empty() {
+                    let python_dispatcher = context.python_dispatcher();
+                    for (name, config) in rt_config.task_queue() {
+                        loop_tasks(
+                            context.task_queue_named(name.as_str()),
+                            name.as_str(),
+                            config.max_concurrent_tasks as usize,
+                            python_dispatcher.clone(),
+                        );
+                    }
                 }
 
                 let context_to_set = context.puff();

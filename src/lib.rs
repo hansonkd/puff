@@ -15,6 +15,7 @@ pub mod program;
 pub mod python;
 pub mod rand;
 pub mod runtime;
+pub mod supervision;
 pub mod tasks;
 pub mod types;
 pub mod web;

@@ -53,6 +53,10 @@ struct Config {
     agents: Option<Vec<puff_rs::agents::agent::AgentConfig>>,
     #[serde(default)]
     agent_server: Option<AgentServerConfig>,
+    #[serde(default)]
+    supervision: Option<puff_rs::supervision::SupervisionConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    agent_supervisors: Vec<puff_rs::supervision::AgentSupervisorSpec>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -521,6 +525,8 @@ fn help_text() -> String {
         memory: None,
         agents: None,
         agent_server: None,
+        supervision: None,
+        agent_supervisors: Vec::new(),
     };
 
     toml::to_string_pretty(&example_config).unwrap()
@@ -678,6 +684,7 @@ fn main() -> ExitCode {
         .version(VERSION)
         .after_help("☁ Thanks for using Puff ☁")
         .runtime_config(rc)
+        .supervision_config(config.supervision.clone().unwrap_or_default())
         .command(ProjectNewCommand::new())
         .command(DoctorCommand::new(doctor_runtime))
         .command(BasicCommand::new_with_options(
@@ -721,6 +728,8 @@ fn main() -> ExitCode {
             agent_configs: agent_configs.clone(),
             llm_config: llm_config.clone(),
             port,
+            supervision: config.supervision.clone().unwrap_or_default(),
+            agent_supervisors: config.agent_supervisors.clone(),
         });
         program = program.command(AgentAskCommand {
             agent_configs: agent_configs.clone(),

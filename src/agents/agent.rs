@@ -72,6 +72,7 @@ impl ToolExecutionOutcome {
     }
 }
 
+#[derive(Clone)]
 pub struct Agent {
     pub config: AgentConfig,
     pub tools: Arc<ToolRegistry>,

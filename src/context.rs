@@ -1,5 +1,5 @@
 use crate::databases::redis::RedisClient;
-use crate::errors::{handle_puff_result, PuffResult};
+use crate::errors::PuffResult;
 
 use crate::tasks::TaskQueue;
 use crate::types::{Puff, Text};
@@ -9,10 +9,12 @@ use futures_util::future::BoxFuture;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use crate::agents::registry::AgentRegistry;
 use crate::databases::postgres::PostgresClient;
 use crate::databases::pubsub::PubSubClient;
 use crate::graphql::PuffGraphqlConfig;
 use crate::python::PythonDispatcher;
+use crate::supervision::{SupervisionConfig, SupervisorRuntime};
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Handle;
 
@@ -25,6 +27,8 @@ pub type PuffContext = Arc<RealPuffContext>;
 
 pub struct RealPuffContext {
     handle: Handle,
+    supervisor: SupervisorRuntime,
+    registry: AgentRegistry,
     http_client: HashMap<String, PyHttpClient>,
     redis: HashMap<String, RedisClient>,
     postgres: HashMap<String, PostgresClient>,
@@ -91,8 +95,12 @@ pub fn with_context(context: PuffContext) {
 impl RealPuffContext {
     /// Creates an empty RuntimeDispatcher with no active threads for testing.
     pub fn empty(handle: Handle) -> PuffContext {
+        let supervisor = SupervisorRuntime::new(handle.clone(), SupervisionConfig::default());
+        let registry = AgentRegistry::with_backends(None, None);
         Arc::new(Self {
             handle,
+            supervisor,
+            registry,
             redis: HashMap::new(),
             postgres: HashMap::new(),
             python_dispatcher: None,
@@ -105,8 +113,12 @@ impl RealPuffContext {
 
     /// Creates a new RuntimeDispatcher using the supplied `RuntimeConfig`.
     pub fn new(handle: Handle) -> PuffContext {
+        let supervisor = SupervisorRuntime::new(handle.clone(), SupervisionConfig::default());
+        let registry = AgentRegistry::with_backends(None, None);
         Self::new_with_options(
             handle,
+            supervisor,
+            registry,
             HashMap::new(),
             HashMap::new(),
             None,
@@ -122,6 +134,8 @@ impl RealPuffContext {
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_options(
         handle: Handle,
+        supervisor: SupervisorRuntime,
+        registry: AgentRegistry,
         redis: HashMap<String, RedisClient>,
         postgres: HashMap<String, PostgresClient>,
         python_dispatcher: Option<PythonDispatcher>,
@@ -132,6 +146,8 @@ impl RealPuffContext {
     ) -> PuffContext {
         let ctx = Self {
             handle,
+            supervisor,
+            registry,
             redis,
             postgres,
             python_dispatcher,
@@ -147,6 +163,16 @@ impl RealPuffContext {
     /// A Handle into the multi-threaded async runtime
     pub fn handle(&self) -> Handle {
         self.handle.clone()
+    }
+
+    /// The runtime supervisor tree.
+    pub fn supervisor(&self) -> SupervisorRuntime {
+        self.supervisor.clone()
+    }
+
+    /// The agent/process registry.
+    pub fn registry(&self) -> AgentRegistry {
+        self.registry.clone()
     }
 
     /// The global configured PubSubClient
@@ -249,24 +275,16 @@ impl Puff for PuffContext {}
 
 pub fn supervised_task<F: Fn() -> BoxFuture<'static, PuffResult<()>> + Send + Sync + 'static>(
     context: PuffContext,
-    _task_name: Text,
+    task_name: Text,
     f: F,
 ) {
-    let handle = context.handle();
-    let inner_handle = handle.clone();
-    handle.spawn(async move {
-        loop {
-            info!("Supervising {_task_name}");
-            let result = inner_handle.spawn(f()).await;
-            match result {
-                Ok(r) => {
-                    let label = format!("Task {}", _task_name);
-                    handle_puff_result(label.as_str(), r)
-                }
-                Err(_e) => {
-                    error!("Task {_task_name} unexpected error : {_e}")
-                }
-            }
-        }
-    });
+    let runtime = context.supervisor();
+    let display_name = task_name.to_string();
+    if let Err(error) =
+        runtime.register_service_task(display_name.as_str(), display_name.as_str(), f)
+    {
+        error!("Task {display_name} supervision setup error: {error}");
+    } else {
+        info!("Supervising {display_name}");
+    }
 }

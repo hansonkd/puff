@@ -34,9 +34,11 @@ pub fn serialize_response_fast(response: &Response) -> Vec<u8> {
 /// Build an `axum::response::Response` with pre-serialized bytes.
 ///
 /// This bypasses axum's `Json` wrapper and its internal serialization.
-pub fn bytes_to_response(bytes: Vec<u8>, extra_headers: http::HeaderMap) -> axum::response::Response {
-    let mut builder = axum::http::Response::builder()
-        .header("content-type", "application/json");
+pub fn bytes_to_response(
+    bytes: Vec<u8>,
+    extra_headers: http::HeaderMap,
+) -> axum::response::Response {
+    let mut builder = axum::http::Response::builder().header("content-type", "application/json");
 
     // Forward any headers the GraphQL response set.
     if let Some(headers) = builder.headers_mut() {

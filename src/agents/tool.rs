@@ -46,6 +46,10 @@ pub enum ToolExecutor {
     GraphQLValidate {
         schema_name: Option<String>,
     },
+    /// Send a message to another mailbox-backed agent instance via the runtime registry.
+    RegistryMessage,
+    /// Scan the runtime registry for agents by key or agent-name prefix.
+    RegistryScan,
     Noop,
 }
 
@@ -114,6 +118,8 @@ impl ToolRegistry {
                     | ToolExecutor::GraphQL { .. }
                     | ToolExecutor::GraphQLSchema { .. }
                     | ToolExecutor::GraphQLValidate { .. }
+                    | ToolExecutor::RegistryMessage
+                    | ToolExecutor::RegistryScan
                     | ToolExecutor::Noop
             )
         })
@@ -236,6 +242,22 @@ pub async fn execute_registered_tool(
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             crate::agents::graphql_tool::validate_graphql_query(query, schema_name.as_deref())
+        }
+        ToolExecutor::RegistryMessage => {
+            let target = arguments
+                .get("target")
+                .or_else(|| arguments.get("agent"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let message = arguments
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            crate::agents::registry_tool::execute_registry_message_tool(target, message).await
+        }
+        ToolExecutor::RegistryScan => {
+            let prefix = arguments.get("prefix").and_then(|v| v.as_str());
+            crate::agents::registry_tool::execute_registry_scan_tool(prefix).await
         }
         ToolExecutor::Noop => Ok(format!("Tool '{}' completed (no-op)", tool.definition.name)),
     }

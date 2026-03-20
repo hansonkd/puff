@@ -89,11 +89,7 @@ impl QueryCache {
     /// Returns `(response_bytes, response)`.  The caller can use
     /// `response_bytes` directly for fast serialization and `response` for
     /// anything else (e.g. extracting http_headers).
-    pub async fn execute(
-        &self,
-        schema: &Schema,
-        request: async_graphql::Request,
-    ) -> Response {
+    pub async fn execute(&self, schema: &Schema, request: async_graphql::Request) -> Response {
         if !self.enabled {
             return schema.execute(request).await;
         }
@@ -118,8 +114,7 @@ impl QueryCache {
                     if let Some(cached) = entry.results.get(&vhash) {
                         if cached.cached_at.elapsed() < cached.ttl {
                             // Deserialize the cached bytes back into a Response.
-                            if let Ok(response) =
-                                serde_json::from_slice::<Response>(&cached.bytes)
+                            if let Ok(response) = serde_json::from_slice::<Response>(&cached.bytes)
                             {
                                 return response;
                             }
@@ -168,8 +163,7 @@ impl QueryCache {
         if !self.enabled {
             let response = schema.execute(request).await;
             let headers = response.http_headers.clone();
-            let bytes =
-                serde_json::to_vec(&response).unwrap_or_else(|_| b"{}".to_vec());
+            let bytes = serde_json::to_vec(&response).unwrap_or_else(|_| b"{}".to_vec());
             return (bytes, headers);
         }
 
@@ -180,8 +174,7 @@ impl QueryCache {
             let response = schema.execute(request).await;
             self.invalidate();
             let headers = response.http_headers.clone();
-            let bytes =
-                serde_json::to_vec(&response).unwrap_or_else(|_| b"{}".to_vec());
+            let bytes = serde_json::to_vec(&response).unwrap_or_else(|_| b"{}".to_vec());
             return (bytes, headers);
         }
 
@@ -204,8 +197,7 @@ impl QueryCache {
         // Cache miss — execute.
         let response = schema.execute(request).await;
         let headers = response.http_headers.clone();
-        let bytes =
-            serde_json::to_vec(&response).unwrap_or_else(|_| b"{}".to_vec());
+        let bytes = serde_json::to_vec(&response).unwrap_or_else(|_| b"{}".to_vec());
 
         // Cache on success.
         if response.errors.is_empty() {
