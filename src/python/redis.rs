@@ -3,7 +3,9 @@ use std::num::NonZeroUsize;
 use crate::databases::redis::{with_redis, RedisClient};
 
 use crate::python::async_python::run_python_async;
+use bb8_redis::bb8::Pool;
 use bb8_redis::redis::{Cmd, Value};
+use bb8_redis::RedisConnectionManager;
 
 use crate::context::with_puff_context;
 use crate::python;
@@ -370,5 +372,148 @@ impl PythonRedis {
             cmd.arg(part.as_bytes());
         }
         self.run_command(py, return_fun, cmd)
+    }
+
+    // Hash operations
+    fn hget(&self, py: Python, return_fun: PyObject, key: Bound<'_, PyAny>, field: Bound<'_, PyAny>) -> PyResult<PyObject> {
+        self.run_command(py, return_fun, Cmd::hget(python::py_obj_to_bytes(&key)?, python::py_obj_to_bytes(&field)?))
+    }
+
+    fn hset(&self, py: Python, return_fun: PyObject, key: Bound<'_, PyAny>, field: Bound<'_, PyAny>, value: Bound<'_, PyAny>) -> PyResult<PyObject> {
+        self.run_command(py, return_fun, Cmd::hset(python::py_obj_to_bytes(&key)?, python::py_obj_to_bytes(&field)?, python::py_obj_to_bytes(&value)?))
+    }
+
+    fn hdel(&self, py: Python, return_fun: PyObject, key: Bound<'_, PyAny>, field: Bound<'_, PyAny>) -> PyResult<PyObject> {
+        self.run_command(py, return_fun, Cmd::hdel(python::py_obj_to_bytes(&key)?, python::py_obj_to_bytes(&field)?))
+    }
+
+    fn hgetall(&self, py: Python, return_fun: PyObject, key: Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let mut cmd = Cmd::new();
+        cmd.arg("HGETALL").arg(python::py_obj_to_bytes(&key)?);
+        self.run_command(py, return_fun, cmd)
+    }
+
+    fn hexists(&self, py: Python, return_fun: PyObject, key: Bound<'_, PyAny>, field: Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let mut cmd = Cmd::new();
+        cmd.arg("HEXISTS").arg(python::py_obj_to_bytes(&key)?).arg(python::py_obj_to_bytes(&field)?);
+        self.run_command(py, return_fun, cmd)
+    }
+
+    // Set operations
+    fn sadd(&self, py: Python, return_fun: PyObject, key: Bound<'_, PyAny>, member: Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let mut cmd = Cmd::new();
+        cmd.arg("SADD").arg(python::py_obj_to_bytes(&key)?).arg(python::py_obj_to_bytes(&member)?);
+        self.run_command(py, return_fun, cmd)
+    }
+
+    fn srem(&self, py: Python, return_fun: PyObject, key: Bound<'_, PyAny>, member: Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let mut cmd = Cmd::new();
+        cmd.arg("SREM").arg(python::py_obj_to_bytes(&key)?).arg(python::py_obj_to_bytes(&member)?);
+        self.run_command(py, return_fun, cmd)
+    }
+
+    fn smembers(&self, py: Python, return_fun: PyObject, key: Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let mut cmd = Cmd::new();
+        cmd.arg("SMEMBERS").arg(python::py_obj_to_bytes(&key)?);
+        self.run_command(py, return_fun, cmd)
+    }
+
+    fn sismember(&self, py: Python, return_fun: PyObject, key: Bound<'_, PyAny>, member: Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let mut cmd = Cmd::new();
+        cmd.arg("SISMEMBER").arg(python::py_obj_to_bytes(&key)?).arg(python::py_obj_to_bytes(&member)?);
+        self.run_command(py, return_fun, cmd)
+    }
+
+    // Key operations
+    fn exists(&self, py: Python, return_fun: PyObject, key: Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let mut cmd = Cmd::new();
+        cmd.arg("EXISTS").arg(python::py_obj_to_bytes(&key)?);
+        self.run_command(py, return_fun, cmd)
+    }
+
+    fn ttl(&self, py: Python, return_fun: PyObject, key: Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let mut cmd = Cmd::new();
+        cmd.arg("TTL").arg(python::py_obj_to_bytes(&key)?);
+        self.run_command(py, return_fun, cmd)
+    }
+
+    fn keys(&self, py: Python, return_fun: PyObject, pattern: Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let mut cmd = Cmd::new();
+        cmd.arg("KEYS").arg(python::py_obj_to_bytes(&pattern)?);
+        self.run_command(py, return_fun, cmd)
+    }
+
+    fn pipeline(&self) -> PythonRedisPipeline {
+        PythonRedisPipeline {
+            pool: self.0.pool(),
+            commands: Vec::new(),
+        }
+    }
+}
+
+#[pyclass]
+pub struct PythonRedisPipeline {
+    pool: Pool<RedisConnectionManager>,
+    commands: Vec<Cmd>,
+}
+
+#[pymethods]
+impl PythonRedisPipeline {
+    fn get<'a>(mut slf: PyRefMut<'a, Self>, key: Bound<'a, PyAny>) -> PyResult<PyRefMut<'a, Self>> {
+        let cmd = Cmd::get(python::py_obj_to_bytes(&key)?);
+        slf.commands.push(cmd);
+        Ok(slf)
+    }
+
+    fn set<'a>(mut slf: PyRefMut<'a, Self>, key: Bound<'a, PyAny>, val: Bound<'a, PyAny>) -> PyResult<PyRefMut<'a, Self>> {
+        let cmd = Cmd::set(python::py_obj_to_bytes(&key)?, python::py_obj_to_bytes(&val)?);
+        slf.commands.push(cmd);
+        Ok(slf)
+    }
+
+    fn delete<'a>(mut slf: PyRefMut<'a, Self>, key: Bound<'a, PyAny>) -> PyResult<PyRefMut<'a, Self>> {
+        let cmd = Cmd::del(python::py_obj_to_bytes(&key)?);
+        slf.commands.push(cmd);
+        Ok(slf)
+    }
+
+    fn incr<'a>(mut slf: PyRefMut<'a, Self>, key: Bound<'a, PyAny>, delta: i64) -> PyResult<PyRefMut<'a, Self>> {
+        let cmd = Cmd::incr(python::py_obj_to_bytes(&key)?, delta);
+        slf.commands.push(cmd);
+        Ok(slf)
+    }
+
+    fn expire<'a>(mut slf: PyRefMut<'a, Self>, key: Bound<'a, PyAny>, seconds: i64) -> PyResult<PyRefMut<'a, Self>> {
+        let cmd = Cmd::expire(python::py_obj_to_bytes(&key)?, seconds);
+        slf.commands.push(cmd);
+        Ok(slf)
+    }
+
+    fn hset<'a>(mut slf: PyRefMut<'a, Self>, key: Bound<'a, PyAny>, field: Bound<'a, PyAny>, value: Bound<'a, PyAny>) -> PyResult<PyRefMut<'a, Self>> {
+        let cmd = Cmd::hset(python::py_obj_to_bytes(&key)?, python::py_obj_to_bytes(&field)?, python::py_obj_to_bytes(&value)?);
+        slf.commands.push(cmd);
+        Ok(slf)
+    }
+
+    fn hget<'a>(mut slf: PyRefMut<'a, Self>, key: Bound<'a, PyAny>, field: Bound<'a, PyAny>) -> PyResult<PyRefMut<'a, Self>> {
+        let cmd = Cmd::hget(python::py_obj_to_bytes(&key)?, python::py_obj_to_bytes(&field)?);
+        slf.commands.push(cmd);
+        Ok(slf)
+    }
+
+    fn execute(&mut self, py: Python, return_fun: PyObject) -> PyResult<PyObject> {
+        let pool = self.pool.clone();
+        let commands = std::mem::take(&mut self.commands);
+
+        run_python_async(return_fun, async move {
+            let mut conn = pool.get().await?;
+            let mut pipe = bb8_redis::redis::Pipeline::new();
+            for cmd in commands {
+                pipe.add_command(cmd);
+            }
+            let res: Vec<Value> = pipe.query_async(&mut *conn).await?;
+            Ok(RawRedisResult(Value::Array(res)))
+        });
+        Ok(py.None())
     }
 }
